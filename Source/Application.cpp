@@ -606,7 +606,7 @@ void Application::LoadSettings()
         input >> json;
         _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
         _default_layout = json.value("defaultLayout", true);
-        _diff_side_by_side = json.value("diffSideBySide", true);
+        _diff_side_by_side = json.value("diffSideBySide", false);
     }
     catch (const std::exception& error)
     {
@@ -863,18 +863,21 @@ void Application::SetupDockspace()
         ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace, viewport->WorkSize);
         ImGuiID references = 0;
-        ImGuiID main = 0;
-        ImGui::DockBuilderSplitNode(dockspace, ImGuiDir_Left, 0.24f, &references, &main);
-        ImGuiID center = 0;
-        ImGuiID diff = 0;
-        ImGui::DockBuilderSplitNode(main, ImGuiDir_Left, 0.68f, &center, &diff);
+        ImGuiID content = 0;
+        ImGui::DockBuilderSplitNode(dockspace, ImGuiDir_Left, 0.23f, &references, &content);
+        ImGuiID reference_top = 0;
+        ImGuiID reference_bottom = 0;
+        ImGui::DockBuilderSplitNode(references, ImGuiDir_Up, 0.5f, &reference_top, &reference_bottom);
+        ImGuiID details = 0;
         ImGuiID history = 0;
+        ImGui::DockBuilderSplitNode(content, ImGuiDir_Right, 0.36f, &details, &history);
         ImGuiID changes = 0;
-        ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.68f, &history, &changes);
-        ImGui::DockBuilderDockWindow("Bookmarks", references);
-        ImGui::DockBuilderDockWindow("Tags", references);
-        ImGui::DockBuilderDockWindow("Workspaces", references);
-        ImGui::DockBuilderDockWindow("Remotes", references);
+        ImGuiID diff = 0;
+        ImGui::DockBuilderSplitNode(details, ImGuiDir_Up, 0.28f, &changes, &diff);
+        ImGui::DockBuilderDockWindow("Bookmarks", reference_top);
+        ImGui::DockBuilderDockWindow("Tags", reference_top);
+        ImGui::DockBuilderDockWindow("Workspaces", reference_bottom);
+        ImGui::DockBuilderDockWindow("Remotes", reference_bottom);
         ImGui::DockBuilderDockWindow("History", history);
         ImGui::DockBuilderDockWindow("Changes", changes);
         ImGui::DockBuilderDockWindow("Diff", diff);

@@ -241,12 +241,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(operations == nullptr || !operations->Active);
         ImGuiWindow* bookmarks = WaitForWindow(context, "Bookmarks");
         IM_CHECK_NE(bookmarks, nullptr);
-        for (const char* panel : {"Tags", "Workspaces", "Remotes"})
-        {
-            ImGuiWindow* window = WaitForWindow(context, panel);
-            IM_CHECK_NE(window, nullptr);
-            IM_CHECK_EQ(window->DockNode, bookmarks->DockNode);
-        }
+        ImGuiWindow* tags = WaitForWindow(context, "Tags");
+        ImGuiWindow* workspaces = WaitForWindow(context, "Workspaces");
+        ImGuiWindow* remotes = WaitForWindow(context, "Remotes");
+        IM_CHECK_NE(tags, nullptr);
+        IM_CHECK_NE(workspaces, nullptr);
+        IM_CHECK_NE(remotes, nullptr);
+        IM_CHECK_EQ(tags->DockNode, bookmarks->DockNode);
+        IM_CHECK_EQ(remotes->DockNode, workspaces->DockNode);
+        IM_CHECK_NE(workspaces->DockNode, bookmarks->DockNode);
+        IM_CHECK_NE(ImGui::FindWindowByName("Changes")->DockNode, ImGui::FindWindowByName("Diff")->DockNode);
         IM_CHECK_EQ(ImGui::FindWindowByName("Navigator"), nullptr);
     };
 
