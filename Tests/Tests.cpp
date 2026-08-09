@@ -61,10 +61,20 @@ struct TemporaryRepository
         CheckGit(git_config_set_string(config.get(), "user.email", "ggui@example.test"));
 
         std::ofstream(path / "tracked.txt") << "base\n";
+        const char binary_contents[]{'b', '\0', 'n'};
+        std::ofstream binary(path / "binary.dat", std::ios::binary);
+        binary.write(binary_contents, sizeof(binary_contents));
+        binary.close();
         git_index* raw_index = nullptr;
         CheckGit(git_repository_index(&raw_index, repository.get()));
         std::unique_ptr<git_index, decltype(&git_index_free)> index(raw_index, git_index_free);
         CheckGit(git_index_add_bypath(index.get(), "tracked.txt"));
+        CheckGit(git_index_add_bypath(index.get(), "binary.dat"));
+        git_index_entry gitlink{};
+        gitlink.mode = GIT_FILEMODE_COMMIT;
+        gitlink.id = git_index_get_bypath(index.get(), "tracked.txt", 0)->id;
+        gitlink.path = "gitlink";
+        CheckGit(git_index_add(index.get(), &gitlink));
         CheckGit(git_index_write(index.get()));
         git_oid tree_oid{};
         CheckGit(git_index_write_tree(&tree_oid, index.get()));
@@ -351,11 +361,27 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     EXPECT_EQ(diff->path, "tracked.txt");
     EXPECT_TRUE(diff->before.empty());
     EXPECT_EQ(diff->after, "base\n");
-    ASSERT_EQ(diff->files.size(), 1U);
-    EXPECT_EQ(diff->files.front().path, "tracked.txt");
-    EXPECT_EQ(diff->files.front().status, GIT_DELTA_ADDED);
+    const auto tracked = std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path);
+    ASSERT_NE(tracked, diff->files.end());
+    EXPECT_EQ(tracked->status, GIT_DELTA_ADDED);
     EXPECT_FALSE(diff->patch.empty());
     EXPECT_FALSE(diff->binary);
+
+    engine.Enqueue(LoadDiff{root.oid, "missing.txt"});
+    const auto missing = WaitForDiff(engine);
+    ASSERT_TRUE(missing.has_value());
+    EXPECT_TRUE(missing->after.empty());
+
+    engine.Enqueue(LoadDiff{root.oid, "gitlink"});
+    const auto gitlink = WaitForDiff(engine);
+    ASSERT_TRUE(gitlink.has_value());
+    EXPECT_TRUE(gitlink->after.empty());
+
+    engine.Enqueue(LoadDiff{root.oid, "binary.dat"});
+    const auto binary = WaitForDiff(engine);
+    ASSERT_TRUE(binary.has_value());
+    EXPECT_TRUE(binary->after.empty());
+    EXPECT_TRUE(binary->binary);
 }
 
 TEST(RepositoryEngine, InitializesAndReportsFilesystemErrors)
