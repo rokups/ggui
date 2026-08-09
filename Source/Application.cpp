@@ -328,6 +328,13 @@ std::string FileUrl(const std::string& path)
     return result;
 }
 
+std::string RepositoryName(const std::string& root)
+{
+    const std::filesystem::path path(root);
+    const std::filesystem::path name = path.filename().empty() ? path.parent_path().filename() : path.filename();
+    return name.empty() ? root : name.string();
+}
+
 } // namespace
 
 #ifdef IMGUI_BUILD_TESTING
@@ -700,6 +707,7 @@ void Application::ApplyEvent(Event event)
                     const std::string old_selection = _selected_revision;
                     const bool had_selection = !_selected_revisions.empty();
                     _snapshot = std::move(value.snapshot);
+                    SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
                     RebuildIdPrefixes();
                     RememberRepository(_snapshot->root);
                     _graph_generation = 0;
@@ -1036,7 +1044,19 @@ void Application::RenderToolbar()
     ImGui::SameLine();
     ImGui::TextDisabled("REPOSITORY");
     ImGui::SameLine();
-    ImGui::TextUnformatted(_snapshot->root.c_str());
+    const std::string repository_name = RepositoryName(_snapshot->root);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+        _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
+        _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
+    if (ImGui::Button(repository_name.c_str()))
+        SDL_OpenURL(FileUrl(_snapshot->root).c_str()); // GCOV_EXCL_LINE: external application handoff
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
     if (!_snapshot->working_copy.empty())
     {
         ImGui::SameLine();
