@@ -870,6 +870,8 @@ void Application::RenderNavigator()
                     workspace.stale ? "Unavailable" : workspace.root.c_str());
                 if (ImGui::BeginPopupContextItem("workspace context"))
                 {
+                    if (ImGui::MenuItem("Open directory", nullptr, false, !workspace.stale))
+                        SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
                     if (ImGui::MenuItem("Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
                     if (ImGui::MenuItem("Rename current...")) OpenDialog(Dialog::WorkspaceRename);
                     ImGui::EndPopup();

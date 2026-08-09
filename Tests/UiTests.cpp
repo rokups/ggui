@@ -350,6 +350,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("navigator tabs/Workspaces");
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/Add workspace"));
+        context->ItemClick("**/current", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Open directory"));
+        context->KeyPress(ImGuiKey_Escape);
         context->ItemClick("navigator tabs/Bookmarks");
         context->Yield(2);
         context->ItemClick("**/coverage-bookmark");
