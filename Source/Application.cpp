@@ -1516,6 +1516,7 @@ void Application::RenderChanges()
             {
                 _selected_file = file.path;
                 OpenDialog(Dialog::Commit);
+                _input_filesets = file.path;
             }
             if (ImGui::MenuItem("Restore this file"))
                 _engine.Enqueue(Restore{"@-", "@", {file.path}});
@@ -1669,7 +1670,7 @@ void Application::OpenDialog(Dialog dialog)
     _input_primary.clear();
     _input_secondary.clear();
     _input_tertiary.clear();
-    _input_filesets = _selected_file;
+    _input_filesets.clear();
     _input_flag = false;
     _input_mode = 0;
     if (dialog == Dialog::New)
@@ -1687,6 +1688,8 @@ void Application::OpenDialog(Dialog dialog)
         if (selected != _snapshot->revisions.end())
             _input_primary = selected->description;
     }
+    if (dialog == Dialog::Split || dialog == Dialog::Restore)
+        _input_filesets = _selected_file;
     if (dialog == Dialog::Credentials)
         _input_primary = _credential_request.username;
 }
@@ -2110,6 +2113,11 @@ const std::vector<std::string>& Application::SelectedRevisionsForTest() const
 std::vector<std::string> Application::NewParentsForTest() const
 {
     return SplitLines(_input_secondary);
+}
+
+std::vector<std::string> Application::DialogFilesetsForTest() const
+{
+    return SplitLines(_input_filesets);
 }
 
 void Application::ApplyEventForTest(Event event)

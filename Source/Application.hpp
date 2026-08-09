@@ -37,6 +37,7 @@ public:
     const std::string& SelectedFileForTest() const;
     const std::vector<std::string>& SelectedRevisionsForTest() const;
     std::vector<std::string> NewParentsForTest() const;
+    std::vector<std::string> DialogFilesetsForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
     void ShowWorkspaceRenameForTest();
