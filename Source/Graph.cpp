@@ -67,17 +67,22 @@ std::vector<GraphRow> BuildGraphLayout(const std::vector<GraphNode>& nodes)
     return result;
 }
 
+int GraphColumnCount(const GraphRow& row)
+{
+    int count = 1;
+    count = std::max(count, row.column + 1);
+    count = std::max(count, static_cast<int>(row.tracks_before.size()));
+    count = std::max(count, static_cast<int>(row.tracks_after.size()));
+    for (int column : row.parent_columns)
+        count = std::max(count, column + 1);
+    return count;
+}
+
 int GraphColumnCount(const std::vector<GraphRow>& rows)
 {
     int count = 1;
     for (const GraphRow& row : rows)
-    {
-        count = std::max(count, row.column + 1);
-        count = std::max(count, static_cast<int>(row.tracks_before.size()));
-        count = std::max(count, static_cast<int>(row.tracks_after.size()));
-        for (int column : row.parent_columns)
-            count = std::max(count, column + 1);
-    }
+        count = std::max(count, GraphColumnCount(row));
     return count;
 }
 

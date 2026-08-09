@@ -212,6 +212,8 @@ TEST(GraphLayout, HandlesLinearAndArbitraryParentGraphs)
     EXPECT_EQ(rows[2].tracks_after, (std::vector<int>{0, 2}));
     EXPECT_EQ(rows[3].tracks_before, (std::vector<int>{0, 2}));
     EXPECT_EQ(rows[4].tracks_before, (std::vector<int>{0}));
+    EXPECT_EQ(GraphColumnCount(rows.front()), 3);
+    EXPECT_EQ(GraphColumnCount(rows.back()), 1);
     for (std::size_t row = 0; row + 1 < rows.size(); ++row)
         EXPECT_EQ(rows[row].tracks_after, rows[row + 1].tracks_before);
 }

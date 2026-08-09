@@ -995,6 +995,7 @@ void Application::RenderHistory()
             const Revision& revision = _snapshot->revisions[_visible_revisions[visible]];
             const GraphRow& row = _graph_rows[visible];
             ImGui::PushID(revision.oid.c_str());
+            const int row_column_count = GraphColumnCount(row);
             const float width = std::max(ImGui::GetContentRegionAvail().x, column_count * kLaneWidth + 520.0f);
             ImGui::InvisibleButton("row", ImVec2(width, kRowHeight));
             const ImVec2 minimum = ImGui::GetItemRectMin();
@@ -1053,7 +1054,7 @@ void Application::RenderHistory()
                                                                                      : maximum.y;
                 draw->AddRectFilled(ImVec2(minimum.x, zone_top), ImVec2(maximum.x, zone_bottom), zone_color);
             }
-            const float graph_width = std::max(column_count, 1) * kLaneWidth + kGraphPadding * 2.0f;
+            const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
             draw->AddRectFilled(minimum, ImVec2(minimum.x + graph_width, maximum.y),
                 _dark_theme ? kGraphBackground : IM_COL32(229, 233, 239, 255), 6.0f, ImDrawFlags_RoundCornersLeft);
             const float graph_left = minimum.x + kGraphPadding;

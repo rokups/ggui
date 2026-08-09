@@ -26,6 +26,7 @@ struct GraphRow
 };
 
 std::vector<GraphRow> BuildGraphLayout(const std::vector<GraphNode>& nodes);
+int GraphColumnCount(const GraphRow& row);
 int GraphColumnCount(const std::vector<GraphRow>& rows);
 
 } // namespace Ggui
