@@ -603,6 +603,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
 
         application.ApplyEventForTest(
+            DiffReady{{1000, "merge", {}, {}, {}, {}, false, {{{}, "image.bin", GIT_DELTA_MODIFIED, false}}}});
+        application.ApplyEventForTest(
             DiffReady{{1000, "merge", "image.bin", {}, {}, {}, true, RichSnapshot().status}});
         FocusWindow(context, "Diff");
         context->Yield();
