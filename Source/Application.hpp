@@ -50,7 +50,6 @@ public:
     static std::vector<std::string> SplitLinesForTest(const std::string& text);
     static std::string DeltaNameForTest(git_delta_t status);
     static bool ContainsInsensitiveForTest(const std::string& text, const std::string& query);
-    static unsigned int DiffMarkerColorForTest(const std::string& line);
     static unsigned int IdColorForTest(bool change_id, bool working_copy);
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
@@ -154,6 +153,7 @@ private:
     std::vector<std::string> _selected_revisions;
     std::string _selected_file;
     std::string _preferred_file;
+    std::string _pending_revision;
     std::vector<std::string> _recent_repositories;
     std::filesystem::path _settings_path;
     std::string _imgui_ini_path;

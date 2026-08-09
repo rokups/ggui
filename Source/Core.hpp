@@ -99,7 +99,6 @@ struct DiffResult
     std::string path;
     std::string before;
     std::string after;
-    std::string patch;
     bool binary = false;
     std::vector<StatusEntry> files;
 };
@@ -125,6 +124,7 @@ struct LoadDiff
 {
     std::string revision;
     std::string path;
+    bool fallback_to_first = false;
 };
 struct NewChange
 {

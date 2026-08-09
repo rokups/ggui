@@ -390,8 +390,28 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     const auto tracked = std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path);
     ASSERT_NE(tracked, diff->files.end());
     EXPECT_EQ(tracked->status, GIT_DELTA_ADDED);
-    EXPECT_FALSE(diff->patch.empty());
     EXPECT_FALSE(diff->binary);
+
+    engine.Enqueue(LoadDiff{root.oid, {}, true});
+    const auto fallback = WaitForDiff(engine);
+    ASSERT_TRUE(fallback.has_value());
+    ASSERT_FALSE(fallback->files.empty());
+    EXPECT_EQ(fallback->path, fallback->files.front().path);
+
+    engine.Enqueue(LoadDiff{root.oid, "tracked.txt", true});
+    const auto preferred = WaitForDiff(engine);
+    ASSERT_TRUE(preferred.has_value());
+    EXPECT_EQ(preferred->path, "tracked.txt");
+    EXPECT_EQ(preferred->after, "base\n");
+
+    engine.Enqueue(LoadDiff{root.oid, "binary.dat"});
+    engine.Enqueue(LoadDiff{root.oid, "missing.txt"});
+    engine.Enqueue(LoadDiff{root.oid, "tracked.txt"});
+    std::optional<DiffResult> latest;
+    for (int attempt = 0; attempt < 3 && (!latest.has_value() || latest->path != "tracked.txt"); ++attempt)
+        latest = WaitForDiff(engine);
+    ASSERT_TRUE(latest.has_value());
+    EXPECT_EQ(latest->path, "tracked.txt");
 
     engine.Enqueue(LoadDiff{root.oid, "missing.txt"});
     const auto missing = WaitForDiff(engine);

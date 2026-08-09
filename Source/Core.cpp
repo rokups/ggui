@@ -50,7 +50,7 @@ struct GitStringArray
     ~GitStringArray() { git_strarray_dispose(&value); }
 };
 
-std::string BlobText(git_repository* repository, git_tree* tree, const char* path)
+std::string BlobText(git_repository* repository, git_tree* tree, const char* path, bool& binary)
 {
     if (tree == nullptr || path == nullptr || *path == '\0')
         return {};
@@ -66,7 +66,10 @@ std::string BlobText(git_repository* repository, git_tree* tree, const char* pat
     Check(git_blob_lookup(&raw_blob, repository, git_tree_entry_id(entry.get())), "load diff contents");
     std::unique_ptr<git_blob, decltype(&git_blob_free)> blob(raw_blob, git_blob_free);
     if (git_blob_is_binary(blob.get()))
+    {
+        binary = true;
         return {};
+    }
     const auto* contents = static_cast<const char*>(git_blob_rawcontent(blob.get()));
     return contents == nullptr ? std::string{} : std::string(contents, git_blob_rawsize(blob.get()));
 }
@@ -599,7 +602,7 @@ struct RepositoryEngine::Impl
         git_diff* raw_diff = nullptr;
         Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), nullptr), "create diff");
         std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
-        DiffResult result{generation, command.revision, command.path, {}, {}, {}, false, {}};
+        DiffResult result{generation, command.revision, command.path, {}, {}, false, {}};
         for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
         {
             const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
@@ -607,30 +610,24 @@ struct RepositoryEngine::Impl
             const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
             result.files.push_back({old_path, new_path, delta->status, false});
         }
-        if (!command.path.empty())
+        if (command.fallback_to_first
+            && std::ranges::none_of(result.files, [&](const StatusEntry& file) { return file.path == result.path; }))
+            result.path = result.files.empty() ? "" : result.files.front().path;
+        if (!result.path.empty())
         {
             git_diff_options options = GIT_DIFF_OPTIONS_INIT;
-            char* path = const_cast<char*>(command.path.c_str());
+            char* path = result.path.data();
             options.pathspec = {&path, 1};
             raw_diff = nullptr;
             Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), &options),
                 "create file diff");
             diff.reset(raw_diff);
             const git_diff_delta* delta = git_diff_num_deltas(diff.get()) == 0 ? nullptr : git_diff_get_delta(diff.get(), 0);
-            const char* old_path = delta == nullptr ? command.path.c_str() : delta->old_file.path;
-            const char* new_path = delta == nullptr ? command.path.c_str() : delta->new_file.path;
-            result.before = BlobText(git.get(), old_tree.get(), old_path);
-            result.after = BlobText(git.get(), new_tree.get(), new_path);
+            const char* old_path = delta == nullptr ? result.path.c_str() : delta->old_file.path;
+            const char* new_path = delta == nullptr ? result.path.c_str() : delta->new_file.path;
+            result.before = BlobText(git.get(), old_tree.get(), old_path, result.binary);
+            result.after = BlobText(git.get(), new_tree.get(), new_path, result.binary);
         }
-        git_buf patch = GIT_BUF_INIT;
-        Check(git_diff_to_buf(&patch, diff.get(), GIT_DIFF_FORMAT_PATCH), "format diff");
-        result.patch = patch.ptr == nullptr ? "" : std::string(patch.ptr, patch.size);
-        for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
-        {
-            const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
-            result.binary |= delta != nullptr && (delta->flags & GIT_DIFF_FLAG_BINARY) != 0;
-        }
-        git_buf_dispose(&patch);
         Post(DiffReady{std::move(result)});
     }
 
@@ -959,6 +956,9 @@ void RepositoryEngine::Enqueue(Command command)
 #endif
     {
         std::lock_guard lock(_impl->queue_mutex);
+        if (std::holds_alternative<LoadDiff>(command))
+            std::erase_if(_impl->commands,
+                [](const Command& queued) { return std::holds_alternative<LoadDiff>(queued); });
         _impl->commands.push_back(std::move(command));
     }
     _impl->queue_cv.notify_one();

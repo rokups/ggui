@@ -133,20 +133,6 @@ ImU32 StatusColor(git_delta_t status)
     }
 }
 
-ImU32 DiffMarkerColor(std::string_view line)
-{
-    if (line.starts_with("@@"))
-        return IM_COL32(47, 129, 247, 55);
-    if (line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ")
-        || line.starts_with("index "))
-        return IM_COL32(82, 132, 196, 32);
-    if (line.starts_with('+'))
-        return IM_COL32(46, 160, 67, 48);
-    if (line.starts_with('-'))
-        return IM_COL32(248, 81, 73, 48);
-    return 0;
-}
-
 const TextEditor::Language* DiffLanguage(const std::string& path)
 {
     std::string extension = std::filesystem::path(path).extension().string();
@@ -779,28 +765,30 @@ void Application::ApplyEvent(Event event)
                     const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
                     if (repository_changed || selection_changed)
                     {
-                        _selected_file.clear();
-                        _diff = {};
-                        if (!_selected_revision.empty())
-                            _engine.Enqueue(LoadDiff{_selected_revision, {}});
+                        if (_selected_revision.empty())
+                        {
+                            _selected_file.clear();
+                            _pending_revision.clear();
+                            _diff = {};
+                        }
+                        else
+                        {
+                            _pending_revision = _selected_revision;
+                            _engine.Enqueue(LoadDiff{_selected_revision, _preferred_file, true});
+                        }
                     }
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
                     if (value.diff.revision != _selected_revision)
                         return;
-                    if (value.diff.path.empty())
+                    if (value.diff.revision == _pending_revision)
                     {
-                        const auto preferred = std::ranges::find_if(value.diff.files,
-                            [this](const StatusEntry& file) { return file.path == _preferred_file; });
-                        _selected_file = preferred != value.diff.files.end() ? preferred->path
-                            : value.diff.files.empty()                        ? ""
-                                                                            : value.diff.files.front().path;
+                        _selected_file = value.diff.path;
                         if (_preferred_file.empty())
                             _preferred_file = _selected_file;
+                        _pending_revision.clear();
                         _diff = std::move(value.diff);
-                        if (!_selected_file.empty())
-                            _engine.Enqueue(LoadDiff{_selected_revision, _selected_file});
                     }
                     else if (value.diff.path == _selected_file)
                         _diff = std::move(value.diff);
@@ -1689,36 +1677,22 @@ void Application::RenderDiff()
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
     }
+    else if (_diff.path.empty())
+    {
+        ImGui::TextUnformatted("Selected change is empty.");
+    }
     else if (_diff.binary)
     {
         ImGui::TextUnformatted("Binary file; no text diff available.");
     }
     else
     {
-        static TextEditor editor;
         static TextDiff diff;
-        static std::string loaded;
         static std::string loaded_before;
         static std::string loaded_after;
         static std::string loaded_path;
         static bool dark_palette = !_dark_theme;
-        if (_diff.path.empty() && loaded != _diff.patch)
-        {
-            loaded = _diff.patch;
-            editor.SetReadOnlyEnabled(true);
-            editor.SetShowWhitespacesEnabled(false);
-            editor.SetText(loaded);
-            editor.ClearMarkers();
-            const std::vector<std::string> lines = SplitLines(loaded);
-            for (int line = 0; line < static_cast<int>(lines.size()); ++line)
-            {
-                const ImU32 color = DiffMarkerColor(lines[line]);
-                if (color != 0)
-                    editor.AddMarker(line, color, color, {}, {});
-            }
-        }
-        if (!_diff.path.empty()
-            && (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path))
+        if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path)
         {
             loaded_before = _diff.before;
             loaded_after = _diff.after;
@@ -1731,15 +1705,11 @@ void Application::RenderDiff()
         {
             dark_palette = _dark_theme;
             const TextEditor::Palette& palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
-            editor.SetPalette(palette);
             diff.SetPalette(palette);
             diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
                 _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
         }
-        if (_diff.path.empty())
-            editor.Render("##diff editor", ImGui::GetContentRegionAvail(), true);
-        else
-            diff.Render("##rich diff", ImGui::GetContentRegionAvail(), true);
+        diff.Render("##rich diff", ImGui::GetContentRegionAvail(), true);
     }
     ImGui::End();
 }
@@ -2065,11 +2035,17 @@ void Application::SelectRevision(const std::string& oid, bool additive)
         ? oid
         : _selected_revisions.empty() ? ""
                                       : _selected_revisions.back();
-    _selected_file.clear();
     if (_selected_revision.empty())
+    {
+        _selected_file.clear();
+        _pending_revision.clear();
         _diff = {};
-    if (!_selected_revision.empty())
-        _engine.Enqueue(LoadDiff{_selected_revision, {}});
+    }
+    else
+    {
+        _pending_revision = _selected_revision;
+        _engine.Enqueue(LoadDiff{_selected_revision, _preferred_file, true});
+    }
 }
 
 bool Application::CanCreateChange() const
@@ -2129,6 +2105,7 @@ void Application::SelectFile(const std::string& path)
 {
     _selected_file = path;
     _preferred_file = path;
+    _pending_revision.clear();
     if (!_selected_revision.empty())
         _engine.Enqueue(LoadDiff{_selected_revision, path});
 }
@@ -2338,7 +2315,8 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
                                                      : std::vector{_selected_revision};
     _selected_file.clear();
     _preferred_file.clear();
-    _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, {}, false, _snapshot->status};
+    _pending_revision.clear();
+    _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
     _graph_generation = 0;
 }
 
@@ -2352,6 +2330,7 @@ void Application::ClearSnapshotForTest()
     _selected_revisions.clear();
     _selected_file.clear();
     _preferred_file.clear();
+    _pending_revision.clear();
     _diff = {};
 }
 
@@ -2386,11 +2365,6 @@ std::string Application::DeltaNameForTest(git_delta_t status)
 bool Application::ContainsInsensitiveForTest(const std::string& text, const std::string& query)
 {
     return ContainsInsensitive(text, query);
-}
-
-unsigned int Application::DiffMarkerColorForTest(const std::string& line)
-{
-    return DiffMarkerColor(line);
 }
 
 unsigned int Application::IdColorForTest(bool change_id, bool working_copy)

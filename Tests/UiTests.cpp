@@ -494,11 +494,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK_EQ(Application::DeltaNameForTest(status), name);
         IM_CHECK(Application::ContainsInsensitiveForTest("Graph First", "gRaPh"));
         IM_CHECK(!Application::ContainsInsensitiveForTest("Graph First", "missing"));
-        IM_CHECK_NE(Application::DiffMarkerColorForTest("+added"), 0U);
-        IM_CHECK_NE(Application::DiffMarkerColorForTest("-removed"), 0U);
-        IM_CHECK_NE(Application::DiffMarkerColorForTest("+added"),
-            Application::DiffMarkerColorForTest("-removed"));
-        IM_CHECK_EQ(Application::DiffMarkerColorForTest(" context"), 0U);
         IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(false, false));
         IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(true, true));
         IM_CHECK_NE(Application::IdColorForTest(false, false), Application::IdColorForTest(false, true));
@@ -535,6 +530,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(
             SnapshotReady{std::make_shared<RepoSnapshot>(std::move(without_working_copy))});
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+
+        application.SelectRevisionForTest("merge", true);
+        IM_CHECK(application.SelectedRevisionsForTest().empty());
+
+        application.SetSnapshotForTest(RichSnapshot());
+        RepoSnapshot empty = RichSnapshot();
+        empty.working_copy.clear();
+        empty.revisions.clear();
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(empty))});
+        IM_CHECK(application.SelectedRevisionsForTest().empty());
         context->Yield(2);
     };
 
@@ -602,17 +607,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(ErrorEvent{"coverage", "visible error"});
         context->Yield(2);
 
+        application.SelectRevisionForTest("merge");
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", {}, {}, {}, {}, false, {{{}, "image.bin", GIT_DELTA_MODIFIED, false}}}});
-        application.ApplyEventForTest(
-            DiffReady{{1000, "merge", "image.bin", {}, {}, {}, true, RichSnapshot().status}});
+            DiffReady{{1000, "merge", "image.bin", {}, {}, true, RichSnapshot().status}});
         FocusWindow(context, "Diff");
         context->Yield();
+        application.SelectRevisionForTest("merge");
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", "@@ -1 +1 @@\n-old\n+new\n", false,
+            DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", false,
                 RichSnapshot().status}});
         context->Yield(2);
-        application.ApplyEventForTest(DiffReady{{0, {}, {}, {}, {}, {}, false, RichSnapshot().status}});
+        application.ApplyEventForTest(DiffReady{{0, {}, {}, {}, {}, false, RichSnapshot().status}});
         context->Yield(2);
 
         context->SetRef("Changes");
@@ -927,8 +932,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("merge");
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", {}, {}, {}, {}, false, RichSnapshot().status}});
+            DiffReady{{1000, "merge", "added.txt", {}, "added\n", false, RichSnapshot().status}});
         context->Yield(2);
 
         context->SetRef("Changes");
@@ -939,7 +945,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/feature");
-        application.ApplyEventForTest(DiffReady{{1000, "left", {}, {}, {}, {}, false,
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+        application.ApplyEventForTest(DiffReady{{1000, "left", "fallback.txt", {}, "fallback\n", false,
             {{{}, "fallback.txt", GIT_DELTA_ADDED, false}}}});
         context->Yield(2);
         context->SetRef("Changes");
@@ -947,7 +954,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark");
-        application.ApplyEventForTest(DiffReady{{1000, "merge", {}, {}, {}, {}, false,
+        IM_CHECK_EQ(application.SelectedFileForTest(), "fallback.txt");
+        application.ApplyEventForTest(DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", false,
             {{{}, "fallback.txt", GIT_DELTA_ADDED, false},
                 {"modified.txt", "modified.txt", GIT_DELTA_MODIFIED, false}}}});
         context->Yield(2);
@@ -960,13 +968,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", "first.cpp", "old\n", "new\n", {}, false, RichSnapshot().status}});
+            DiffReady{{1000, "merge", "first.cpp", "old\n", "new\n", false, RichSnapshot().status}});
         context->Yield(2);
         FocusWindow(context, "Diff");
         context->SetRef("Diff");
         context->ItemUncheck("Side by side");
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", "second.cpp", "before\n", "after\n", {}, false, RichSnapshot().status}});
+            DiffReady{{1000, "merge", "second.cpp", "before\n", "after\n", false, RichSnapshot().status}});
         context->Yield(2);
         context->SetRef("Diff");
         IM_CHECK(!context->ItemIsChecked("Side by side"));
