@@ -691,7 +691,12 @@ void Application::ApplyEvent(Event event)
                     }
                     else
                     {
-                        if (old_working != _snapshot->working_copy)
+                        if (old_working.empty() && !_snapshot->working_copy.empty())
+                        {
+                            _selected_revision = _snapshot->working_copy;
+                            _selected_revisions = {_selected_revision};
+                        }
+                        else if (old_working != _snapshot->working_copy)
                         {
                             const auto old = std::ranges::find(_selected_revisions, old_working);
                             if (old != _selected_revisions.end())
