@@ -59,6 +59,10 @@ constexpr ImU32 kStatusRenamed = IM_COL32(47, 129, 247, 255);
 constexpr ImU32 kStatusSpecial = IM_COL32(166, 91, 216, 255);
 constexpr ImU32 kStatusConflict = IM_COL32(255, 123, 114, 255);
 constexpr ImU32 kStatusPushed = IM_COL32(82, 132, 196, 255);
+constexpr ImU32 kChangeId = IM_COL32(166, 91, 216, 255);
+constexpr ImU32 kWorkingChangeId = IM_COL32(225, 113, 247, 255);
+constexpr ImU32 kCommitId = IM_COL32(47, 129, 247, 255);
+constexpr ImU32 kWorkingCommitId = IM_COL32(100, 181, 246, 255);
 
 #ifdef IMGUI_BUILD_TESTING
 Application* test_application = nullptr;
@@ -187,23 +191,23 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
 }
 
 float DrawHighlightedId(
-    ImDrawList* draw, ImVec2 position, std::string_view id, std::size_t unique_length, ImU32 suffix_color = kTextMuted)
+    ImDrawList* draw, ImVec2 position, std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
     if (shown == 0)
         return position.x;
     const std::size_t unique = std::min(shown, unique_length);
-    draw->AddText(position, ImGui::GetColorU32(ImGuiCol_TextLink), id.data(), id.data() + unique);
+    draw->AddText(position, prefix_color, id.data(), id.data() + unique);
     position.x += ImGui::CalcTextSize(id.data(), id.data() + unique).x;
-    draw->AddText(position, suffix_color, id.data() + unique, id.data() + shown);
+    draw->AddText(position, kTextMuted, id.data() + unique, id.data() + shown);
     return position.x + ImGui::CalcTextSize(id.data() + unique, id.data() + shown).x;
 }
 
-void TextHighlightedId(std::string_view id, std::size_t unique_length)
+void TextHighlightedId(std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
     const std::size_t unique = std::min(shown, unique_length);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextLink));
+    ImGui::PushStyleColor(ImGuiCol_Text, prefix_color);
     ImGui::TextUnformatted(id.data(), id.data() + unique);
     ImGui::PopStyleColor();
     if (unique != shown)
@@ -213,11 +217,21 @@ void TextHighlightedId(std::string_view id, std::size_t unique_length)
     }
 }
 
-void TextLabelledId(std::string_view label, std::string_view id, std::size_t unique_length)
+void TextLabelledId(std::string_view label, std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     ImGui::TextUnformatted(label.data(), label.data() + label.size());
     ImGui::SameLine(0.0f, 0.0f);
-    TextHighlightedId(id, unique_length);
+    TextHighlightedId(id, unique_length, prefix_color);
+}
+
+ImU32 ChangeIdColor(bool working)
+{
+    return working ? kWorkingChangeId : kChangeId;
+}
+
+ImU32 CommitIdColor(bool working)
+{
+    return working ? kWorkingCommitId : kCommitId;
 }
 
 std::vector<std::string> SplitLines(std::string_view text)
@@ -794,7 +808,7 @@ void Application::RenderToolbar()
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
-        TextLabelledId("@ ", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy));
+        TextLabelledId("@ ", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy), CommitIdColor(true));
         ImGui::PopStyleColor();
     }
     if (!_active_operation.empty())
@@ -875,7 +889,8 @@ void Application::RenderNavigator()
                 draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text),
                     ref.name.c_str());
                 DrawHighlightedId(
-                    draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target, RevisionPrefix(ref.target));
+                    draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target, RevisionPrefix(ref.target),
+                    CommitIdColor(ref.target == _snapshot->working_copy));
                 if (ImGui::BeginPopupContextItem("bookmark context"))
                 {
                     if (ImGui::MenuItem("Delete"))
@@ -904,7 +919,7 @@ void Application::RenderNavigator()
                 ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f),
                     ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
                 DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
-                    ref.target, RevisionPrefix(ref.target));
+                    ref.target, RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
                 if (ImGui::BeginPopupContextItem("tag context"))
                 {
                     if (ImGui::MenuItem("Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
@@ -1050,7 +1065,8 @@ void Application::RenderHistory()
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
                 ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
-                TextLabelledId("Move ", revision.change_id, ChangePrefix(revision.change_id));
+                TextLabelledId("Move ", revision.change_id, ChangePrefix(revision.change_id),
+                    ChangeIdColor(revision.working_copy));
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
@@ -1174,9 +1190,11 @@ void Application::RenderHistory()
             draw->AddText(content_cursor, ImGui::GetColorU32(ImGuiCol_Text), title);
             content_cursor.x += ImGui::CalcTextSize(title).x + 16.0f;
             content_cursor.x = DrawHighlightedId(
-                draw, content_cursor, revision.change_id, ChangePrefix(revision.change_id));
+                draw, content_cursor, revision.change_id, ChangePrefix(revision.change_id),
+                ChangeIdColor(revision.working_copy));
             content_cursor.x += ImGui::CalcTextSize("  ").x;
-            content_cursor.x = DrawHighlightedId(draw, content_cursor, revision.oid, RevisionPrefix(revision.oid));
+            content_cursor.x = DrawHighlightedId(draw, content_cursor, revision.oid, RevisionPrefix(revision.oid),
+                CommitIdColor(revision.working_copy));
             content_cursor.x += ImGui::CalcTextSize("  ").x;
             draw->AddText(content_cursor, kTextMuted, revision.author.c_str());
             ImVec2 badge_cursor(content_cursor.x + ImGui::CalcTextSize(revision.author.c_str()).x + 12.0f, center);
@@ -1345,7 +1363,8 @@ void Application::RenderDiff()
             diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
                 _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
         }
-        TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision));
+        TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision),
+            CommitIdColor(_diff.revision == _snapshot->working_copy));
         if (!_diff.path.empty())
         {
             ImGui::SameLine();
@@ -1393,7 +1412,7 @@ void Application::RenderOperations()
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(operation.description.c_str());
             ImGui::TableNextColumn();
-            TextHighlightedId(operation.oid, OperationPrefix(operation.oid));
+            TextHighlightedId(operation.oid, OperationPrefix(operation.oid), CommitIdColor(false));
             ImGui::TableNextColumn();
             ImGui::PushID(&operation);
             if (ImGui::SmallButton("Restore")) _engine.Enqueue(RestoreOperation{operation.oid});
@@ -1463,35 +1482,42 @@ void Application::RenderDialogs()
         ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 70.0f));
         break;
     case Dialog::Describe:
-        TextLabelledId("Describe ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Describe ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 120.0f));
         break;
     case Dialog::Metaedit:
-        TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 100.0f));
         ImGui::InputTextWithHint("Author", "Name <email>", &_input_secondary);
         break;
     case Dialog::Rebase:
-        TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextWithHint("Destination", "change ID, bookmark, or commit ID", &_input_primary);
         break;
     case Dialog::Squash:
-        TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextWithHint("Into", "defaults to parent", &_input_secondary);
         ImGui::InputTextMultiline("Combined description", &_input_primary, ImVec2(-1.0f, 90.0f));
         break;
     case Dialog::Split:
-        TextLabelledId("Split ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Split ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextMultiline("Selected filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
         ImGui::InputTextWithHint("Selected description", "optional", &_input_primary);
         break;
     case Dialog::Restore:
-        TextLabelledId("Restore into ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Restore into ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::InputTextWithHint("From", "defaults to parent", &_input_primary);
         ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
         break;
     case Dialog::Abandon:
-        TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision));
+        TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
+            CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
         ImGui::TextWrapped("and restack its descendants? This remains undoable.");
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
@@ -1537,8 +1563,10 @@ void Application::RenderDialogs()
             : _pending_drop.action == DropAction::Rebase               ? "Rebase"
             : _pending_drop.action == DropAction::ReorderAfter         ? "Move after"
                                                                        : "Move before";
-        TextLabelledId(std::string(action) + " ", _pending_drop.source, RevisionPrefix(_pending_drop.source));
-        TextLabelledId("Target: ", _pending_drop.target, RevisionPrefix(_pending_drop.target));
+        TextLabelledId(std::string(action) + " ", _pending_drop.source, RevisionPrefix(_pending_drop.source),
+            CommitIdColor(_pending_drop.source == _snapshot->working_copy));
+        TextLabelledId("Target: ", _pending_drop.target, RevisionPrefix(_pending_drop.target),
+            CommitIdColor(_pending_drop.target == _snapshot->working_copy));
         int affected = 0;
         for (const Revision& revision : _snapshot->revisions)
             affected += std::ranges::find(revision.parents, _pending_drop.source) != revision.parents.end();
@@ -1880,6 +1908,11 @@ bool Application::ContainsInsensitiveForTest(const std::string& text, const std:
 unsigned int Application::DiffMarkerColorForTest(const std::string& line)
 {
     return DiffMarkerColor(line);
+}
+
+unsigned int Application::IdColorForTest(bool change_id, bool working_copy)
+{
+    return change_id ? ChangeIdColor(working_copy) : CommitIdColor(working_copy);
 }
 
 std::string Application::FileUrlForTest(const std::string& path)

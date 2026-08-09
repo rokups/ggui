@@ -312,6 +312,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(Application::DiffMarkerColorForTest("+added"),
             Application::DiffMarkerColorForTest("-removed"));
         IM_CHECK_EQ(Application::DiffMarkerColorForTest(" context"), 0U);
+        IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(false, false));
+        IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(true, true));
+        IM_CHECK_NE(Application::IdColorForTest(false, false), Application::IdColorForTest(false, true));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
     };
 
