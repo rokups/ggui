@@ -202,7 +202,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 {
     ImGuiTest* test = IM_REGISTER_TEST(engine, "Application", "Welcome");
     test->TestFunc = [](ImGuiTestContext* context) {
-        IM_CHECK_NE(WaitForWindow(context, "Welcome"), nullptr);
+        ImGuiWindow* welcome = WaitForWindow(context, "Welcome");
+        IM_CHECK_NE(welcome, nullptr);
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        IM_CHECK_EQ(welcome->Pos.x, viewport->WorkPos.x);
+        IM_CHECK_EQ(welcome->Pos.y, viewport->WorkPos.y);
+        IM_CHECK_EQ(welcome->Size.x, viewport->WorkSize.x);
+        IM_CHECK_EQ(welcome->Size.y, viewport->WorkSize.y);
+        IM_CHECK_EQ(welcome->DockNode, nullptr);
+        IM_CHECK_EQ(ImGui::FindWindowByName("ggui dockspace"), nullptr);
         context->SetRef("Welcome");
         IM_CHECK(context->ItemExists("Open repository..."));
         IM_CHECK(context->ItemExists("Initialize repository..."));
@@ -647,7 +655,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ProcessEventForTest(event);
         event = {};
         event.type = SDL_EVENT_DROP_FILE;
-        event.drop.data = SDL_strdup("dropped-repository");
+        event.drop.data = "dropped-repository";
         application.ProcessEventForTest(event);
         event = {};
         event.type = SDL_EVENT_QUIT;

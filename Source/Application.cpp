@@ -317,11 +317,7 @@ void Application::ProcessEvent(SDL_Event& event)
     if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
         _engine.Enqueue(Refresh{});
     if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
-    {
         _engine.Enqueue(OpenRepository{event.drop.data});
-        SDL_free(const_cast<char*>(event.drop.data));
-        event.drop.data = nullptr;
-    }
 }
 
 bool Application::Initialize()
@@ -542,7 +538,6 @@ void Application::ApplyEvent(Event event)
 void Application::RenderFrame()
 {
     RenderMenuBar();
-    SetupDockspace();
     ImGuiIO& io = ImGui::GetIO();
     if (!io.WantTextInput)
     {
@@ -556,6 +551,7 @@ void Application::RenderFrame()
         RenderWelcome();
     else
     {
+        SetupDockspace();
         RenderNavigator();
         RenderHistory();
         RenderChanges();
@@ -723,8 +719,18 @@ void Application::RenderToolbar()
 
 void Application::RenderWelcome()
 {
-    ImGui::SetNextWindowDockID(ImGui::GetID("ggui main dockspace"), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Welcome");
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+    ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar
+        | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove
+        | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoSavedSettings;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::Begin("Welcome", nullptr, flags);
+    ImGui::PopStyleVar(2);
     const float width = 460.0f;
     ImGui::SetCursorPosX(std::max(20.0f, (ImGui::GetContentRegionAvail().x - width) * 0.5f));
     ImGui::BeginGroup();
@@ -734,9 +740,13 @@ void Application::RenderWelcome()
     ImGui::SetWindowFontScale(1.0f);
     ImGui::TextDisabled("A graph-first workspace for the gg workflow");
     ImGui::Dummy(ImVec2(0.0f, 10.0f));
+    ImGui::BeginDisabled(!_active_operation.empty());
     if (ImGui::Button("Open repository...", ImVec2(width, 42.0f))) PickAndOpen(false);
     if (ImGui::Button("Initialize repository...", ImVec2(width, 42.0f))) PickAndOpen(true);
     if (ImGui::Button("Clone repository...", ImVec2(width, 42.0f))) OpenDialog(Dialog::Clone);
+    ImGui::EndDisabled();
+    if (!_active_operation.empty())
+        ImGui::TextDisabled("Working: %s", _active_operation.c_str());
     if (!_error_message.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s", _error_message.c_str());
     if (!_recent_repositories.empty())
