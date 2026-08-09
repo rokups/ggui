@@ -790,6 +790,7 @@ void Application::ApplyEvent(Event event)
                 {
                     _active_operation = value.name;
                     _error_message.clear();
+                    _status_message.clear();
                 }
                 else if constexpr (std::is_same_v<T, OperationProgress>)
                 {
@@ -1067,11 +1068,43 @@ void Application::RenderToolbar()
     if (!_active_operation.empty())
     {
         ImGui::SameLine();
-        ImGui::Text("Working: %s", _active_operation.c_str());
+        if (_progress_phase.empty())
+            ImGui::Text("Working: %s", _active_operation.c_str());
+        else if (_progress_total == 0)
+            ImGui::Text("Working: %s (%s)", _active_operation.c_str(), _progress_phase.c_str());
+        else
+            ImGui::Text("Working: %s (%s %zu/%zu)", _active_operation.c_str(), _progress_phase.c_str(),
+                _progress_completed, _progress_total);
         ImGui::SameLine();
         if (ImGui::SmallButton("Cancel")) _engine.Cancel();
     }
     ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    if (!_error_message.empty())
+    {
+        ImGui::SetCursorPosX(10.0f);
+        ImGui::PushStyleColor(ImGuiCol_ChildBg,
+            _dark_theme ? ImVec4(0.22f, 0.07f, 0.08f, 1.0f) : ImVec4(1.0f, 0.88f, 0.88f, 1.0f));
+        ImGui::BeginChild("error banner", ImVec2(0.0f, 48.0f), ImGuiChildFlags_Borders,
+            ImGuiWindowFlags_NoScrollbar);
+        if (ImGui::BeginTable("error banner contents", 2, ImGuiTableFlags_SizingStretchProp))
+        {
+            ImGui::TableSetupColumn("message", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextWrapped("Error: %s", _error_message.c_str());
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton("Dismiss error")) _error_message.clear();
+            ImGui::EndTable();
+        }
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+    else if (!_status_message.empty())
+    {
+        ImGui::SetCursorPosX(10.0f);
+        ImGui::TextDisabled("%s", _status_message.c_str());
+    }
 }
 
 void Application::RenderWelcome()
