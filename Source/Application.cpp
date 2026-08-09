@@ -1018,7 +1018,7 @@ void Application::RenderHistory()
             const std::string description = FirstLine(revision.description);
             ImGui::SetCursorScreenPos(ImVec2(content_x, minimum.y + 6.0f));
             ImGui::TextUnformatted(description.empty() ? "(no description)" : description.c_str());
-            const std::string meta = ShortId(revision.change_id) + "  " + revision.author;
+            const std::string meta = ShortId(revision.change_id) + "  " + ShortId(revision.oid) + "  " + revision.author;
             ImGui::SetCursorScreenPos(ImVec2(content_x, minimum.y + 28.0f));
             ImGui::PushStyleColor(ImGuiCol_Text, kTextMuted);
             ImGui::TextUnformatted(meta.c_str());
