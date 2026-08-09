@@ -51,6 +51,7 @@ public:
     static bool ContainsInsensitiveForTest(const std::string& text, const std::string& query);
     static unsigned int DiffMarkerColorForTest(const std::string& line);
     static unsigned int IdColorForTest(bool change_id, bool working_copy);
+    static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
 #endif
 

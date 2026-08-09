@@ -2360,6 +2360,11 @@ unsigned int Application::IdColorForTest(bool change_id, bool working_copy)
     return change_id ? ChangeIdColor(working_copy) : CommitIdColor(working_copy);
 }
 
+bool Application::SupportsDiffLanguageForTest(const std::string& path)
+{
+    return DiffLanguage(path) != nullptr;
+}
+
 std::string Application::FileUrlForTest(const std::string& path)
 {
     return FileUrl(path);
