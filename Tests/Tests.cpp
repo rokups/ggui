@@ -246,12 +246,14 @@ TEST(GraphLayout, IsDeterministic)
     EXPECT_EQ(GraphColumnCount(BuildGraphLayout(nodes)), 1);
 }
 
-TEST(GraphLayout, IgnoresMissingAndBackwardsParents)
+TEST(GraphLayout, MarksMissingParentsAndIgnoresBackwardsParents)
 {
     const std::vector<GraphNode> nodes{{"a", {"missing", "a"}}, {"b", {"a"}}};
     const auto rows = BuildGraphLayout(nodes);
     ASSERT_EQ(rows.size(), 2U);
     EXPECT_TRUE(rows.front().parent_columns.empty());
+    EXPECT_TRUE(rows.front().continues_beyond_layout);
+    EXPECT_FALSE(rows.back().continues_beyond_layout);
 }
 
 TEST(TextHelpers, ShortensAndSelectsFirstLine)

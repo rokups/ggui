@@ -38,12 +38,18 @@ std::vector<GraphRow> BuildGraphLayout(const std::vector<GraphNode>& nodes)
             active_nodes.erase(current);
             active_tracks.erase(active_tracks.begin() + row.column);
         }
+        row.track = current_track;
 
         int insert_at = row.column;
         for (std::size_t parent_index = 0; parent_index < nodes[index].parents.size(); ++parent_index)
         {
             const auto found = indices.find(nodes[index].parents[parent_index]);
-            if (found == indices.end() || found->second <= index)
+            if (found == indices.end())
+            {
+                row.continues_beyond_layout = true;
+                continue;
+            }
+            if (found->second <= index)
                 continue;
             auto parent = std::find(active_nodes.begin(), active_nodes.end(), found->second);
             if (parent == active_nodes.end())

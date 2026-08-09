@@ -1101,6 +1101,8 @@ void Application::RenderHistory()
                     ImVec2(parent_x, maximum.y - 10.0f), ImVec2(parent_x, maximum.y),
                     color(row.tracks_after[parent_column]), 2.0f);
             }
+            if (row.continues_beyond_layout)
+                draw->AddLine(ImVec2(dot_x, center), ImVec2(dot_x, maximum.y), color(row.track), 2.0f);
             if (selected)
                 draw->AddCircle(ImVec2(dot_x, center), kDotRadius + 3.0f, IM_COL32(47, 129, 247, 150), 0, 2.0f);
             draw->AddCircleFilled(ImVec2(dot_x, center), kDotRadius,

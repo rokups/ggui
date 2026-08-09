@@ -18,6 +18,8 @@ struct GraphNode
 struct GraphRow
 {
     int column = 0;
+    int track = 0;
+    bool continues_beyond_layout = false;
     std::vector<int> tracks_before;
     std::vector<int> tracks_after;
     std::vector<int> parent_columns;
