@@ -183,11 +183,12 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
 {
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
     const float pad_x = FontPx(7.0f);
-    const float pad_y = FontPx(3.0f);
-    const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_y);
-    const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_y);
+    const float pad_top = FontPx(3.0f);
+    const float pad_bottom = FontPx(1.0f);
+    const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_top);
+    const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
-    draw->AddText(ImVec2(minimum.x + pad_x, minimum.y + pad_y), IM_COL32_WHITE, label.data(), label.data() + label.size());
+    draw->AddText(ImVec2(minimum.x + pad_x, minimum.y + pad_top), IM_COL32_WHITE, label.data(), label.data() + label.size());
     cursor.x = maximum.x + FontPx(6.0f);
 }
 
