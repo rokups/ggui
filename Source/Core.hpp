@@ -62,6 +62,13 @@ struct Workspace
     bool stale = false;
 };
 
+struct Remote
+{
+    std::string name;
+    std::string fetch_url;
+    std::string push_url;
+};
+
 struct Conflict
 {
     std::string path;
@@ -79,6 +86,7 @@ struct RepoSnapshot
     std::vector<StatusEntry> status;
     std::vector<Operation> operations;
     std::vector<Workspace> workspaces;
+    std::vector<Remote> remotes;
     std::vector<Conflict> conflicts;
 };
 

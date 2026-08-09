@@ -136,6 +136,14 @@ void OpenAndCancel(ImGuiTestContext* context, const char* menu_path)
     context->Yield();
 }
 
+void FocusWindow(ImGuiTestContext* context, const char* name)
+{
+    const std::string path = std::string("//") + name;
+    context->WindowFocus(path.c_str());
+    context->SetRef(name);
+    context->Yield();
+}
+
 RepoSnapshot RichSnapshot()
 {
     RepoSnapshot snapshot;
@@ -171,6 +179,7 @@ RepoSnapshot RichSnapshot()
     snapshot.operations = {{"operation-id", "Undoable operation", 1}};
     snapshot.workspaces = {
         {"current", snapshot.root, "merge", false}, {"stale", "/missing/workspace", "left", true}};
+    snapshot.remotes = {{"origin", "https://example.test/repository.git", "ssh://example.test/repository.git"}};
     snapshot.conflicts = {{"conflict file.txt", 2, 3}};
     return snapshot;
 }
@@ -220,12 +229,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Application", "OpenRepositoryAndPanels");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
-        for (const char* panel : {"Navigator", "History", "Changes", "Diff", "Operations"})
+        for (const char* panel : {"History", "Changes", "Diff", "Operations"})
         {
             ImGuiWindow* window = WaitForWindow(context, panel);
             IM_CHECK_NE(window, nullptr);
             IM_CHECK(window->Active);
         }
+        ImGuiWindow* bookmarks = WaitForWindow(context, "Bookmarks");
+        IM_CHECK_NE(bookmarks, nullptr);
+        for (const char* panel : {"Tags", "Workspaces", "Remotes"})
+        {
+            ImGuiWindow* window = WaitForWindow(context, panel);
+            IM_CHECK_NE(window, nullptr);
+            IM_CHECK_EQ(window->DockNode, bookmarks->DockNode);
+        }
+        IM_CHECK_EQ(ImGui::FindWindowByName("Navigator"), nullptr);
     };
 
     test = IM_REGISTER_TEST(engine, "Workflow", "CreateEditAndInspectWorkingChange");
@@ -265,23 +283,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Repository/Refresh");
         context->Yield(3);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Bookmarks");
-        context->Yield();
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/Create bookmark");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Tags");
-        context->Yield();
+        FocusWindow(context, "Tags");
         context->ItemClick("**/Create tag");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Workspaces");
-        context->Yield();
+        FocusWindow(context, "Workspaces");
         context->ItemClick("**/Add workspace");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
@@ -350,21 +362,19 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemInputValue("##graph filter", "");
         context->Yield(2);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Tags");
-        context->Yield(2);
+        FocusWindow(context, "Tags");
         IM_CHECK(context->ItemExists("**/coverage-tag"));
         context->ItemClick("**/coverage-tag");
         context->Yield(2);
-        context->ItemClick("navigator tabs/Workspaces");
-        context->Yield(2);
+        FocusWindow(context, "Workspaces");
         IM_CHECK(context->ItemExists("**/Add workspace"));
         context->ItemClick("**/current", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK(context->ItemExists("**/Open directory"));
         context->KeyPress(ImGuiKey_Escape);
-        context->ItemClick("navigator tabs/Bookmarks");
-        context->Yield(2);
+        FocusWindow(context, "Remotes");
+        IM_CHECK(context->ItemExists("**/origin"));
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark");
         context->Yield(2);
 
@@ -483,9 +493,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield(2);
         }
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Bookmarks");
-        context->Yield();
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/Create bookmark");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
@@ -493,9 +501,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Tags");
-        context->Yield();
+        FocusWindow(context, "Tags");
         context->ItemClick("**/Create tag");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
@@ -504,9 +510,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Workspaces");
-        context->Yield();
+        FocusWindow(context, "Workspaces");
         context->ItemClick("**/Add workspace");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
@@ -611,30 +615,24 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield(2);
         }
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Bookmarks");
-        context->Yield();
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Delete");
         context->Yield(2);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Tags");
-        context->Yield();
+        FocusWindow(context, "Tags");
         context->ItemClick("**/coverage-tag", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Delete");
         context->Yield(2);
 
-        context->SetRef("Navigator");
-        context->ItemClick("navigator tabs/Workspaces");
-        context->Yield();
+        FocusWindow(context, "Workspaces");
         context->ItemClick("**/stale", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Forget");
         context->Yield(2);
-        context->SetRef("Navigator");
+        FocusWindow(context, "Workspaces");
         context->ItemClick("**/current");
         context->ItemClick("**/current", ImGuiMouseButton_Right);
         context->Yield();
@@ -697,7 +695,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
 
-        context->SetRef("Navigator");
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/feature");
         application.ApplyEventForTest(DiffReady{{1000, "left", {}, {}, {}, {}, false,
             {{{}, "fallback.txt", GIT_DELTA_ADDED, false}}}});
@@ -705,7 +703,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Changes");
         IM_CHECK_EQ(application.SelectedFileForTest(), "fallback.txt");
 
-        context->SetRef("Navigator");
+        FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark");
         application.ApplyEventForTest(DiffReady{{1000, "merge", {}, {}, {}, {}, false,
             {{{}, "fallback.txt", GIT_DELTA_ADDED, false},

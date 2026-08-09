@@ -44,6 +44,12 @@ void Check(int result, std::string_view action)
         throw std::runtime_error(std::string(action) + ": " + LastGitError("unknown error"));
 }
 
+struct GitStringArray
+{
+    git_strarray value{};
+    ~GitStringArray() { git_strarray_dispose(&value); }
+};
+
 std::string BlobText(git_repository* repository, git_tree* tree, const char* path)
 {
     if (tree == nullptr || path == nullptr || *path == '\0')
@@ -535,6 +541,20 @@ struct RepositoryEngine::Impl
             const gg_workspace& source = workspaces.value.items[index];
             result->workspaces.push_back({source.name == nullptr ? "" : source.name,
                 source.root == nullptr ? "" : source.root, OidString(source.working_copy), source.stale != 0});
+        }
+
+        GitStringArray remote_names;
+        Check(git_remote_list(&remote_names.value, git.get()), "load remotes");
+        result->remotes.reserve(remote_names.value.count);
+        for (size_t index = 0; index < remote_names.value.count; ++index)
+        {
+            git_remote* raw_remote = nullptr;
+            Check(git_remote_lookup(&raw_remote, git.get(), remote_names.value.strings[index]), "load remote");
+            std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
+            const char* fetch = git_remote_url(remote.get());
+            const char* push = git_remote_pushurl(remote.get());
+            result->remotes.push_back(
+                {remote_names.value.strings[index], fetch == nullptr ? "" : fetch, push == nullptr ? "" : push});
         }
 
         if (!result->working_copy.empty())

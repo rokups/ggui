@@ -654,7 +654,10 @@ void Application::RenderFrame()
     else
     {
         SetupDockspace();
-        RenderNavigator();
+        RenderBookmarks();
+        RenderTags();
+        RenderWorkspaces();
+        RenderRemotes();
         RenderHistory();
         RenderChanges();
         RenderDiff();
@@ -688,16 +691,19 @@ void Application::SetupDockspace()
         ImGuiID operations = 0;
         ImGuiID content = 0;
         ImGui::DockBuilderSplitNode(dockspace, ImGuiDir_Down, 0.25f, &operations, &content);
-        ImGuiID navigator = 0;
+        ImGuiID references = 0;
         ImGuiID main = 0;
-        ImGui::DockBuilderSplitNode(content, ImGuiDir_Left, 0.24f, &navigator, &main);
+        ImGui::DockBuilderSplitNode(content, ImGuiDir_Left, 0.24f, &references, &main);
         ImGuiID center = 0;
         ImGuiID diff = 0;
         ImGui::DockBuilderSplitNode(main, ImGuiDir_Left, 0.68f, &center, &diff);
         ImGuiID history = 0;
         ImGuiID changes = 0;
         ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, 0.68f, &history, &changes);
-        ImGui::DockBuilderDockWindow("Navigator", navigator);
+        ImGui::DockBuilderDockWindow("Bookmarks", references);
+        ImGui::DockBuilderDockWindow("Tags", references);
+        ImGui::DockBuilderDockWindow("Workspaces", references);
+        ImGui::DockBuilderDockWindow("Remotes", references);
         ImGui::DockBuilderDockWindow("History", history);
         ImGui::DockBuilderDockWindow("Changes", changes);
         ImGui::DockBuilderDockWindow("Diff", diff);
@@ -864,102 +870,119 @@ void Application::RenderWelcome()
     ImGui::End();
 }
 
-void Application::RenderNavigator()
+void Application::RenderBookmarks()
 {
-    ImGui::Begin("Navigator");
+    ImGui::Begin("Bookmarks");
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
-    if (ImGui::BeginTabBar("navigator tabs", ImGuiTabBarFlags_FittingPolicyResizeDown))
+    if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
+    for (const NamedRef& ref : _snapshot->refs)
     {
-        if (ImGui::BeginTabItem("Bookmarks"))
+        if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK)
+            continue;
+        ImGui::PushID(&ref);
+        const std::string item_id = "###" + ref.name;
+        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+            SelectRevision(ref.target);
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), RefBadgeColor(ref), 4.0f,
+            ImDrawFlags_RoundCornersLeft);
+        draw->AddText(
+            ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
+        DrawHighlightedId(draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
+            RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
+        if (ImGui::BeginPopupContextItem("bookmark context"))
         {
-            if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
-            for (const NamedRef& ref : _snapshot->refs)
-            {
-                if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK)
-                    continue;
-                ImGui::PushID(&ref);
-                const std::string item_id = "###" + ref.name;
-                if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
-                    SelectRevision(ref.target);
-                const ImVec2 minimum = ImGui::GetItemRectMin();
-                const ImVec2 maximum = ImGui::GetItemRectMax();
-                ImDrawList* draw = ImGui::GetWindowDrawList();
-                draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), RefBadgeColor(ref), 4.0f,
-                    ImDrawFlags_RoundCornersLeft);
-                draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text),
-                    ref.name.c_str());
-                DrawHighlightedId(
-                    draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target, RevisionPrefix(ref.target),
-                    CommitIdColor(ref.target == _snapshot->working_copy));
-                if (ImGui::BeginPopupContextItem("bookmark context"))
-                {
-                    if (ImGui::MenuItem("Delete"))
-                        _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
-                    ImGui::EndPopup();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTabItem();
+            if (ImGui::MenuItem("Delete")) _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
+            ImGui::EndPopup();
         }
-        if (ImGui::BeginTabItem("Tags"))
-        {
-            if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
-            for (const NamedRef& ref : _snapshot->refs)
-            {
-                if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
-                    continue;
-                ImGui::PushID(&ref);
-                const std::string item_id = "###" + ref.name;
-                if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
-                    SelectRevision(ref.target);
-                const ImVec2 minimum = ImGui::GetItemRectMin();
-                const ImVec2 maximum = ImGui::GetItemRectMax();
-                ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y),
-                    RefBadgeColor(ref), 4.0f, ImDrawFlags_RoundCornersLeft);
-                ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f),
-                    ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
-                DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
-                    ref.target, RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
-                if (ImGui::BeginPopupContextItem("tag context"))
-                {
-                    if (ImGui::MenuItem("Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
-                    ImGui::EndPopup();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("Workspaces"))
-        {
-            if (ImGui::Button("Add workspace", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::WorkspaceAdd);
-            for (const Workspace& workspace : _snapshot->workspaces)
-            {
-                ImGui::PushID(&workspace);
-                if (ImGui::Selectable(workspace.name.c_str(), workspace.working_copy == _selected_revision, 0,
-                        ImVec2(0.0f, 42.0f)))
-                    SelectRevision(workspace.working_copy);
-                const ImVec2 minimum = ImGui::GetItemRectMin();
-                const ImVec2 maximum = ImGui::GetItemRectMax();
-                const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
-                ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent,
-                    4.0f, ImDrawFlags_RoundCornersLeft);
-                ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted,
-                    workspace.stale ? "Unavailable" : workspace.root.c_str());
-                if (ImGui::BeginPopupContextItem("workspace context"))
-                {
-                    if (ImGui::MenuItem("Open directory", nullptr, false, !workspace.stale))
-                        SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
-                    if (ImGui::MenuItem("Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
-                    if (ImGui::MenuItem("Rename current...")) OpenDialog(Dialog::WorkspaceRename);
-                    ImGui::EndPopup();
-                }
-                ImGui::PopID();
-            }
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+        ImGui::PopID();
     }
     ImGui::PopStyleVar();
+    ImGui::End();
+}
+
+void Application::RenderTags()
+{
+    ImGui::Begin("Tags");
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
+    for (const NamedRef& ref : _snapshot->refs)
+    {
+        if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
+            continue;
+        ImGui::PushID(&ref);
+        const std::string item_id = "###" + ref.name;
+        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+            SelectRevision(ref.target);
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y),
+            RefBadgeColor(ref), 4.0f, ImDrawFlags_RoundCornersLeft);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f),
+            ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
+        DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
+            RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
+        if (ImGui::BeginPopupContextItem("tag context"))
+        {
+            if (ImGui::MenuItem("Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    ImGui::PopStyleVar();
+    ImGui::End();
+}
+
+void Application::RenderWorkspaces()
+{
+    ImGui::Begin("Workspaces");
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    if (ImGui::Button("Add workspace", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::WorkspaceAdd);
+    for (const Workspace& workspace : _snapshot->workspaces)
+    {
+        ImGui::PushID(&workspace);
+        if (ImGui::Selectable(
+                workspace.name.c_str(), workspace.working_copy == _selected_revision, 0, ImVec2(0.0f, 42.0f)))
+            SelectRevision(workspace.working_copy);
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
+        ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f,
+            ImDrawFlags_RoundCornersLeft);
+        ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted,
+            workspace.stale ? "Unavailable" : workspace.root.c_str());
+        if (ImGui::BeginPopupContextItem("workspace context"))
+        {
+            if (ImGui::MenuItem("Open directory", nullptr, false, !workspace.stale))
+                SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
+            if (ImGui::MenuItem("Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
+            if (ImGui::MenuItem("Rename current...")) OpenDialog(Dialog::WorkspaceRename);
+            ImGui::EndPopup();
+        }
+        ImGui::PopID();
+    }
+    ImGui::PopStyleVar();
+    ImGui::End();
+}
+
+void Application::RenderRemotes()
+{
+    ImGui::Begin("Remotes");
+    for (const Remote& remote : _snapshot->remotes)
+    {
+        ImGui::PushID(&remote);
+        const bool separate_push = !remote.push_url.empty() && remote.push_url != remote.fetch_url;
+        ImGui::Selectable(remote.name.c_str(), false, 0, ImVec2(0.0f, separate_push ? 58.0f : 42.0f));
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted, remote.fetch_url.c_str());
+        if (separate_push)
+            draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 39.0f), kTextMuted,
+                ("Push: " + remote.push_url).c_str());
+        ImGui::PopID();
+    }
     ImGui::End();
 }
 

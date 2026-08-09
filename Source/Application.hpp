@@ -96,7 +96,10 @@ private:
     void RenderMenuBar();
     void RenderToolbar();
     void RenderWelcome();
-    void RenderNavigator();
+    void RenderBookmarks();
+    void RenderTags();
+    void RenderWorkspaces();
+    void RenderRemotes();
     void RenderHistory();
     void RenderChanges();
     void RenderDiff();

@@ -78,6 +78,9 @@ struct TemporaryRepository
         git_oid commit_oid{};
         CheckGit(git_commit_create(&commit_oid, repository.get(), "HEAD", signature.get(), signature.get(), nullptr,
             "base", tree.get(), 0, nullptr));
+        git_remote* raw_remote = nullptr;
+        CheckGit(git_remote_create(&raw_remote, repository.get(), "origin", "https://example.test/repository.git"));
+        git_remote_free(raw_remote);
         repository.reset();
         git_libgit2_shutdown();
     }
@@ -287,6 +290,9 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
     ASSERT_NE(opened, nullptr);
     EXPECT_EQ(opened->revisions.back().description, "base");
+    ASSERT_EQ(opened->remotes.size(), 1U);
+    EXPECT_EQ(opened->remotes.front().name, "origin");
+    EXPECT_EQ(opened->remotes.front().fetch_url, "https://example.test/repository.git");
     std::this_thread::sleep_for(1200ms);
     const auto idle_events = engine.PollEvents();
     EXPECT_TRUE(std::none_of(idle_events.begin(), idle_events.end(),
