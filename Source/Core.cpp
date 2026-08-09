@@ -178,12 +178,12 @@ public:
         _common_directory = std::filesystem::weakly_canonical(common_directory);
         auto watcher = std::make_unique<efsw::FileWatcher>();
         if (watcher->addWatch(worktree.string(), this, true) < 0)
-            throw std::runtime_error("watch repository: " + efsw::Errors::Log::getLastErrorLog());
+            throw std::runtime_error("watch repository: " + efsw::Errors::Log::getLastErrorLog()); // GCOV_EXCL_LINE: requires an efsw/platform fault
         const auto relative = _common_directory.lexically_relative(std::filesystem::weakly_canonical(worktree));
         if (relative.empty() || *relative.begin() == "..")
         {
             if (watcher->addWatch(common_directory.string(), this, true) < 0)
-                throw std::runtime_error("watch Git directory: " + efsw::Errors::Log::getLastErrorLog());
+                throw std::runtime_error("watch Git directory: " + efsw::Errors::Log::getLastErrorLog()); // GCOV_EXCL_LINE: requires an efsw/platform fault
         }
         watcher->watch();
         _watcher = std::move(watcher);
