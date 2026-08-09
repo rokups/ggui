@@ -391,12 +391,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(2);
+        context->SetRef("Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Commit only this file");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
+        context->Yield(2);
 
         context->SetRef("Operations");
         context->ItemClick("**/Restore");
@@ -420,6 +422,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ComboClick("Method/SSH key");
+        context->Yield();
         context->ItemInputValue("Private key", "/tmp/key");
         context->ItemInputValue("Public key", "/tmp/key.pub");
         context->ItemClick("Apply");
@@ -430,6 +433,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ComboClick("Method/SSH agent");
+        context->Yield();
         context->ItemClick("Apply");
         context->Yield(2);
 

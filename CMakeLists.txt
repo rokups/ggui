@@ -148,6 +148,8 @@ target_link_libraries(ggui_core PUBLIC gg::gg PRIVATE efsw-static spdlog::spdlog
 target_compile_options(ggui_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 if(GGUI_ENABLE_COVERAGE)
   target_link_libraries(ggui_core PUBLIC ggui_coverage)
+endif()
+if(GGUI_ENABLE_COVERAGE OR GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_compile_definitions(ggui_core PUBLIC GGUI_TESTING=1)
 endif()
 
