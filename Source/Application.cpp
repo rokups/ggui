@@ -1925,7 +1925,8 @@ void Application::SelectRevision(const std::string& oid, bool additive)
         : _selected_revisions.empty() ? ""
                                       : _selected_revisions.back();
     _selected_file.clear();
-    _diff = {};
+    if (_selected_revision.empty())
+        _diff = {};
     if (!_selected_revision.empty())
         _engine.Enqueue(LoadDiff{_selected_revision, {}});
 }
