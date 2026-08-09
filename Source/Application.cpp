@@ -647,6 +647,30 @@ void Application::RenderFrame()
         if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) _engine.Enqueue(Undo{});
         if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) _engine.Enqueue(Redo{});
         if (_snapshot != nullptr && ImGui::IsKeyPressed(ImGuiKey_F5)) _engine.Enqueue(Refresh{});
+        const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
+        if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty() && plain_key
+            && !_selected_revision.empty())
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_E))
+                _engine.Enqueue(Edit{_selected_revision});
+            if (ImGui::IsKeyPressed(ImGuiKey_N))
+            {
+                OpenDialog(Dialog::New);
+                _input_secondary = _selected_revision;
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_A))
+                OpenDialog(Dialog::Abandon);
+            if (ImGui::IsKeyPressed(ImGuiKey_S))
+            {
+                const auto selected = std::ranges::find_if(_snapshot->revisions,
+                    [this](const Revision& revision) { return revision.oid == _selected_revision; });
+                if (selected != _snapshot->revisions.end() && selected->parents.size() == 1)
+                {
+                    OpenDialog(Dialog::Squash);
+                    _input_secondary = selected->parents.front();
+                }
+            }
+        }
     }
     if (_snapshot == nullptr)
         RenderWelcome();

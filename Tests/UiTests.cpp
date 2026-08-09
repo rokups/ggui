@@ -729,6 +729,32 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/feature");
+        FocusWindow(context, "History");
+
+        context->KeyPress(ImGuiKey_E);
+        context->KeyPress(ImGuiKey_N);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        context->KeyPress(ImGuiKey_S);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        context->KeyPress(ImGuiKey_A);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+    };
+
 }
 
 } // namespace Ggui
