@@ -306,6 +306,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK_EQ(Application::DeltaNameForTest(status), name);
         IM_CHECK(Application::ContainsInsensitiveForTest("Graph First", "gRaPh"));
         IM_CHECK(!Application::ContainsInsensitiveForTest("Graph First", "missing"));
+        IM_CHECK_NE(Application::DiffMarkerColorForTest("+added"), 0U);
+        IM_CHECK_NE(Application::DiffMarkerColorForTest("-removed"), 0U);
+        IM_CHECK_NE(Application::DiffMarkerColorForTest("+added"),
+            Application::DiffMarkerColorForTest("-removed"));
+        IM_CHECK_EQ(Application::DiffMarkerColorForTest(" context"), 0U);
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
     };
 

@@ -127,6 +127,20 @@ ImU32 StatusColor(git_delta_t status)
     }
 }
 
+ImU32 DiffMarkerColor(std::string_view line)
+{
+    if (line.starts_with("@@"))
+        return IM_COL32(47, 129, 247, 55);
+    if (line.starts_with("+++") || line.starts_with("---") || line.starts_with("diff ")
+        || line.starts_with("index "))
+        return IM_COL32(82, 132, 196, 32);
+    if (line.starts_with('+'))
+        return IM_COL32(46, 160, 67, 48);
+    if (line.starts_with('-'))
+        return IM_COL32(248, 81, 73, 48);
+    return 0;
+}
+
 ImU32 RefBadgeColor(const NamedRef& ref)
 {
     if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK)
@@ -1210,12 +1224,26 @@ void Application::RenderDiff()
     {
         static TextEditor editor;
         static std::string loaded;
+        static bool dark_palette = !_dark_theme;
         if (loaded != _diff.patch)
         {
             loaded = _diff.patch;
             editor.SetReadOnlyEnabled(true);
             editor.SetShowWhitespacesEnabled(false);
             editor.SetText(loaded);
+            editor.ClearMarkers();
+            const std::vector<std::string> lines = SplitLines(loaded);
+            for (int line = 0; line < static_cast<int>(lines.size()); ++line)
+            {
+                const ImU32 color = DiffMarkerColor(lines[line]);
+                if (color != 0)
+                    editor.AddMarker(line, color, color, {}, {});
+            }
+        }
+        if (dark_palette != _dark_theme)
+        {
+            dark_palette = _dark_theme;
+            editor.SetPalette(_dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette());
         }
         TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision));
         if (!_diff.path.empty())
@@ -1732,6 +1760,11 @@ std::string Application::DeltaNameForTest(git_delta_t status)
 bool Application::ContainsInsensitiveForTest(const std::string& text, const std::string& query)
 {
     return ContainsInsensitive(text, query);
+}
+
+unsigned int Application::DiffMarkerColorForTest(const std::string& line)
+{
+    return DiffMarkerColor(line);
 }
 
 std::string Application::FileUrlForTest(const std::string& path)

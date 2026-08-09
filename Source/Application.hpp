@@ -41,6 +41,7 @@ public:
     static std::vector<std::string> SplitLinesForTest(const std::string& text);
     static std::string DeltaNameForTest(git_delta_t status);
     static bool ContainsInsensitiveForTest(const std::string& text, const std::string& query);
+    static unsigned int DiffMarkerColorForTest(const std::string& line);
     static std::string FileUrlForTest(const std::string& path);
 #endif
 
