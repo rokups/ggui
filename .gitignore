@@ -1,0 +1,7 @@
+/build/
+/compile_commands.json
+/.cache/
+/_CPack_Packages/
+/ggui-*.tar.gz
+/ggui-*.zip
+/*.gcov.json.gz
