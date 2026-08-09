@@ -1040,13 +1040,22 @@ void Application::RenderHistory()
             if (ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
-                hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
-                    : ratio < 0.8f                  ? DropAction::Squash
-                                                  : DropAction::Rebase;
+                const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+                if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
+                    hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
+                        : ratio < 0.8f                  ? DropAction::Squash
+                                                      : DropAction::Rebase;
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop};
                     if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
+                }
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
+                {
+                    const char* source = static_cast<const char*>(payload->Data);
+                    const char* path = source + std::char_traits<char>::length(source) + 1;
+                    if (source != revision.oid && path < source + payload->DataSize && *path != '\0')
+                        _engine.Enqueue(MoveFiles{source, revision.oid, {path}});
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -1215,6 +1224,16 @@ void Application::RenderChanges()
                 minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f),
             accent, label.c_str());
         if (selected) SelectFile(file.path);
+        if (ImGui::BeginDragDropSource())
+        {
+            std::string payload = _diff.revision;
+            payload.push_back('\0');
+            payload += file.path;
+            payload.push_back('\0');
+            ImGui::SetDragDropPayload("GGUI_FILE", payload.data(), payload.size());
+            ImGui::Text("Move %s", file.path.c_str());
+            ImGui::EndDragDropSource();
+        }
         if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
         {
             if (ImGui::MenuItem("Commit only this file"))

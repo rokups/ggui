@@ -186,6 +186,12 @@ struct Restore
     std::string into;
     std::vector<std::string> filesets;
 };
+struct MoveFiles
+{
+    std::string source;
+    std::string destination;
+    std::vector<std::string> filesets;
+};
 struct SimplifyParents
 {
     std::vector<std::string> revisions;
@@ -245,8 +251,8 @@ struct ChmodPaths
 };
 
 using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, LoadDiff, NewChange, Describe,
-    Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, Restore, SimplifyParents, Bookmark,
-    Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
+    Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, Restore, MoveFiles,
+    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
     UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady

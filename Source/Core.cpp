@@ -741,6 +741,16 @@ struct RepositoryEngine::Impl
                         return gg_repository_restore(out, gg, &options, operation);
                     });
                 },
+                [&](const MoveFiles& value) {
+                    gg_move_files_options options = GG_MOVE_FILES_OPTIONS_INIT;
+                    const StringArray filesets(value.filesets);
+                    options.source = value.source.c_str();
+                    options.destination = value.destination.c_str();
+                    options.filesets = filesets.Get();
+                    Mutate("move files", [&](auto* out, auto* operation) {
+                        return gg_repository_move_files(out, gg, &options, operation);
+                    });
+                },
                 [&](const SimplifyParents& value) {
                     gg_simplify_parents_options options = GG_SIMPLIFY_PARENTS_OPTIONS_INIT;
                     const StringArray revisions(value.revisions);
@@ -840,6 +850,7 @@ struct RepositoryEngine::Impl
                 [](const Rebase&) { return "rebase"; }, [](const Reorder&) { return "reorder"; },
                 [](const Split&) { return "split"; }, [](const Squash&) { return "squash"; },
                 [](const Abandon&) { return "abandon"; }, [](const Restore&) { return "restore"; },
+                [](const MoveFiles&) { return "move files"; },
                 [](const SimplifyParents&) { return "simplify parents"; }, [](const Bookmark&) { return "bookmark"; },
                 [](const Tag&) { return "tag"; }, [](const Undo&) { return "undo"; }, [](const Redo&) { return "redo"; },
                 [](const RestoreOperation&) { return "restore operation"; },

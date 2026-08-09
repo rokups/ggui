@@ -423,6 +423,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Squash{"missing-source", "missing-destination", "combined"}, "squash"},
         {Abandon{{"missing"}, true, true}, "abandon"},
         {Restore{"missing-from", "missing-into", {"tracked.txt"}}, "restore"},
+        {MoveFiles{"missing-source", "missing-destination", {"tracked.txt"}}, "move files"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
         {Bookmark{GG_BOOKMARK_RENAME, {"missing"}, "missing", "renamed"}, "bookmark"},
         {Tag{GG_TAG_SET, {"coverage-tag"}, "missing", true}, "tag"},

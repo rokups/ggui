@@ -546,6 +546,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         if (rows.size() >= 2)
         {
+            context->SetRef("Changes");
+            context->ItemDragAndDrop("**/M  modified.txt", rows[1]);
+            context->Yield(2);
+
             context->ItemDragAndDrop(rows[0], rows[1]);
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
             context->SetRef("ggui action");
