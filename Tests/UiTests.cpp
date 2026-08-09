@@ -339,6 +339,40 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "MultiParentNewChange");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(3);
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK_GE(rows.size(), 3U);
+
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick(rows[0]);
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK(application.SelectedRevisionsForTest().empty());
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("New").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick(rows[1]);
+        context->ItemClick(rows[2]);
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.SelectedRevisionsForTest().size(), 2U);
+        IM_CHECK_EQ(application.SelectedRevisionsForTest()[0], "left");
+        IM_CHECK_EQ(application.SelectedRevisionsForTest()[1], "right");
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("New").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("New");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        const std::vector<std::string> parents = application.NewParentsForTest();
+        IM_CHECK_EQ(parents.size(), 2U);
+        IM_CHECK_EQ(parents[0], "left");
+        IM_CHECK_EQ(parents[1], "right");
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "PureHelpers");
     test->TestFunc = [](ImGuiTestContext*) {
         const auto lines = Application::SplitLinesForTest(" first, second\n\n third , ");
@@ -512,7 +546,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         ApplyOpenDialog(context, "//##MainMenuBar/Change/New...");
         context->ItemInputValue("Description", "submitted new change");
-        context->ItemInputValue("Parent", "base");
+        context->ItemInputValue("Parents", "base");
         context->ItemCheck("Create without editing");
         context->ItemClick("Apply");
         context->Yield(2);

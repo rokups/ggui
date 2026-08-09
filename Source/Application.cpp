@@ -555,8 +555,11 @@ void Application::ApplyEvent(Event event)
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, SnapshotReady>)
                 {
+                    const bool had_snapshot = _snapshot != nullptr;
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
                     const std::string old_working = _snapshot == nullptr ? "" : _snapshot->working_copy;
+                    const std::string old_selection = _selected_revision;
+                    const bool had_selection = !_selected_revisions.empty();
                     _snapshot = std::move(value.snapshot);
                     RebuildIdPrefixes();
                     RememberRepository(_snapshot->root);
@@ -564,18 +567,45 @@ void Application::ApplyEvent(Event event)
                     const bool repository_changed = old_root != _snapshot->root;
                     if (repository_changed)
                         _preferred_file.clear();
-                    const bool follow_working_copy = old_working != _snapshot->working_copy
-                        && (_selected_revision == old_working
-                            || (old_working.empty() && !_snapshot->working_copy.empty()));
-                    const bool selection_changed = follow_working_copy || _selected_revision.empty()
-                        || std::ranges::none_of(_snapshot->revisions,
-                            [this](const Revision& revision) { return revision.oid == _selected_revision; });
-                    if (selection_changed)
+                    if (repository_changed)
                     {
                         _selected_revision = !_snapshot->working_copy.empty() ? _snapshot->working_copy
                             : _snapshot->revisions.empty()                    ? ""
                                                                              : _snapshot->revisions.front().oid;
+                        _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
+                                                                        : std::vector{_selected_revision};
                     }
+                    else
+                    {
+                        if (old_working != _snapshot->working_copy)
+                        {
+                            const auto old = std::ranges::find(_selected_revisions, old_working);
+                            if (old != _selected_revisions.end())
+                            {
+                                const auto replacement = std::ranges::find(_selected_revisions, _snapshot->working_copy);
+                                if (_snapshot->working_copy.empty() || replacement != _selected_revisions.end())
+                                    _selected_revisions.erase(old);
+                                else
+                                    *old = _snapshot->working_copy;
+                                if (_selected_revision == old_working)
+                                    _selected_revision = _snapshot->working_copy;
+                            }
+                        }
+                        std::erase_if(_selected_revisions, [this](const std::string& oid) {
+                            return std::ranges::none_of(
+                                _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
+                        });
+                        if (std::ranges::find(_selected_revisions, _selected_revision) == _selected_revisions.end())
+                        {
+                            _selected_revision = !_selected_revisions.empty() ? _selected_revisions.back()
+                                : had_selection && !_snapshot->working_copy.empty() ? _snapshot->working_copy
+                                : had_selection && !_snapshot->revisions.empty()    ? _snapshot->revisions.front().oid
+                                                                                   : "";
+                            if (!_selected_revision.empty())
+                                _selected_revisions.push_back(_selected_revision);
+                        }
+                    }
+                    const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
                     if (repository_changed || selection_changed)
                     {
                         _selected_file.clear();
@@ -643,7 +673,8 @@ void Application::RenderFrame()
     if (!io.WantTextInput)
     {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
-        if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N)) OpenDialog(Dialog::New);
+        if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
+            OpenDialog(Dialog::New);
         if (_snapshot != nullptr && _snapshot->can_undo && _active_operation.empty() && io.KeyCtrl
             && ImGui::IsKeyPressed(ImGuiKey_Z))
             _engine.Enqueue(Undo{});
@@ -657,11 +688,8 @@ void Application::RenderFrame()
         {
             if (ImGui::IsKeyPressed(ImGuiKey_E))
                 _engine.Enqueue(Edit{_selected_revision});
-            if (ImGui::IsKeyPressed(ImGuiKey_N))
-            {
+            if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
                 OpenDialog(Dialog::New);
-                _input_secondary = _selected_revision;
-            }
             if (ImGui::IsKeyPressed(ImGuiKey_A))
                 OpenDialog(Dialog::Abandon);
             if (ImGui::IsKeyPressed(ImGuiKey_S))
@@ -766,7 +794,8 @@ void Application::RenderMenuBar()
     }
     if (ImGui::BeginMenu("Change", _snapshot != nullptr))
     {
-        if (ImGui::MenuItem("New...", "Ctrl+N")) OpenDialog(Dialog::New);
+        if (ImGui::MenuItem("New...", "Ctrl+N", false, CanCreateChange() && _active_operation.empty()))
+            OpenDialog(Dialog::New);
         if (ImGui::MenuItem("Commit...")) OpenDialog(Dialog::Commit);
         if (ImGui::MenuItem("Describe...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Describe);
         if (ImGui::MenuItem("Metaedit...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
@@ -824,7 +853,9 @@ void Application::RenderToolbar()
         return;
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
+    ImGui::BeginDisabled(!CanCreateChange());
     if (ImGui::Button("New")) OpenDialog(Dialog::New);
+    ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Commit")) OpenDialog(Dialog::Commit);
     ImGui::SameLine();
@@ -1144,9 +1175,9 @@ void Application::RenderHistory()
             const ImVec2 minimum = ImGui::GetItemRectMin();
             const ImVec2 maximum = ImGui::GetItemRectMax();
             const float center = (minimum.y + maximum.y) * 0.5f;
-            const bool selected = revision.oid == _selected_revision;
+            const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
             const bool hovered = ImGui::IsItemHovered();
-            if (ImGui::IsItemClicked()) SelectRevision(revision.oid);
+            if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
                 ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
@@ -1531,6 +1562,14 @@ void Application::OpenDialog(Dialog dialog)
     _input_filesets = _selected_file;
     _input_flag = false;
     _input_mode = 0;
+    if (dialog == Dialog::New)
+    {
+        for (const std::string& parent : _selected_revisions)
+        {
+            if (!_input_secondary.empty()) _input_secondary.push_back('\n');
+            _input_secondary += parent;
+        }
+    }
     if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
@@ -1572,7 +1611,7 @@ void Application::RenderDialogs()
     case Dialog::New:
         ImGui::TextUnformatted("Create change");
         ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 90.0f));
-        ImGui::InputTextWithHint("Parent", "optional revision", &_input_secondary);
+        ImGui::InputTextMultiline("Parents", &_input_secondary, ImVec2(-1.0f, 70.0f));
         ImGui::Checkbox("Create without editing", &_input_flag);
         break;
     case Dialog::Commit:
@@ -1709,9 +1748,7 @@ void Application::SubmitDialog()
     {
     case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
     case Dialog::New:
-        _engine.Enqueue(NewChange{_input_primary, _input_secondary.empty() ? std::vector<std::string>{}
-                                                                         : std::vector<std::string>{_input_secondary},
-            {}, {}, _input_flag});
+        _engine.Enqueue(NewChange{_input_primary, SplitLines(_input_secondary), {}, {}, _input_flag});
         break;
     case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Describe: _engine.Enqueue(Describe{_selected_revision, _input_primary}); break;
@@ -1763,11 +1800,33 @@ void Application::SubmitDialog()
     ImGui::CloseCurrentPopup();
 }
 
-void Application::SelectRevision(const std::string& oid)
+void Application::SelectRevision(const std::string& oid, bool additive)
 {
-    _selected_revision = oid;
+    const auto selected = std::ranges::find(_selected_revisions, oid);
+    if (!additive)
+        _selected_revisions = {oid};
+    else if (selected == _selected_revisions.end())
+        _selected_revisions.push_back(oid);
+    else
+        _selected_revisions.erase(selected);
+
+    _selected_revision = std::ranges::find(_selected_revisions, oid) != _selected_revisions.end()
+        ? oid
+        : _selected_revisions.empty() ? ""
+                                      : _selected_revisions.back();
     _selected_file.clear();
-    _engine.Enqueue(LoadDiff{oid, {}});
+    _diff = {};
+    if (!_selected_revision.empty())
+        _engine.Enqueue(LoadDiff{_selected_revision, {}});
+}
+
+bool Application::CanCreateChange() const
+{
+    return _snapshot != nullptr && !_selected_revisions.empty()
+        && std::ranges::all_of(_selected_revisions, [this](const std::string& oid) {
+               return std::ranges::any_of(
+                   _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
+           });
 }
 
 void Application::SelectFile(const std::string& path)
@@ -1932,6 +1991,16 @@ const std::string& Application::SelectedFileForTest() const
     return _selected_file;
 }
 
+const std::vector<std::string>& Application::SelectedRevisionsForTest() const
+{
+    return _selected_revisions;
+}
+
+std::vector<std::string> Application::NewParentsForTest() const
+{
+    return SplitLines(_input_secondary);
+}
+
 void Application::ApplyEventForTest(Event event)
 {
     ApplyEvent(std::move(event));
@@ -1959,6 +2028,8 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _selected_revision = _snapshot->working_copy.empty()
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
         : _snapshot->working_copy;
+    _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
+                                                     : std::vector{_selected_revision};
     _selected_file.clear();
     _preferred_file.clear();
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, {}, false, _snapshot->status};
@@ -1972,6 +2043,7 @@ void Application::ClearSnapshotForTest()
     _change_prefixes.clear();
     _operation_prefixes.clear();
     _selected_revision.clear();
+    _selected_revisions.clear();
     _selected_file.clear();
     _preferred_file.clear();
     _diff = {};

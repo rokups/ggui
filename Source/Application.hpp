@@ -32,6 +32,8 @@ public:
     void RefreshForTest();
     std::shared_ptr<const RepoSnapshot> SnapshotForTest() const;
     const std::string& SelectedFileForTest() const;
+    const std::vector<std::string>& SelectedRevisionsForTest() const;
+    std::vector<std::string> NewParentsForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
     void ShowWorkspaceRenameForTest();
@@ -111,8 +113,9 @@ private:
     std::size_t RevisionPrefix(const std::string& oid) const;
     std::size_t ChangePrefix(const std::string& id) const;
     std::size_t OperationPrefix(const std::string& oid) const;
-    void SelectRevision(const std::string& oid);
+    void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
+    bool CanCreateChange() const;
     void OpenDialog(Dialog dialog);
     void SubmitDialog();
     void PickAndOpen(bool initialize);
@@ -134,6 +137,7 @@ private:
     std::unordered_map<std::string, std::size_t> _change_prefixes;
     std::unordered_map<std::string, std::size_t> _operation_prefixes;
     std::string _selected_revision;
+    std::vector<std::string> _selected_revisions;
     std::string _selected_file;
     std::string _preferred_file;
     std::vector<std::string> _recent_repositories;
