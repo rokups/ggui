@@ -1130,6 +1130,13 @@ void Application::RenderHistory()
             for (const NamedRef& ref : _snapshot->refs)
             {
                 if (ref.target != revision.oid) continue;
+                const gg_named_ref_kind remote_kind = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                    ? GG_NAMED_REF_REMOTE_BOOKMARK
+                    : ref.kind == GG_NAMED_REF_LOCAL_TAG ? GG_NAMED_REF_REMOTE_TAG : ref.kind;
+                if (remote_kind != ref.kind && std::ranges::any_of(_snapshot->refs, [&](const NamedRef& other) {
+                        return other.target == ref.target && other.name == ref.name && other.kind == remote_kind;
+                    }))
+                    continue;
                 DrawBadge(draw, badge_cursor, minimum.y + 36.0f, ref.name, RefBadgeColor(ref));
             }
             ImGui::PopClipRect();

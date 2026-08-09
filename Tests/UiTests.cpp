@@ -153,6 +153,7 @@ RepoSnapshot RichSnapshot()
         {"coverage-bookmark", {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, true, true},
         {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
         {"coverage-tag", {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false},
+        {"remote-bookmark", {}, "right", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
         {"remote-bookmark", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
     };
     snapshot.status = {
