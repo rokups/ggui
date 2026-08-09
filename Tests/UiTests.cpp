@@ -810,6 +810,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(
             DiffReady{{1000, "merge", "first.cpp", "old\n", "new\n", {}, false, RichSnapshot().status}});
         context->Yield(2);
+        FocusWindow(context, "Diff");
         context->SetRef("Diff");
         context->ItemUncheck("Side by side");
         application.ApplyEventForTest(
