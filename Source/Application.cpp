@@ -192,6 +192,20 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     cursor.x = maximum.x + FontPx(6.0f);
 }
 
+bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32 color)
+{
+    const std::string id = "###" + std::string(label);
+    const bool clicked = ImGui::Selectable(id.c_str(), selected, 0, ImVec2(0.0f, height));
+    const ImVec2 minimum = ImGui::GetItemRectMin();
+    const ImVec2 maximum = ImGui::GetItemRectMax();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled(
+        minimum, ImVec2(minimum.x + 4.0f, maximum.y), color, 4.0f, ImDrawFlags_RoundCornersLeft);
+    draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text), label.data(),
+        label.data() + label.size());
+    return clicked;
+}
+
 float DrawHighlightedId(
     ImDrawList* draw, ImVec2 position, std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
@@ -1165,16 +1179,10 @@ void Application::RenderBookmarks()
         if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK)
             continue;
         ImGui::PushID(&ref);
-        const std::string item_id = "###" + ref.name;
-        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 36.0f)))
+        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
-        const ImVec2 maximum = ImGui::GetItemRectMax();
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), RefBadgeColor(ref), 4.0f,
-            ImDrawFlags_RoundCornersLeft);
-        draw->AddText(
-            ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
         DrawHighlightedId(draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("bookmark context"))
@@ -1202,15 +1210,9 @@ void Application::RenderTags()
         if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
             continue;
         ImGui::PushID(&ref);
-        const std::string item_id = "###" + ref.name;
-        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 36.0f)))
+        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
-        const ImVec2 maximum = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y),
-            RefBadgeColor(ref), 4.0f, ImDrawFlags_RoundCornersLeft);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f),
-            ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
         DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("tag context"))
@@ -1236,14 +1238,10 @@ void Application::RenderWorkspaces()
     for (const Workspace& workspace : _snapshot->workspaces)
     {
         ImGui::PushID(&workspace);
-        if (ImGui::Selectable(
-                workspace.name.c_str(), workspace.working_copy == _selected_revision, 0, ImVec2(0.0f, 40.0f)))
+        const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
+        if (BadgedSelectable(workspace.name, workspace.working_copy == _selected_revision, 40.0f, accent))
             SelectRevision(workspace.working_copy);
         const ImVec2 minimum = ImGui::GetItemRectMin();
-        const ImVec2 maximum = ImGui::GetItemRectMax();
-        const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
-        ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f,
-            ImDrawFlags_RoundCornersLeft);
         ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted,
             workspace.stale ? "Unavailable" : workspace.root.c_str());
         if (ImGui::BeginPopupContextItem("workspace context"))
