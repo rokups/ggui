@@ -757,7 +757,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
         context->SetRef("ggui dockspace");
-        for (const char* action : {"Previous", "Next", "Undo", "Redo", "Refresh"})
+        for (const char* action : {"Move @ earlier", "Move @ later", "Undo", "Redo", "Refresh"})
             context->ItemClick(action);
 
         context->MenuClick("//##MainMenuBar/Change/Edit");

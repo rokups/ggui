@@ -1014,9 +1014,13 @@ void Application::RenderToolbar()
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.122f, 0.161f, 0.216f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.176f, 0.235f, 0.314f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.208f, 0.278f, 0.369f, 1.0f));
-    if (ImGui::Button("Previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+    if (ImGui::Button("Move @ earlier")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Move the working copy one change earlier. This modifies the repository and can be undone.");
     ImGui::SameLine();
-    if (ImGui::Button("Next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+    if (ImGui::Button("Move @ later")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Move the working copy one change later. This modifies the repository and can be undone.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_undo);
     if (ImGui::Button("Undo")) _engine.Enqueue(Undo{});
