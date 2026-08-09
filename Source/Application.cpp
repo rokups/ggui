@@ -750,12 +750,18 @@ void Application::ApplyEvent(Event event)
                         });
                         if (std::ranges::find(_selected_revisions, _selected_revision) == _selected_revisions.end())
                         {
-                            _selected_revision = !_selected_revisions.empty() ? _selected_revisions.back()
-                                : had_selection && !_snapshot->working_copy.empty() ? _snapshot->working_copy
-                                : had_selection && !_snapshot->revisions.empty()    ? _snapshot->revisions.front().oid
-                                                                                   : "";
-                            if (!_selected_revision.empty())
-                                _selected_revisions.push_back(_selected_revision);
+                            if (!_selected_revisions.empty())
+                                _selected_revision = _selected_revisions.back();
+                            else
+                            {
+                                _selected_revision = had_selection && !_snapshot->working_copy.empty()
+                                    ? _snapshot->working_copy
+                                    : had_selection && !_snapshot->revisions.empty()
+                                    ? _snapshot->revisions.front().oid
+                                    : "";
+                                if (!_selected_revision.empty())
+                                    _selected_revisions.push_back(_selected_revision);
+                            }
                         }
                     }
                     const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
@@ -2252,6 +2258,11 @@ const std::string& Application::SelectedFileForTest() const
 const std::vector<std::string>& Application::SelectedRevisionsForTest() const
 {
     return _selected_revisions;
+}
+
+void Application::SelectRevisionForTest(const std::string& oid, bool additive)
+{
+    SelectRevision(oid, additive);
 }
 
 std::vector<std::string> Application::SelectedParentsForTest() const

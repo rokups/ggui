@@ -36,6 +36,7 @@ public:
     std::shared_ptr<const RepoSnapshot> SnapshotForTest() const;
     const std::string& SelectedFileForTest() const;
     const std::vector<std::string>& SelectedRevisionsForTest() const;
+    void SelectRevisionForTest(const std::string& oid, bool additive = false);
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
     void ApplyEventForTest(Event event);

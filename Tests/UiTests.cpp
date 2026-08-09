@@ -496,6 +496,36 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "SelectionSurvivesSnapshotRefresh");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.SelectRevisionForTest("right", true);
+        RepoSnapshot without_right = RichSnapshot();
+        std::erase_if(without_right.revisions, [](const Revision& revision) { return revision.oid == "right"; });
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(without_right))});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        RepoSnapshot without_left = RichSnapshot();
+        std::erase_if(without_left.revisions, [](const Revision& revision) { return revision.oid == "left"; });
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(without_left))});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+
+        application.SetSnapshotForTest(RichSnapshot());
+        RepoSnapshot without_working_copy = RichSnapshot();
+        without_working_copy.working_copy.clear();
+        for (Revision& revision : without_working_copy.revisions)
+            revision.working_copy = false;
+        application.ApplyEventForTest(
+            SnapshotReady{std::make_shared<RepoSnapshot>(std::move(without_working_copy))});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+        context->Yield(2);
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "RichRepositoryStates");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
