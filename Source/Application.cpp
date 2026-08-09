@@ -1335,19 +1335,19 @@ void Application::RebuildIdPrefixes()
 std::size_t Application::RevisionPrefix(const std::string& oid) const
 {
     const auto found = _revision_prefixes.find(oid);
-    return found == _revision_prefixes.end() ? std::min<std::size_t>(8, oid.size()) : found->second;
+    return found == _revision_prefixes.end() ? std::min<std::size_t>(1, oid.size()) : found->second;
 }
 
 std::size_t Application::ChangePrefix(const std::string& id) const
 {
     const auto found = _change_prefixes.find(id);
-    return found == _change_prefixes.end() ? std::min<std::size_t>(8, id.size()) : found->second;
+    return found == _change_prefixes.end() ? std::min<std::size_t>(1, id.size()) : found->second;
 }
 
 std::size_t Application::OperationPrefix(const std::string& oid) const
 {
     const auto found = _operation_prefixes.find(oid);
-    return found == _operation_prefixes.end() ? std::min<std::size_t>(8, oid.size()) : found->second;
+    return found == _operation_prefixes.end() ? std::min<std::size_t>(1, oid.size()) : found->second;
 }
 
 void Application::RenderHistory()
