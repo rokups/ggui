@@ -432,6 +432,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(saved.find("Size=901,602") != std::string_view::npos);
         IM_CHECK(saved.find("Maximized=0") != std::string_view::npos);
         ImGui::LoadIniSettingsFromMemory(original.data(), original.size());
+        context->Yield(2);
     };
 
     test = IM_REGISTER_TEST(engine, "Interactions", "MultiParentNewChange");
