@@ -44,9 +44,10 @@ operation log, bookmarks, tags, workspaces, and sparse-checkout panels. The
 Change menu exposes gg's local change operations. A newly opened plain Git
 repository needs **New** before it has a gg working-copy change.
 
-Drag a graph row onto the top of another row to reorder before it, onto the
-middle to squash, or onto the bottom to rebase. Drop below the final row to
-reorder after it. Every graph drop shows a confirmation preview and remains
+Left-drag a graph row onto the top of another row to reorder before it, onto
+the middle to squash, or onto the bottom to rebase. Drop below the final row
+to reorder after it. Right-drag anywhere onto a row to choose the action from
+a popup menu. Every graph drop shows a confirmation preview and remains
 undoable through gg's operation history.
 
 Repository and libgit2 handles stay on one worker thread. The UI exchanges

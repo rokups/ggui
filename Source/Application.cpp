@@ -1377,7 +1377,8 @@ void Application::RenderHistory()
             ImGui::PushID(revision.oid.c_str());
             const int row_column_count = GraphColumnCount(row);
             const float width = std::max(ImGui::GetContentRegionAvail().x, column_count * kLaneWidth + 520.0f);
-            ImGui::InvisibleButton("row", ImVec2(width, kRowHeight));
+            ImGui::InvisibleButton("row", ImVec2(width, kRowHeight),
+                ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
             const ImVec2 minimum = ImGui::GetItemRectMin();
             const ImVec2 maximum = ImGui::GetItemRectMax();
             const float center = (minimum.y + maximum.y) * 0.5f;
@@ -1386,12 +1387,16 @@ void Application::RenderHistory()
             if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
-                ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
-                TextLabelledId("Move ", revision.change_id, ChangePrefix(revision.change_id),
+                const bool choose_action = ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Right;
+                ImGui::SetDragDropPayload(
+                    choose_action ? "GGUI_CHANGE_ACTION" : "GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
+                TextLabelledId(choose_action ? "Choose action for " : "Move ", revision.change_id,
+                    ChangePrefix(revision.change_id),
                     ChangeIdColor(revision.working_copy));
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
+            bool hovered_action_drop = false;
             if (ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
@@ -1405,6 +1410,12 @@ void Application::RenderHistory()
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop};
                     if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
                 }
+                hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
+                {
+                    _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
+                    _open_drop_actions = _pending_drop.source != _pending_drop.target;
+                }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
                 {
                     const char* source = static_cast<const char*>(payload->Data);
@@ -1414,7 +1425,7 @@ void Application::RenderHistory()
                 }
                 ImGui::EndDragDropTarget();
             }
-            if (ImGui::BeginPopupContextItem("change context"))
+            if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
                 if (ImGui::MenuItem("Edit")) _engine.Enqueue(Edit{revision.oid});
                 if (ImGui::MenuItem("Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
@@ -1447,6 +1458,8 @@ void Application::RenderHistory()
             const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
             draw->AddRectFilled(minimum, ImVec2(minimum.x + graph_width, maximum.y),
                 _dark_theme ? kGraphBackground : IM_COL32(229, 233, 239, 255), 6.0f, ImDrawFlags_RoundCornersLeft);
+            if (hovered_action_drop)
+                draw->AddRectFilled(minimum, maximum, IM_COL32(90, 150, 255, 80), 6.0f);
             const float graph_left = minimum.x + kGraphPadding;
             auto lane_x = [&](int column) { return graph_left + column * kLaneWidth + kLaneWidth * 0.5f; };
             auto color = [](int track) { return kLaneColors[static_cast<std::size_t>(track) % kLaneColors.size()]; };
@@ -1549,9 +1562,34 @@ void Application::RenderHistory()
             _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
             if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
         }
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
+        {
+            const Revision& final = _snapshot->revisions[_visible_revisions.back()];
+            _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
+            _open_drop_actions = _pending_drop.source != _pending_drop.target;
+        }
         ImGui::EndDragDropTarget();
     }
     ImGui::EndChild();
+    if (_open_drop_actions)
+    {
+        ImGui::OpenPopup("Drop action");
+        _open_drop_actions = false;
+    }
+    if (ImGui::BeginPopup("Drop action"))
+    {
+        std::optional<DropAction> action;
+        if (ImGui::MenuItem("Move before")) action = DropAction::ReorderBefore;
+        if (ImGui::MenuItem("Move after")) action = DropAction::ReorderAfter;
+        if (ImGui::MenuItem("Squash")) action = DropAction::Squash;
+        if (ImGui::MenuItem("Rebase")) action = DropAction::Rebase;
+        if (action.has_value())
+        {
+            _pending_drop.action = *action;
+            OpenDialog(Dialog::ConfirmDrop);
+        }
+        ImGui::EndPopup();
+    }
     ImGui::End();
 }
 

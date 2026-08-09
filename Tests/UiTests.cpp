@@ -784,6 +784,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
+            for (const char* action : {"Move before", "Move after", "Squash", "Rebase"})
+            {
+                context->ItemDragAndDrop(rows[0], rows[1], ImGuiMouseButton_Right);
+                context->Yield();
+                context->SetRef("//$FOCUSED");
+                const std::string path = std::string("**/") + action;
+                IM_CHECK(context->ItemExists(path.c_str()));
+                context->ItemClick(path.c_str());
+                IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+                context->SetRef("ggui action");
+                context->ItemClick("Cancel");
+                context->Yield(2);
+            }
+
             const ImGuiTestItemInfo source = context->ItemInfo(rows[0]);
             const ImGuiTestItemInfo target = context->ItemInfo(rows[1]);
             context->MouseMove(rows[0]);
@@ -803,6 +817,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             if (!endings.empty())
             {
                 context->ItemDragAndDrop(rows[0], endings[0]);
+                IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+                context->SetRef("ggui action");
+                context->ItemClick("Cancel");
+                context->Yield(2);
+
+                context->ItemDragAndDrop(rows[0], endings[0], ImGuiMouseButton_Right);
+                context->Yield();
+                context->SetRef("//$FOCUSED");
+                context->ItemClick("**/Move after");
                 IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
                 context->SetRef("ggui action");
                 context->ItemClick("Cancel");

@@ -165,6 +165,7 @@ private:
     std::size_t _progress_total = 0;
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
+    bool _open_drop_actions = false;
 
     Dialog _dialog = Dialog::None;
     std::string _input_primary;
