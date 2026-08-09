@@ -107,6 +107,7 @@ struct CloneRepository
 };
 struct Refresh
 {
+    bool snapshot_working_copy = true;
 };
 struct LoadDiff
 {

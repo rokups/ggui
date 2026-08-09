@@ -137,16 +137,22 @@ void FinishClone(const std::filesystem::path& temporary, const std::filesystem::
 class RepositoryWatcher final : public efsw::FileWatchListener
 {
 public:
+    struct Changes
+    {
+        bool worktree = false;
+        bool metadata = false;
+    };
+
     explicit RepositoryWatcher(std::condition_variable& wake) : _wake(wake) {}
 
     void Watch(const std::filesystem::path& worktree, const std::filesystem::path& common_directory)
     {
         Clear();
+        _common_directory = std::filesystem::weakly_canonical(common_directory);
         auto watcher = std::make_unique<efsw::FileWatcher>();
         if (watcher->addWatch(worktree.string(), this, true) < 0)
             throw std::runtime_error("watch repository: " + efsw::Errors::Log::getLastErrorLog());
-        const auto relative = std::filesystem::weakly_canonical(common_directory).lexically_relative(
-            std::filesystem::weakly_canonical(worktree));
+        const auto relative = _common_directory.lexically_relative(std::filesystem::weakly_canonical(worktree));
         if (relative.empty() || *relative.begin() == "..")
         {
             if (watcher->addWatch(common_directory.string(), this, true) < 0)
@@ -159,22 +165,37 @@ public:
     void Clear()
     {
         _watcher.reset();
-        _changed = false;
+        _worktree_changed = false;
+        _metadata_changed = false;
+        _common_directory.clear();
     }
 
-    bool Changed() const { return _changed.load(); }
-    bool ConsumeChange() { return _changed.exchange(false); }
+    bool Changed() const { return _worktree_changed.load() || _metadata_changed.load(); }
+
+    Changes ConsumeChanges()
+    {
+        return {_worktree_changed.exchange(false), _metadata_changed.exchange(false)};
+    }
 
 private:
-    void handleFileAction(
-        efsw::WatchID, const std::string&, const std::string&, efsw::Action, const std::string&) override
+    void handleFileAction(efsw::WatchID, const std::string& directory, const std::string& filename,
+        efsw::Action, const std::string&) override
     {
-        _changed = true;
+        const auto relative = (std::filesystem::path(directory) / filename)
+                                  .lexically_normal()
+                                  .lexically_relative(_common_directory);
+        const bool metadata = relative.empty() || (!relative.is_absolute() && *relative.begin() != "..");
+        if (metadata)
+            _metadata_changed = true;
+        else
+            _worktree_changed = true;
         _wake.notify_one();
     }
 
     std::condition_variable& _wake;
-    std::atomic_bool _changed = false;
+    std::filesystem::path _common_directory;
+    std::atomic_bool _worktree_changed = false;
+    std::atomic_bool _metadata_changed = false;
     std::unique_ptr<efsw::FileWatcher> _watcher;
 };
 
@@ -819,9 +840,10 @@ struct RepositoryEngine::Impl
                 InitPath(value->path);
             else if (const auto* value = std::get_if<CloneRepository>(&command))
                 ClonePath(*value);
-            else if (std::holds_alternative<Refresh>(command))
+            else if (const auto* value = std::get_if<Refresh>(&command))
             {
-                Sync();
+                if (value->snapshot_working_copy)
+                    Sync();
                 PublishSnapshot();
             }
             else if (const auto* value = std::get_if<LoadDiff>(&command))
@@ -856,8 +878,12 @@ struct RepositoryEngine::Impl
             }
             if (command.has_value())
                 Execute(*command);
-            else if (watcher.ConsumeChange() && gg != nullptr && !test_commands_suppressed)
-                Execute(Refresh{});
+            else if (gg != nullptr && !test_commands_suppressed)
+            {
+                const RepositoryWatcher::Changes changes = watcher.ConsumeChanges();
+                if (changes.worktree || changes.metadata)
+                    Execute(Refresh{changes.worktree});
+            }
         }
     }
 };
