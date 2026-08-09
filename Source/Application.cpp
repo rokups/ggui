@@ -196,8 +196,6 @@ float DrawHighlightedId(
     ImDrawList* draw, ImVec2 position, std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
-    if (shown == 0)
-        return position.x;
     const std::size_t unique = std::min(shown, unique_length);
     draw->AddText(position, prefix_color, id.data(), id.data() + unique);
     position.x += ImGui::CalcTextSize(id.data(), id.data() + unique).x;
@@ -1015,8 +1013,6 @@ void Application::RenderMenuBar()
 
 void Application::RenderToolbar()
 {
-    if (_snapshot == nullptr)
-        return;
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(!CanCreateChange());
