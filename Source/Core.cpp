@@ -603,8 +603,6 @@ struct RepositoryEngine::Impl
         for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
         {
             const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
-            if (delta == nullptr)
-                continue;
             const char* old_path = delta->old_file.path == nullptr ? "" : delta->old_file.path;
             const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
             result.files.push_back({old_path, new_path, delta->status, false});
