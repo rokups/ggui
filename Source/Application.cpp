@@ -1163,7 +1163,7 @@ void Application::RenderBookmarks()
             continue;
         ImGui::PushID(&ref);
         const std::string item_id = "###" + ref.name;
-        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 36.0f)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -1200,7 +1200,7 @@ void Application::RenderTags()
             continue;
         ImGui::PushID(&ref);
         const std::string item_id = "###" + ref.name;
-        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+        if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 36.0f)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -1234,7 +1234,7 @@ void Application::RenderWorkspaces()
     {
         ImGui::PushID(&workspace);
         if (ImGui::Selectable(
-                workspace.name.c_str(), workspace.working_copy == _selected_revision, 0, ImVec2(0.0f, 42.0f)))
+                workspace.name.c_str(), workspace.working_copy == _selected_revision, 0, ImVec2(0.0f, 40.0f)))
             SelectRevision(workspace.working_copy);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -1268,7 +1268,7 @@ void Application::RenderRemotes()
     {
         ImGui::PushID(&remote);
         const bool separate_push = !remote.push_url.empty() && remote.push_url != remote.fetch_url;
-        ImGui::Selectable(remote.name.c_str(), false, 0, ImVec2(0.0f, separate_push ? 58.0f : 42.0f));
+        ImGui::Selectable(remote.name.c_str(), false, 0, ImVec2(0.0f, separate_push ? 56.0f : 40.0f));
         const ImVec2 minimum = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted, remote.fetch_url.c_str());
