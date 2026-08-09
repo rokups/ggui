@@ -523,7 +523,10 @@ void Application::ApplyEvent(Event event)
                     RememberRepository(_snapshot->root);
                     _graph_generation = 0;
                     const bool repository_changed = old_root != _snapshot->root;
-                    const bool selection_changed = _selected_revision.empty()
+                    const bool follow_working_copy = old_working != _snapshot->working_copy
+                        && (_selected_revision == old_working
+                            || (old_working.empty() && !_snapshot->working_copy.empty()));
+                    const bool selection_changed = follow_working_copy || _selected_revision.empty()
                         || std::ranges::none_of(_snapshot->revisions,
                             [this](const Revision& revision) { return revision.oid == _selected_revision; });
                     if (selection_changed)
@@ -539,15 +542,11 @@ void Application::ApplyEvent(Event event)
                         if (!_selected_revision.empty())
                             _engine.Enqueue(LoadDiff{_selected_revision, {}});
                     }
-                    else if (!_selected_file.empty() && old_working != _snapshot->working_copy
-                        && !_snapshot->working_copy.empty())
-                    {
-                        _engine.Enqueue(LoadDiff{_snapshot->working_copy, _selected_file});
-                    }
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
-                    _diff = std::move(value.diff);
+                    if (value.diff.revision == _selected_revision && value.diff.path == _selected_file)
+                        _diff = std::move(value.diff);
                 }
                 else if constexpr (std::is_same_v<T, OperationStarted>)
                 {
