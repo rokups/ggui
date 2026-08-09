@@ -1244,7 +1244,8 @@ void Application::RenderChanges()
     for (const StatusEntry& file : _diff.files)
     {
         ImGui::PushID(&file);
-        const std::string label = std::string(DeltaName(file.status)) + "  " + file.path;
+        const std::string status = DeltaName(file.status);
+        const std::string label = status + "  " + file.path;
         const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
         const bool selected =
@@ -1254,10 +1255,11 @@ void Application::RenderChanges()
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f,
             ImDrawFlags_RoundCornersLeft);
-        draw->AddText(
-            ImVec2(minimum.x + 12.0f,
-                minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f),
-            accent, label.c_str());
+        ImVec2 text(minimum.x + 12.0f,
+            minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f);
+        draw->AddText(text, accent, status.c_str());
+        text.x += ImGui::CalcTextSize(status.c_str()).x + ImGui::CalcTextSize("  ").x;
+        draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), file.path.c_str());
         if (selected) SelectFile(file.path);
         if (ImGui::BeginDragDropSource())
         {
