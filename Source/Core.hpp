@@ -87,6 +87,8 @@ struct DiffResult
     std::uint64_t generation = 0;
     std::string revision;
     std::string path;
+    std::string before;
+    std::string after;
     std::string patch;
     bool binary = false;
     std::vector<StatusEntry> files;

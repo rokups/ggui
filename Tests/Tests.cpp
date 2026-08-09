@@ -340,6 +340,8 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     ASSERT_TRUE(diff.has_value());
     EXPECT_EQ(diff->revision, root.oid);
     EXPECT_EQ(diff->path, "tracked.txt");
+    EXPECT_TRUE(diff->before.empty());
+    EXPECT_EQ(diff->after, "base\n");
     ASSERT_EQ(diff->files.size(), 1U);
     EXPECT_EQ(diff->files.front().path, "tracked.txt");
     EXPECT_EQ(diff->files.front().status, GIT_DELTA_ADDED);

@@ -3,6 +3,7 @@
 #include "Application.hpp"
 
 #include <SDL3/SDL_opengl.h>
+#include <TextDiff.h>
 #include <TextEditor.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <backends/imgui_impl_sdl3.h>
@@ -139,6 +140,29 @@ ImU32 DiffMarkerColor(std::string_view line)
     if (line.starts_with('-'))
         return IM_COL32(248, 81, 73, 48);
     return 0;
+}
+
+const TextEditor::Language* DiffLanguage(const std::string& path)
+{
+    std::string extension = std::filesystem::path(path).extension().string();
+    std::ranges::transform(extension, extension.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    if (extension == ".c") return TextEditor::Language::C();
+    if (extension == ".cc" || extension == ".cpp" || extension == ".cxx" || extension == ".h"
+        || extension == ".hh" || extension == ".hpp" || extension == ".hxx")
+        return TextEditor::Language::Cpp();
+    if (extension == ".cs") return TextEditor::Language::Cs();
+    if (extension == ".as") return TextEditor::Language::AngelScript();
+    if (extension == ".lua") return TextEditor::Language::Lua();
+    if (extension == ".py") return TextEditor::Language::Python();
+    if (extension == ".glsl" || extension == ".vert" || extension == ".frag")
+        return TextEditor::Language::Glsl();
+    if (extension == ".hlsl") return TextEditor::Language::Hlsl();
+    if (extension == ".json") return TextEditor::Language::Json();
+    if (extension == ".md") return TextEditor::Language::Markdown();
+    if (extension == ".sql") return TextEditor::Language::Sql();
+    return nullptr;
 }
 
 ImU32 RefBadgeColor(const NamedRef& ref)
@@ -1245,9 +1269,13 @@ void Application::RenderDiff()
     else
     {
         static TextEditor editor;
+        static TextDiff diff;
         static std::string loaded;
+        static std::string loaded_before;
+        static std::string loaded_after;
+        static std::string loaded_path;
         static bool dark_palette = !_dark_theme;
-        if (loaded != _diff.patch)
+        if (_diff.path.empty() && loaded != _diff.patch)
         {
             loaded = _diff.patch;
             editor.SetReadOnlyEnabled(true);
@@ -1262,18 +1290,39 @@ void Application::RenderDiff()
                     editor.AddMarker(line, color, color, {}, {});
             }
         }
+        if (!_diff.path.empty()
+            && (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path))
+        {
+            loaded_before = _diff.before;
+            loaded_after = _diff.after;
+            loaded_path = _diff.path;
+            diff.SetLanguage(DiffLanguage(_diff.path));
+            diff.SetText(loaded_before, loaded_after);
+            diff.SetSideBySideMode(true);
+        }
         if (dark_palette != _dark_theme)
         {
             dark_palette = _dark_theme;
-            editor.SetPalette(_dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette());
+            const TextEditor::Palette& palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
+            editor.SetPalette(palette);
+            diff.SetPalette(palette);
+            diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
+                _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
         }
         TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision));
         if (!_diff.path.empty())
         {
             ImGui::SameLine();
             ImGui::TextDisabled("%s", _diff.path.c_str());
+            ImGui::SameLine();
+            bool side_by_side = diff.GetSideBySideMode();
+            if (ImGui::Checkbox("Side by side", &side_by_side))
+                diff.SetSideBySideMode(side_by_side);
         }
-        editor.Render("##diff editor", ImGui::GetContentRegionAvail(), true);
+        if (_diff.path.empty())
+            editor.Render("##diff editor", ImGui::GetContentRegionAvail(), true);
+        else
+            diff.Render("##rich diff", ImGui::GetContentRegionAvail(), true);
     }
     ImGui::End();
 }
@@ -1742,7 +1791,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
         : _snapshot->working_copy;
     _selected_file.clear();
-    _diff = {_snapshot->generation, _selected_revision, {}, {}, false, _snapshot->status};
+    _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, {}, false, _snapshot->status};
     _graph_generation = 0;
 }
 

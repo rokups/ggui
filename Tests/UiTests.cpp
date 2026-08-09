@@ -374,12 +374,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(ErrorEvent{"coverage", "visible error"});
         context->Yield(2);
 
-        application.ApplyEventForTest(DiffReady{{1000, "merge", "image.bin", {}, true, RichSnapshot().status}});
+        application.ApplyEventForTest(
+            DiffReady{{1000, "merge", "image.bin", {}, {}, {}, true, RichSnapshot().status}});
         context->Yield(2);
         application.ApplyEventForTest(
-            DiffReady{{1000, "merge", "modified.txt", "@@ -1 +1 @@\n-old\n+new\n", false, RichSnapshot().status}});
+            DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", "@@ -1 +1 @@\n-old\n+new\n", false,
+                RichSnapshot().status}});
         context->Yield(2);
-        application.ApplyEventForTest(DiffReady{{0, {}, {}, {}, false, RichSnapshot().status}});
+        application.ApplyEventForTest(DiffReady{{0, {}, {}, {}, {}, {}, false, RichSnapshot().status}});
         context->Yield(2);
 
         context->SetRef("Changes");

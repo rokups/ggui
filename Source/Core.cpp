@@ -44,6 +44,27 @@ void Check(int result, std::string_view action)
         throw std::runtime_error(std::string(action) + ": " + LastGitError("unknown error"));
 }
 
+std::string BlobText(git_repository* repository, git_tree* tree, const char* path)
+{
+    if (tree == nullptr || path == nullptr || *path == '\0')
+        return {};
+    git_tree_entry* raw_entry = nullptr;
+    const int entry_result = git_tree_entry_bypath(&raw_entry, tree, path);
+    if (entry_result == GIT_ENOTFOUND)
+        return {};
+    Check(entry_result, "load diff path");
+    std::unique_ptr<git_tree_entry, decltype(&git_tree_entry_free)> entry(raw_entry, git_tree_entry_free);
+    if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
+        return {};
+    git_blob* raw_blob = nullptr;
+    Check(git_blob_lookup(&raw_blob, repository, git_tree_entry_id(entry.get())), "load diff contents");
+    std::unique_ptr<git_blob, decltype(&git_blob_free)> blob(raw_blob, git_blob_free);
+    if (git_blob_is_binary(blob.get()))
+        return {};
+    const auto* contents = static_cast<const char*>(git_blob_rawcontent(blob.get()));
+    return contents == nullptr ? std::string{} : std::string(contents, git_blob_rawsize(blob.get()));
+}
+
 struct RepositoryDeleter
 {
     void operator()(git_repository* value) const { git_repository_free(value); }
@@ -553,7 +574,7 @@ struct RepositoryEngine::Impl
         git_diff* raw_diff = nullptr;
         Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), nullptr), "create diff");
         std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
-        DiffResult result{generation, command.revision, command.path, {}, false, {}};
+        DiffResult result{generation, command.revision, command.path, {}, {}, {}, false, {}};
         for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
         {
             const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
@@ -572,6 +593,11 @@ struct RepositoryEngine::Impl
             Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), &options),
                 "create file diff");
             diff.reset(raw_diff);
+            const git_diff_delta* delta = git_diff_num_deltas(diff.get()) == 0 ? nullptr : git_diff_get_delta(diff.get(), 0);
+            const char* old_path = delta == nullptr ? command.path.c_str() : delta->old_file.path;
+            const char* new_path = delta == nullptr ? command.path.c_str() : delta->new_file.path;
+            result.before = BlobText(git.get(), old_tree.get(), old_path);
+            result.after = BlobText(git.get(), new_tree.get(), new_path);
         }
         git_buf patch = GIT_BUF_INIT;
         Check(git_diff_to_buf(&patch, diff.get(), GIT_DIFF_FORMAT_PATCH), "format diff");
