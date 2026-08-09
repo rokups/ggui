@@ -22,7 +22,15 @@ if(GGUI_ENABLE_COVERAGE)
 endif()
 
 include(cmake/CPM.cmake)
-find_package(gg 0.1 CONFIG REQUIRED)
+find_package(gg 0.1 CONFIG QUIET)
+if(NOT gg_FOUND)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../gg/CMakeLists.txt")
+    set(GG_BUILD_TESTS OFF CACHE BOOL "Build gg tests")
+    add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../gg" "${CMAKE_CURRENT_BINARY_DIR}/gg" EXCLUDE_FROM_ALL)
+  else()
+    find_package(gg 0.1 CONFIG REQUIRED)
+  endif()
+endif()
 
 CPMAddPackage(
   NAME SDL3
@@ -185,7 +193,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 install(TARGETS ggui RUNTIME DESTINATION bin)
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND gg_FOUND)
   install(IMPORTED_RUNTIME_ARTIFACTS gg::gg libgit2::libgit2package LIBRARY DESTINATION lib)
 endif()
 install(FILES README.md LICENSE DESTINATION share/ggui)
