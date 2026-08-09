@@ -268,6 +268,10 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
     ASSERT_NE(opened, nullptr);
     EXPECT_EQ(opened->revisions.back().description, "base");
+    std::this_thread::sleep_for(1200ms);
+    const auto idle_events = engine.PollEvents();
+    EXPECT_TRUE(std::none_of(idle_events.begin(), idle_events.end(),
+        [](const Event& event) { return std::holds_alternative<SnapshotReady>(event); }));
 
     NewChange create;
     create.message = "work";

@@ -106,6 +106,13 @@ CPMAddPackage(
   EXCLUDE_FROM_ALL TRUE)
 
 CPMAddPackage(
+  NAME efsw
+  GITHUB_REPOSITORY SpartanJ/efsw
+  GIT_TAG 1.6.3
+  OPTIONS "BUILD_SHARED_LIBS OFF" "BUILD_STATIC_LIBS ON" "BUILD_TEST_APP OFF" "EFSW_INSTALL OFF"
+  EXCLUDE_FROM_ALL TRUE)
+
+CPMAddPackage(
   NAME json
   GITHUB_REPOSITORY nlohmann/json
   VERSION 3.12.0
@@ -137,7 +144,7 @@ add_library(ggui_core STATIC
   Source/Graph.cpp
   Source/Graph.hpp)
 target_include_directories(ggui_core PUBLIC Source)
-target_link_libraries(ggui_core PUBLIC gg::gg PRIVATE spdlog::spdlog)
+target_link_libraries(ggui_core PUBLIC gg::gg PRIVATE efsw-static spdlog::spdlog)
 target_compile_options(ggui_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 if(GGUI_ENABLE_COVERAGE)
   target_link_libraries(ggui_core PUBLIC ggui_coverage)

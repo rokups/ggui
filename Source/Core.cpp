@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Core.hpp"
 
+#include <efsw/efsw.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -138,6 +139,50 @@ void FinishClone(const std::filesystem::path& temporary, const std::filesystem::
     }
 }
 
+class RepositoryWatcher final : public efsw::FileWatchListener
+{
+public:
+    explicit RepositoryWatcher(std::condition_variable& wake) : _wake(wake) {}
+
+    void Watch(const std::filesystem::path& worktree, const std::filesystem::path& common_directory)
+    {
+        Clear();
+        auto watcher = std::make_unique<efsw::FileWatcher>();
+        if (watcher->addWatch(worktree.string(), this, true) < 0)
+            throw std::runtime_error("watch repository: " + efsw::Errors::Log::getLastErrorLog());
+        const auto relative = std::filesystem::weakly_canonical(common_directory).lexically_relative(
+            std::filesystem::weakly_canonical(worktree));
+        if (relative.empty() || *relative.begin() == "..")
+        {
+            if (watcher->addWatch(common_directory.string(), this, true) < 0)
+                throw std::runtime_error("watch Git directory: " + efsw::Errors::Log::getLastErrorLog());
+        }
+        watcher->watch();
+        _watcher = std::move(watcher);
+    }
+
+    void Clear()
+    {
+        _watcher.reset();
+        _changed = false;
+    }
+
+    bool Changed() const { return _changed.load(); }
+    bool ConsumeChange() { return _changed.exchange(false); }
+
+private:
+    void handleFileAction(
+        efsw::WatchID, const std::string&, const std::string&, efsw::Action, const std::string&) override
+    {
+        _changed = true;
+        _wake.notify_one();
+    }
+
+    std::condition_variable& _wake;
+    std::atomic_bool _changed = false;
+    std::unique_ptr<efsw::FileWatcher> _watcher;
+};
+
 } // namespace
 
 struct RepositoryEngine::Impl
@@ -159,6 +204,7 @@ struct RepositoryEngine::Impl
 
     std::atomic_bool cancel_requested = false;
     std::atomic_bool test_commands_suppressed = false;
+    RepositoryWatcher watcher{queue_cv};
     std::thread worker;
     GitRepositoryPtr git;
     gg_repository* gg = nullptr;
@@ -200,6 +246,7 @@ struct RepositoryEngine::Impl
 
     void Close()
     {
+        watcher.Clear();
         if (gg != nullptr)
             gg_repository_free(gg);
         gg = nullptr;
@@ -315,6 +362,8 @@ struct RepositoryEngine::Impl
         git = std::move(repository);
         gg = attached;
         Sync();
+        const char* workdir = git_repository_workdir(git.get());
+        watcher.Watch(workdir == nullptr ? git_repository_path(git.get()) : workdir, git_repository_commondir(git.get()));
         PublishSnapshot();
     }
 
@@ -798,7 +847,7 @@ struct RepositoryEngine::Impl
             std::optional<Command> command;
             {
                 std::unique_lock lock(queue_mutex);
-                queue_cv.wait_for(lock, std::chrono::seconds(1), [this] { return stopping || !commands.empty(); });
+                queue_cv.wait(lock, [this] { return stopping || !commands.empty() || watcher.Changed(); });
                 if (stopping)
                     break;
                 if (!commands.empty())
@@ -809,7 +858,7 @@ struct RepositoryEngine::Impl
             }
             if (command.has_value())
                 Execute(*command);
-            else if (gg != nullptr && !test_commands_suppressed)
+            else if (watcher.ConsumeChange() && gg != nullptr && !test_commands_suppressed)
                 Execute(Refresh{});
         }
     }

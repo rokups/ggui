@@ -314,8 +314,6 @@ void Application::ProcessEvent(SDL_Event& event)
     if (event.type == SDL_EVENT_QUIT
         || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(_window)))
         _running = false;
-    if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
-        _engine.Enqueue(Refresh{});
     if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
         _engine.Enqueue(OpenRepository{event.drop.data});
 }
