@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef IMGUI_BUILD_TESTING
@@ -100,6 +101,10 @@ private:
     void RenderDialogs();
     void SetupDockspace();
     void RebuildGraph();
+    void RebuildIdPrefixes();
+    std::size_t RevisionPrefix(const std::string& oid) const;
+    std::size_t ChangePrefix(const std::string& id) const;
+    std::size_t OperationPrefix(const std::string& oid) const;
     void SelectRevision(const std::string& oid);
     void SelectFile(const std::string& path);
     void OpenDialog(Dialog dialog);
@@ -119,6 +124,9 @@ private:
     std::uint64_t _graph_generation = 0;
     std::string _graph_filter;
     std::string _built_filter;
+    std::unordered_map<std::string, std::size_t> _revision_prefixes;
+    std::unordered_map<std::string, std::size_t> _change_prefixes;
+    std::unordered_map<std::string, std::size_t> _operation_prefixes;
     std::string _selected_revision;
     std::string _selected_file;
     std::vector<std::string> _recent_repositories;

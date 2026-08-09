@@ -995,6 +995,30 @@ std::string ShortId(const std::string& value, std::size_t length)
     return value.substr(0, std::min(length, value.size()));
 }
 
+std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& values, std::size_t minimum)
+{
+    std::vector<std::size_t> order(values.size());
+    for (std::size_t index = 0; index < order.size(); ++index)
+        order[index] = index;
+    std::ranges::sort(order, {}, [&](std::size_t index) { return values[index]; });
+    std::vector<std::size_t> result(values.size());
+    const auto common = [&](std::size_t left, std::size_t right) {
+        const std::string& first = values[order[left]];
+        const std::string& second = values[order[right]];
+        return static_cast<std::size_t>(std::ranges::mismatch(first, second).in1 - first.begin());
+    };
+    for (std::size_t position = 0; position < order.size(); ++position)
+    {
+        std::size_t required = 1;
+        if (position != 0)
+            required = std::max(required, common(position - 1, position) + 1);
+        if (position + 1 != order.size())
+            required = std::max(required, common(position, position + 1) + 1);
+        result[order[position]] = std::min(values[order[position]].size(), std::max(minimum, required));
+    }
+    return result;
+}
+
 std::string FirstLine(const std::string& value)
 {
     return value.substr(0, value.find('\n'));

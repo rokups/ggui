@@ -331,6 +331,7 @@ private:
 };
 
 std::string ShortId(const std::string& value, std::size_t length = 8);
+std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& values, std::size_t minimum = 8);
 std::string FirstLine(const std::string& value);
 
 } // namespace Ggui

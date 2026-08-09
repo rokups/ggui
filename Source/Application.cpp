@@ -147,6 +147,38 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     cursor.x = maximum.x + FontPx(6.0f);
 }
 
+float DrawHighlightedId(
+    ImDrawList* draw, ImVec2 position, std::string_view id, std::size_t unique_length, ImU32 suffix_color = kTextMuted)
+{
+    const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
+    if (shown == 0)
+        return position.x;
+    const std::size_t unique = std::min(shown, unique_length);
+    draw->AddText(position, ImGui::GetColorU32(ImGuiCol_Text), id.data(), id.data() + unique);
+    position.x += ImGui::CalcTextSize(id.data(), id.data() + unique).x;
+    draw->AddText(position, suffix_color, id.data() + unique, id.data() + shown);
+    return position.x + ImGui::CalcTextSize(id.data() + unique, id.data() + shown).x;
+}
+
+void TextHighlightedId(std::string_view id, std::size_t unique_length)
+{
+    const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
+    const std::size_t unique = std::min(shown, unique_length);
+    ImGui::TextUnformatted(id.data(), id.data() + unique);
+    if (unique != shown)
+    {
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextDisabled("%.*s", static_cast<int>(shown - unique), id.data() + unique);
+    }
+}
+
+void TextLabelledId(std::string_view label, std::string_view id, std::size_t unique_length)
+{
+    ImGui::TextUnformatted(label.data(), label.data() + label.size());
+    ImGui::SameLine(0.0f, 0.0f);
+    TextHighlightedId(id, unique_length);
+}
+
 std::vector<std::string> SplitLines(std::string_view text)
 {
     std::vector<std::string> result;
@@ -472,6 +504,7 @@ void Application::ApplyEvent(Event event)
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
                     const std::string old_working = _snapshot == nullptr ? "" : _snapshot->working_copy;
                     _snapshot = std::move(value.snapshot);
+                    RebuildIdPrefixes();
                     RememberRepository(_snapshot->root);
                     _graph_generation = 0;
                     const bool repository_changed = old_root != _snapshot->root;
@@ -703,7 +736,9 @@ void Application::RenderToolbar()
     if (!_snapshot->working_copy.empty())
     {
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.30f, 0.78f, 0.42f, 1.0f), "@ %s", ShortId(_snapshot->working_copy).c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
+        TextLabelledId("@ ", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy));
+        ImGui::PopStyleColor();
     }
     if (!_active_operation.empty())
     {
@@ -779,8 +814,8 @@ void Application::RenderNavigator()
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), RefBadgeColor(ref), 4.0f,
                     ImDrawFlags_RoundCornersLeft);
-                draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), kTextMuted,
-                    ShortId(ref.target).c_str());
+                DrawHighlightedId(
+                    draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target, RevisionPrefix(ref.target));
                 if (ImGui::BeginPopupContextItem("bookmark context"))
                 {
                     if (ImGui::MenuItem("Delete"))
@@ -805,8 +840,8 @@ void Application::RenderNavigator()
                 const ImVec2 maximum = ImGui::GetItemRectMax();
                 ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y),
                     RefBadgeColor(ref), 4.0f, ImDrawFlags_RoundCornersLeft);
-                ImGui::GetWindowDrawList()->AddText(
-                    ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), kTextMuted, ShortId(ref.target).c_str());
+                DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
+                    ref.target, RevisionPrefix(ref.target));
                 if (ImGui::BeginPopupContextItem("tag context"))
                 {
                     if (ImGui::MenuItem("Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
@@ -881,6 +916,50 @@ void Application::RebuildGraph()
     _built_filter = _graph_filter;
 }
 
+void Application::RebuildIdPrefixes()
+{
+    const auto build = [](const std::vector<std::string>& values, auto& destination) {
+        destination.clear();
+        const std::vector<std::size_t> lengths = UniquePrefixLengths(values);
+        for (std::size_t index = 0; index < values.size(); ++index)
+            destination.emplace(values[index], lengths[index]);
+    };
+    std::vector<std::string> revision_ids;
+    std::vector<std::string> change_ids;
+    revision_ids.reserve(_snapshot->revisions.size());
+    change_ids.reserve(_snapshot->revisions.size());
+    for (const Revision& revision : _snapshot->revisions)
+    {
+        revision_ids.push_back(revision.oid);
+        change_ids.push_back(revision.change_id);
+    }
+    std::vector<std::string> operation_ids;
+    operation_ids.reserve(_snapshot->operations.size());
+    for (const Operation& operation : _snapshot->operations)
+        operation_ids.push_back(operation.oid);
+    build(revision_ids, _revision_prefixes);
+    build(change_ids, _change_prefixes);
+    build(operation_ids, _operation_prefixes);
+}
+
+std::size_t Application::RevisionPrefix(const std::string& oid) const
+{
+    const auto found = _revision_prefixes.find(oid);
+    return found == _revision_prefixes.end() ? std::min<std::size_t>(8, oid.size()) : found->second;
+}
+
+std::size_t Application::ChangePrefix(const std::string& id) const
+{
+    const auto found = _change_prefixes.find(id);
+    return found == _change_prefixes.end() ? std::min<std::size_t>(8, id.size()) : found->second;
+}
+
+std::size_t Application::OperationPrefix(const std::string& oid) const
+{
+    const auto found = _operation_prefixes.find(oid);
+    return found == _operation_prefixes.end() ? std::min<std::size_t>(8, oid.size()) : found->second;
+}
+
 void Application::RenderHistory()
 {
     ImGui::Begin("History");
@@ -912,7 +991,7 @@ void Application::RenderHistory()
             if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
                 ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
-                ImGui::Text("Move %s", ShortId(revision.change_id).c_str());
+                TextLabelledId("Move ", revision.change_id, ChangePrefix(revision.change_id));
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
@@ -1018,12 +1097,15 @@ void Application::RenderHistory()
             const std::string description = FirstLine(revision.description);
             ImGui::SetCursorScreenPos(ImVec2(content_x, minimum.y + 6.0f));
             ImGui::TextUnformatted(description.empty() ? "(no description)" : description.c_str());
-            const std::string meta = ShortId(revision.change_id) + "  " + ShortId(revision.oid) + "  " + revision.author;
-            ImGui::SetCursorScreenPos(ImVec2(content_x, minimum.y + 28.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, kTextMuted);
-            ImGui::TextUnformatted(meta.c_str());
-            ImGui::PopStyleColor();
-            ImVec2 badge_cursor(content_x + ImGui::CalcTextSize(meta.c_str()).x + 12.0f, minimum.y + 28.0f);
+            ImVec2 meta_cursor(content_x, minimum.y + 28.0f);
+            meta_cursor.x = DrawHighlightedId(
+                draw, meta_cursor, revision.change_id, ChangePrefix(revision.change_id));
+            meta_cursor.x += ImGui::CalcTextSize("  ").x;
+            meta_cursor.x = DrawHighlightedId(draw, meta_cursor, revision.oid, RevisionPrefix(revision.oid));
+            meta_cursor.x += ImGui::CalcTextSize("  ").x;
+            draw->AddText(meta_cursor, kTextMuted, revision.author.c_str());
+            ImVec2 badge_cursor(
+                meta_cursor.x + ImGui::CalcTextSize(revision.author.c_str()).x + 12.0f, minimum.y + 28.0f);
             for (const NamedRef& ref : _snapshot->refs)
             {
                 if (ref.target != revision.oid) continue;
@@ -1135,8 +1217,12 @@ void Application::RenderDiff()
             editor.SetShowWhitespacesEnabled(false);
             editor.SetText(loaded);
         }
-        ImGui::TextDisabled("%s%s%s", ShortId(_diff.revision).c_str(), _diff.path.empty() ? "" : "  ",
-            _diff.path.c_str());
+        TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision));
+        if (!_diff.path.empty())
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", _diff.path.c_str());
+        }
         editor.Render("##diff editor", ImGui::GetContentRegionAvail(), true);
     }
     ImGui::End();
@@ -1172,7 +1258,7 @@ void Application::RenderOperations()
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(operation.description.c_str());
             ImGui::TableNextColumn();
-            ImGui::TextDisabled("%s", ShortId(operation.oid).c_str());
+            TextHighlightedId(operation.oid, OperationPrefix(operation.oid));
             ImGui::TableNextColumn();
             ImGui::PushID(&operation);
             if (ImGui::SmallButton("Restore")) _engine.Enqueue(RestoreOperation{operation.oid});
@@ -1242,36 +1328,37 @@ void Application::RenderDialogs()
         ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 70.0f));
         break;
     case Dialog::Describe:
-        ImGui::Text("Describe %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Describe ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 120.0f));
         break;
     case Dialog::Metaedit:
-        ImGui::Text("Edit metadata for %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 100.0f));
         ImGui::InputTextWithHint("Author", "Name <email>", &_input_secondary);
         break;
     case Dialog::Rebase:
-        ImGui::Text("Rebase %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextWithHint("Destination", "change ID, bookmark, or commit ID", &_input_primary);
         break;
     case Dialog::Squash:
-        ImGui::Text("Squash %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextWithHint("Into", "defaults to parent", &_input_secondary);
         ImGui::InputTextMultiline("Combined description", &_input_primary, ImVec2(-1.0f, 90.0f));
         break;
     case Dialog::Split:
-        ImGui::Text("Split %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Split ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextMultiline("Selected filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
         ImGui::InputTextWithHint("Selected description", "optional", &_input_primary);
         break;
     case Dialog::Restore:
-        ImGui::Text("Restore into %s", ShortId(_selected_revision).c_str());
+        TextLabelledId("Restore into ", _selected_revision, RevisionPrefix(_selected_revision));
         ImGui::InputTextWithHint("From", "defaults to parent", &_input_primary);
         ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
         break;
     case Dialog::Abandon:
-        ImGui::TextWrapped("Abandon %s and restack its descendants? This remains undoable.",
-            ShortId(_selected_revision).c_str());
+        TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision));
+        ImGui::SameLine();
+        ImGui::TextWrapped("and restack its descendants? This remains undoable.");
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
         break;
     case Dialog::Bookmark:
@@ -1316,8 +1403,8 @@ void Application::RenderDialogs()
             : _pending_drop.action == DropAction::Rebase               ? "Rebase"
             : _pending_drop.action == DropAction::ReorderAfter         ? "Move after"
                                                                        : "Move before";
-        ImGui::Text("%s %s", action, ShortId(_pending_drop.source).c_str());
-        ImGui::Text("Target: %s", ShortId(_pending_drop.target).c_str());
+        TextLabelledId(std::string(action) + " ", _pending_drop.source, RevisionPrefix(_pending_drop.source));
+        TextLabelledId("Target: ", _pending_drop.target, RevisionPrefix(_pending_drop.target));
         int affected = 0;
         for (const Revision& revision : _snapshot->revisions)
             affected += std::ranges::find(revision.parents, _pending_drop.source) != revision.parents.end();
@@ -1601,6 +1688,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _engine.SetCommandsSuppressedForTest(true);
 #endif
     _snapshot = std::make_shared<RepoSnapshot>(std::move(snapshot));
+    RebuildIdPrefixes();
     _selected_revision = _snapshot->working_copy.empty()
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
         : _snapshot->working_copy;
@@ -1612,6 +1700,9 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 void Application::ClearSnapshotForTest()
 {
     _snapshot.reset();
+    _revision_prefixes.clear();
+    _change_prefixes.clear();
+    _operation_prefixes.clear();
     _selected_revision.clear();
     _selected_file.clear();
     _diff = {};

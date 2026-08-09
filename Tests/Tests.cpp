@@ -257,6 +257,8 @@ TEST(GraphLayout, IgnoresMissingAndBackwardsParents)
 TEST(TextHelpers, ShortensAndSelectsFirstLine)
 {
     EXPECT_EQ(ShortId("abcdefghijkl", 8), "abcdefgh");
+    EXPECT_EQ(UniquePrefixLengths({"abcdef00", "abcdef11", "xyz00000"}, 2),
+        (std::vector<std::size_t>{7, 7, 2}));
     EXPECT_EQ(FirstLine("subject\nbody"), "subject");
 }
 
