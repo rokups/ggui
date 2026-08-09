@@ -339,6 +339,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
+    test->TestFunc = [](ImGuiTestContext*) {
+        std::size_t original_size = 0;
+        const char* original_data = ImGui::SaveIniSettingsToMemory(&original_size);
+        const std::string original(original_data, original_size);
+        constexpr std::string_view settings =
+            "[Ggui][MainWindow]\nPos=101,102\nSize=901,602\nMaximized=0\n\n";
+        ImGui::LoadIniSettingsFromMemory(settings.data(), settings.size());
+        std::size_t saved_size = 0;
+        const char* saved_data = ImGui::SaveIniSettingsToMemory(&saved_size);
+        const std::string_view saved(saved_data, saved_size);
+        IM_CHECK(saved.find("[Ggui][MainWindow]") != std::string_view::npos);
+        IM_CHECK(saved.find("Size=901,602") != std::string_view::npos);
+        IM_CHECK(saved.find("Maximized=0") != std::string_view::npos);
+        ImGui::LoadIniSettingsFromMemory(original.data(), original.size());
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "MultiParentNewChange");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

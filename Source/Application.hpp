@@ -17,6 +17,9 @@
 #ifdef IMGUI_BUILD_TESTING
 struct ImGuiTestEngine;
 #endif
+struct ImGuiContext;
+struct ImGuiSettingsHandler;
+struct ImGuiTextBuffer;
 
 namespace Ggui
 {
@@ -90,6 +93,11 @@ private:
     void Shutdown();
     void LoadSettings();
     void SaveSettings();
+    void RegisterWindowSettings();
+    static void* WindowSettingsReadOpen(ImGuiContext*, ImGuiSettingsHandler*, const char* name);
+    static void WindowSettingsReadLine(ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line);
+    static void WindowSettingsApplyAll(ImGuiContext*, ImGuiSettingsHandler*);
+    static void WindowSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer* output);
     void RememberRepository(const std::string& path);
     void PollEngine();
     void ApplyEvent(Event event);
@@ -162,6 +170,13 @@ private:
 
     SDL_Window* _window = nullptr;
     SDL_GLContext _gl_context = nullptr;
+    int _window_x = 0;
+    int _window_y = 0;
+    int _window_width = 1440;
+    int _window_height = 900;
+    bool _window_has_position = false;
+    bool _window_has_size = false;
+    bool _window_maximized = false;
     bool _running = true;
     bool _default_layout = true;
     bool _dark_theme = true;

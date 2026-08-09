@@ -23,6 +23,7 @@
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <ranges>
 #include <sstream>
@@ -403,6 +404,28 @@ void Application::ProcessEvent(SDL_Event& event)
         _running = false;
     if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
         _engine.Enqueue(OpenRepository{event.drop.data});
+    if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST
+        && event.window.windowID == SDL_GetWindowID(_window))
+    {
+        const SDL_WindowFlags flags = SDL_GetWindowFlags(_window);
+        _window_maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+        const bool normal = (flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED | SDL_WINDOW_FULLSCREEN)) == 0;
+        if (normal && event.type == SDL_EVENT_WINDOW_MOVED)
+        {
+            _window_x = event.window.data1;
+            _window_y = event.window.data2;
+            _window_has_position = true;
+        }
+        if (normal && event.type == SDL_EVENT_WINDOW_RESIZED)
+        {
+            _window_width = event.window.data1;
+            _window_height = event.window.data2;
+            _window_has_size = true;
+        }
+        if (event.type == SDL_EVENT_WINDOW_MOVED || event.type == SDL_EVENT_WINDOW_RESIZED
+            || event.type == SDL_EVENT_WINDOW_MAXIMIZED || event.type == SDL_EVENT_WINDOW_RESTORED)
+            ImGui::MarkIniSettingsDirty();
+    }
 }
 
 bool Application::Initialize()
@@ -424,6 +447,8 @@ bool Application::Initialize()
         SDL_Quit();
         return false;
     }
+    _window_has_position = SDL_GetWindowPosition(_window, &_window_x, &_window_y);
+    _window_has_size = SDL_GetWindowSize(_window, &_window_width, &_window_height);
     _gl_context = SDL_GL_CreateContext(_window);
     if (_gl_context == nullptr)
     {
@@ -449,11 +474,99 @@ bool Application::Initialize()
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     io.IniFilename = _imgui_ini_path.empty() ? nullptr : _imgui_ini_path.c_str();
+    RegisterWindowSettings();
+    if (io.IniFilename != nullptr && std::filesystem::exists(io.IniFilename))
+        ImGui::LoadIniSettingsFromDisk(io.IniFilename);
     LoadUiFont();
     ApplyTheme();
     ImGui_ImplSDL3_InitForOpenGL(_window, _gl_context);
     ImGui_ImplOpenGL3_Init("#version 330 core");
     return true;
+}
+
+void Application::RegisterWindowSettings()
+{
+    ImGuiSettingsHandler handler;
+    handler.TypeName = "Ggui";
+    handler.TypeHash = ImHashStr(handler.TypeName);
+    handler.ReadOpenFn = WindowSettingsReadOpen;
+    handler.ReadLineFn = WindowSettingsReadLine;
+    handler.ApplyAllFn = WindowSettingsApplyAll;
+    handler.WriteAllFn = WindowSettingsWriteAll;
+    handler.UserData = this;
+    ImGui::AddSettingsHandler(&handler);
+}
+
+void* Application::WindowSettingsReadOpen(
+    ImGuiContext*, ImGuiSettingsHandler* handler, const char* name)
+{
+    if (std::strcmp(name, "MainWindow") != 0)
+        return nullptr;
+    auto* application = static_cast<Application*>(handler->UserData);
+    application->_window_has_position = false;
+    application->_window_has_size = false;
+    application->_window_maximized = false;
+    return application;
+}
+
+void Application::WindowSettingsReadLine(
+    ImGuiContext*, ImGuiSettingsHandler*, void* entry, const char* line)
+{
+    auto* application = static_cast<Application*>(entry);
+    int first = 0;
+    int second = 0;
+    if (std::sscanf(line, "Pos=%d,%d", &first, &second) == 2)
+    {
+        application->_window_x = first;
+        application->_window_y = second;
+        application->_window_has_position = true;
+    }
+    else if (std::sscanf(line, "Size=%d,%d", &first, &second) == 2 && first >= 320 && second >= 240)
+    {
+        application->_window_width = first;
+        application->_window_height = second;
+        application->_window_has_size = true;
+    }
+    else if (std::sscanf(line, "Maximized=%d", &first) == 1)
+        application->_window_maximized = first != 0;
+}
+
+void Application::WindowSettingsApplyAll(ImGuiContext*, ImGuiSettingsHandler* handler)
+{
+    auto* application = static_cast<Application*>(handler->UserData);
+    if (application->_window == nullptr)
+        return; // GCOV_EXCL_LINE: handler is registered only while the SDL window exists
+    const SDL_WindowFlags flags = SDL_GetWindowFlags(application->_window);
+    if ((flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)) != 0)
+        SDL_RestoreWindow(application->_window);
+    if (application->_window_has_size)
+        SDL_SetWindowSize(application->_window, application->_window_width, application->_window_height);
+    if (application->_window_has_position)
+        SDL_SetWindowPosition(application->_window, application->_window_x, application->_window_y);
+    if (application->_window_maximized)
+        SDL_MaximizeWindow(application->_window);
+}
+
+void Application::WindowSettingsWriteAll(
+    ImGuiContext*, ImGuiSettingsHandler* handler, ImGuiTextBuffer* output)
+{
+    auto* application = static_cast<Application*>(handler->UserData);
+    if (application->_window != nullptr)
+    {
+        const SDL_WindowFlags flags = SDL_GetWindowFlags(application->_window);
+        application->_window_maximized = (flags & SDL_WINDOW_MAXIMIZED) != 0;
+        if ((flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED | SDL_WINDOW_FULLSCREEN)) == 0)
+        {
+            application->_window_has_position =
+                SDL_GetWindowPosition(application->_window, &application->_window_x, &application->_window_y);
+            application->_window_has_size =
+                SDL_GetWindowSize(application->_window, &application->_window_width, &application->_window_height);
+        }
+    }
+    output->appendf("[%s][MainWindow]\n", handler->TypeName);
+    output->appendf("Pos=%d,%d\n", application->_window_x, application->_window_y);
+    output->appendf("Size=%d,%d\n", application->_window_width, application->_window_height);
+    output->appendf("Maximized=%d\n\n", application->_window_maximized ? 1 : 0);
 }
 
 void Application::Shutdown()
