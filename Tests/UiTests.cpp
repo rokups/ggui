@@ -355,6 +355,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         ApplyOpenDialog(context, "//##MainMenuBar/Repository/Clone...");
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->MouseMove("Apply");
+        context->Yield();
         context->KeyPress(ImGuiKey_Escape);
         context->Yield(2);
         IM_CHECK(!ActionDialogOpen());
@@ -392,6 +394,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
 
         application.ApplyEventForTest(OperationStarted{"visible operation"});
+        context->Yield();
         application.ApplyEventForTest(OperationProgress{"preparing", 0, 0});
         context->Yield();
         application.ApplyEventForTest(OperationProgress{"writing", 1, 2});
@@ -574,7 +577,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/coverage-bookmark");
         context->Yield(2);
 
+        context->MenuClick("//##MainMenuBar/View/Operations");
+        FocusWindow(context, "Operations");
         application.ApplyEventForTest(OperationStarted{"coverage operation"});
+        context->Yield(2);
         application.ApplyEventForTest(OperationProgress{"preparing", 0, 0});
         context->Yield(2);
         application.ApplyEventForTest(OperationProgress{"writing", 2, 4});
@@ -585,7 +591,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         application.ApplyEventForTest(
             DiffReady{{1000, "merge", "image.bin", {}, {}, {}, true, RichSnapshot().status}});
-        context->Yield(2);
+        FocusWindow(context, "Diff");
+        context->Yield();
         application.ApplyEventForTest(
             DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", "@@ -1 +1 @@\n-old\n+new\n", false,
                 RichSnapshot().status}});
@@ -612,7 +619,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
         context->Yield(2);
 
-        context->MenuClick("//##MainMenuBar/View/Operations");
         FocusWindow(context, "Operations");
         context->ItemClick("**/Restore");
         context->Yield(2);
