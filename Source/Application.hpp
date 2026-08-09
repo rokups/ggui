@@ -125,6 +125,7 @@ private:
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     bool CanCreateChange() const;
+    bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);
     void SubmitDialog();
     void PickAndOpen(bool initialize);

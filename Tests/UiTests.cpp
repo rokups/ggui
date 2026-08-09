@@ -524,6 +524,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         context->SetRef("ggui action");
         context->ItemInputValue("Username", "user");
+        context->ItemInputValue("Token or passphrase", "secret");
         context->ItemClick("Apply");
         context->Yield(2);
 
@@ -562,6 +563,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         ApplyOpenDialog(context, "//##MainMenuBar/Repository/Clone...");
+        context->ItemInputValue("URL", "https://example.test/repository.git");
+        context->ItemInputValue("Destination", "/tmp/ggui-submitted-clone");
         context->ItemClick("Apply");
         context->Yield(2);
 
@@ -578,14 +581,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        for (const char* action : {"Describe...", "Metaedit...", "Rebase...", "Squash...", "Split...", "Restore...",
-                 "Abandon..."})
+        for (const char* action : {"Describe...", "Metaedit...", "Squash...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
             ApplyOpenDialog(context, path.c_str());
             context->ItemClick("Apply");
             context->Yield(2);
         }
+        ApplyOpenDialog(context, "//##MainMenuBar/Change/Rebase...");
+        context->ItemInputValue("Destination", "base");
+        context->ItemClick("Apply");
+        context->Yield(2);
+        ApplyOpenDialog(context, "//##MainMenuBar/Change/Split...");
+        context->ItemInputValue("Selected filesets", "modified.txt");
+        context->ItemClick("Apply");
+        context->Yield(2);
 
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/Create bookmark");

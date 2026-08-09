@@ -225,6 +225,26 @@ void TextLabelledId(std::string_view label, std::string_view id, std::size_t uni
     TextHighlightedId(id, unique_length, prefix_color);
 }
 
+void DialogInput(const char* label, const char* hint, std::string* value, bool focus = false,
+    ImGuiInputTextFlags flags = 0)
+{
+    ImGui::TextUnformatted(label);
+    if (focus)
+        ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(-1.0f);
+    const std::string id = std::string("###") + label;
+    ImGui::InputTextWithHint(id.c_str(), hint, value, flags);
+}
+
+void DialogMultiline(const char* label, std::string* value, float height, bool focus = false)
+{
+    ImGui::TextUnformatted(label);
+    if (focus)
+        ImGui::SetKeyboardFocusHere();
+    const std::string id = std::string("###") + label;
+    ImGui::InputTextMultiline(id.c_str(), value, ImVec2(-1.0f, height));
+}
+
 ImU32 ChangeIdColor(bool working)
 {
     return working ? kWorkingChangeId : kChangeId;
@@ -253,6 +273,11 @@ std::vector<std::string> SplitLines(std::string_view text)
         begin = end + 1;
     }
     return result;
+}
+
+bool HasText(std::string_view value)
+{
+    return std::ranges::any_of(value, [](unsigned char character) { return !std::isspace(character); });
 }
 
 const char* DeltaName(git_delta_t status)
@@ -789,11 +814,14 @@ void Application::RenderFrame()
 {
     RenderMenuBar();
     ImGuiIO& io = ImGui::GetIO();
-    if (!io.WantTextInput)
+    if (_dialog == Dialog::None)
     {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
         if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             OpenDialog(Dialog::New);
+    }
+    if (!io.WantTextInput)
+    {
         if (_snapshot != nullptr && _snapshot->can_undo && _active_operation.empty() && io.KeyCtrl
             && ImGui::IsKeyPressed(ImGuiKey_Z))
             _engine.Enqueue(Undo{});
@@ -1723,102 +1751,116 @@ void Application::RenderDialogs()
     if (!ImGui::BeginPopupModal(
             popup_titles[static_cast<std::size_t>(_dialog)], &open, ImGuiWindowFlags_AlwaysAutoResize))
         return; // GCOV_EXCL_LINE: defensive ImGui popup frame rejection
+    const bool focus_first = ImGui::IsWindowAppearing();
+    const float browse_width = ImGui::CalcTextSize("Browse").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
     switch (_dialog)
     {
     case Dialog::Clone:
         ImGui::TextUnformatted("Clone repository");
-        ImGui::InputTextWithHint("URL", "https://host/owner/repository.git", &_input_primary);
-        ImGui::InputTextWithHint("Destination", "/path/to/repository", &_input_secondary);
+        DialogInput("URL", "https://host/owner/repository.git", &_input_primary, focus_first);
+        ImGui::TextUnformatted("Destination");
+        ImGui::SetNextItemWidth(-browse_width - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::InputTextWithHint("###Destination", "/path/to/repository", &_input_secondary);
         ImGui::SameLine();
         if (ImGui::Button("Browse")) _input_secondary = PickFolder();
         break;
     case Dialog::New:
         ImGui::TextUnformatted("Create change");
-        ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 90.0f));
-        ImGui::InputTextMultiline("Parents", &_input_secondary, ImVec2(-1.0f, 70.0f));
+        DialogMultiline("Description", &_input_primary, 90.0f, focus_first);
+        DialogMultiline("Parents", &_input_secondary, 70.0f);
         ImGui::Checkbox("Create without editing", &_input_flag);
         break;
     case Dialog::Commit:
         ImGui::TextUnformatted("Commit working change and create a new one");
-        ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 90.0f));
-        ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 70.0f));
+        DialogMultiline("Description", &_input_primary, 90.0f, focus_first);
+        DialogMultiline("Filesets", &_input_filesets, 70.0f);
+        ImGui::TextDisabled("Leave empty to commit all changed files.");
         break;
     case Dialog::Describe:
         TextLabelledId("Describe ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 120.0f));
+        DialogMultiline("Description", &_input_primary, 120.0f, focus_first);
         break;
     case Dialog::Metaedit:
         TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextMultiline("Description", &_input_primary, ImVec2(-1.0f, 100.0f));
-        ImGui::InputTextWithHint("Author", "Name <email>", &_input_secondary);
+        DialogMultiline("Description", &_input_primary, 100.0f, focus_first);
+        DialogInput("Author", "Name <email>", &_input_secondary);
         break;
     case Dialog::Rebase:
         TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextWithHint("Destination", "change ID, bookmark, or commit ID", &_input_primary);
+        DialogInput("Destination", "change ID, bookmark, or commit ID", &_input_primary, focus_first);
         break;
     case Dialog::Squash:
         TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextWithHint("Into", "defaults to parent", &_input_secondary);
-        ImGui::InputTextMultiline("Combined description", &_input_primary, ImVec2(-1.0f, 90.0f));
+        DialogInput("Into", "defaults to parent", &_input_secondary, focus_first);
+        DialogMultiline("Combined description", &_input_primary, 90.0f);
         break;
     case Dialog::Split:
         TextLabelledId("Split ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextMultiline("Selected filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
-        ImGui::InputTextWithHint("Selected description", "optional", &_input_primary);
+        DialogMultiline("Selected filesets", &_input_filesets, 90.0f, focus_first);
+        DialogInput("Selected description", "optional", &_input_primary);
         break;
     case Dialog::Restore:
         TextLabelledId("Restore into ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        ImGui::InputTextWithHint("From", "defaults to parent", &_input_primary);
-        ImGui::InputTextMultiline("Filesets", &_input_filesets, ImVec2(-1.0f, 90.0f));
+        DialogInput("From", "defaults to parent", &_input_primary, focus_first);
+        DialogMultiline("Filesets", &_input_filesets, 90.0f);
+        ImGui::TextDisabled("Leave empty to restore all files.");
         break;
     case Dialog::Abandon:
         TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
         ImGui::TextWrapped("and restack its descendants? This remains undoable.");
+        if (focus_first)
+            ImGui::SetKeyboardFocusHere();
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
         break;
     case Dialog::Bookmark:
         ImGui::TextUnformatted("Create bookmark");
-        ImGui::InputText("Name", &_input_primary);
-        ImGui::InputTextWithHint("Revision", "defaults to selected change", &_input_secondary);
+        DialogInput("Name", "bookmark name", &_input_primary, focus_first);
+        DialogInput("Revision", "defaults to selected change", &_input_secondary);
         break;
     case Dialog::Tag:
         ImGui::TextUnformatted("Create or move tag");
-        ImGui::InputText("Name", &_input_primary);
-        ImGui::InputTextWithHint("Revision", "defaults to selected change", &_input_secondary);
+        DialogInput("Name", "tag name", &_input_primary, focus_first);
+        DialogInput("Revision", "defaults to selected change", &_input_secondary);
         ImGui::Checkbox("Allow move", &_input_flag);
         break;
     case Dialog::WorkspaceAdd:
         ImGui::TextUnformatted("Add workspace");
-        ImGui::InputText("Destination", &_input_primary);
+        ImGui::TextUnformatted("Destination");
+        if (focus_first)
+            ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(-browse_width - ImGui::GetStyle().ItemSpacing.x);
+        ImGui::InputTextWithHint("###Destination", "/path/to/workspace", &_input_primary);
         ImGui::SameLine();
         if (ImGui::Button("Browse")) _input_primary = PickFolder();
-        ImGui::InputTextWithHint("Name", "derived from directory if empty", &_input_secondary);
-        ImGui::InputTextWithHint("Revision", "defaults to @", &_input_tertiary);
+        DialogInput("Name", "derived from directory if empty", &_input_secondary);
+        DialogInput("Revision", "defaults to @", &_input_tertiary);
         break;
     case Dialog::WorkspaceRename:
         ImGui::TextUnformatted("Rename current workspace");
-        ImGui::InputText("New name", &_input_primary);
+        DialogInput("New name", "workspace name", &_input_primary, focus_first);
         break;
     case Dialog::Credentials:
         ImGui::TextWrapped("Credentials requested by %s", _credential_request.url.c_str());
-        ImGui::Combo("Method", &_input_mode, "Username / token\0SSH agent\0SSH key\0");
-        ImGui::InputText("Username", &_input_primary);
+        ImGui::TextUnformatted("Method");
+        ImGui::SetNextItemWidth(-1.0f);
+        ImGui::Combo("###Method", &_input_mode, "Username / token\0SSH agent\0SSH key\0");
+        DialogInput("Username", "username", &_input_primary, focus_first);
         if (_input_mode == 2)
         {
-            ImGui::InputText("Private key", &_input_secondary);
-            ImGui::InputText("Public key", &_input_tertiary);
+            DialogInput("Private key", "/path/to/private/key", &_input_secondary);
+            DialogInput("Public key", "/path/to/public/key", &_input_tertiary);
         }
         if (_input_mode != 1)
-            ImGui::InputText("Token / passphrase", &_input_filesets, ImGuiInputTextFlags_Password);
+            DialogInput("Token or passphrase", "secret", &_input_filesets, false, ImGuiInputTextFlags_Password);
         break;
     case Dialog::ConfirmDrop:
     {
@@ -1846,21 +1888,36 @@ void Application::RenderDialogs()
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
-    ImGui::BeginDisabled(!_active_operation.empty());
-    if (ImGui::Button(_dialog == Dialog::ConfirmDrop ? "Confirm" : "Apply", ImVec2(110.0f, 0.0f)))
+    const bool can_submit = CanSubmitDialog();
+    const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
+    const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
+    if (focus_first && _dialog == Dialog::ConfirmDrop)
+        ImGui::SetKeyboardFocusHere();
+    ImGui::BeginDisabled(!_active_operation.empty() || !can_submit);
+    const bool submit = ImGui::Button(
+                            _dialog == Dialog::ConfirmDrop ? "Confirm" : "Apply", ImVec2(110.0f, 0.0f))
+        || (submit_shortcut && _active_operation.empty() && can_submit);
+    if (!can_submit && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Fill in the required fields before applying.");
+    if (submit)
         SubmitDialog();
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)))
+    const bool cancel = ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)) || cancel_shortcut;
+    ImGui::SameLine();
+    ImGui::TextDisabled("Ctrl+Enter apply | Esc cancel");
+    if (cancel)
     {
         if (_dialog == Dialog::Credentials) _engine.CancelCredential();
         _dialog = Dialog::None;
+        ImGui::ClearActiveID();
         ImGui::CloseCurrentPopup();
     }
     if (!open) // GCOV_EXCL_START: native title-bar close path; Cancel is automated instead
     {
         if (_dialog == Dialog::Credentials) _engine.CancelCredential();
         _dialog = Dialog::None;
+        ImGui::ClearActiveID();
         ImGui::CloseCurrentPopup();
     }
     // GCOV_EXCL_STOP
@@ -1922,6 +1979,7 @@ void Application::SubmitDialog()
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }
     _dialog = Dialog::None;
+    ImGui::ClearActiveID();
     ImGui::CloseCurrentPopup();
 }
 
@@ -1953,6 +2011,25 @@ bool Application::CanCreateChange() const
                return std::ranges::any_of(
                    _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
            });
+}
+
+bool Application::CanSubmitDialog() const
+{
+    switch (_dialog)
+    {
+    case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
+    case Dialog::Rebase: return HasText(_input_primary);
+    case Dialog::Split: return HasText(_input_filesets);
+    case Dialog::Bookmark:
+    case Dialog::Tag:
+    case Dialog::WorkspaceAdd:
+    case Dialog::WorkspaceRename: return HasText(_input_primary);
+    case Dialog::Credentials:
+        return HasText(_input_primary) && (_input_mode == 1
+            || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));
+    case Dialog::None: return false; // GCOV_EXCL_LINE: RenderDialogs returns before validation
+    default: return true;
+    }
 }
 
 void Application::SelectFile(const std::string& path)
