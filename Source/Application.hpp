@@ -46,6 +46,7 @@ public:
     void ClearSnapshotForTest();
     void AddRecentForTest(const std::string& path);
     void ProcessEventForTest(SDL_Event event);
+    void SetDarkThemeForTest(bool dark);
     static std::vector<std::string> SplitLinesForTest(const std::string& text);
     static std::string DeltaNameForTest(git_delta_t status);
     static bool ContainsInsensitiveForTest(const std::string& text, const std::string& query);

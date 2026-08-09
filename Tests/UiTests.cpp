@@ -550,6 +550,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->CaptureReset();
             IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
         }
+        application.SetDarkThemeForTest(false);
+        context->Yield(2);
+        application.SetDarkThemeForTest(true);
+        context->Yield(2);
 
         context->MenuClick("//##MainMenuBar/Repository/Recent/recent-11");
         application.ApplyEventForTest(ErrorEvent{"coverage", "welcome error"});

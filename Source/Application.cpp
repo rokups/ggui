@@ -2331,6 +2331,12 @@ void Application::ProcessEventForTest(SDL_Event event)
     _running = running;
 }
 
+void Application::SetDarkThemeForTest(bool dark)
+{
+    _dark_theme = dark;
+    ApplyTheme();
+}
+
 std::vector<std::string> Application::SplitLinesForTest(const std::string& text)
 {
     return SplitLines(text);
