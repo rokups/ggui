@@ -1678,10 +1678,19 @@ void Application::OpenDialog(Dialog dialog)
     _input_mode = 0;
     if (dialog == Dialog::New)
     {
-        for (const std::string& parent : _selected_revisions)
+        for (const std::string& oid : _selected_revisions)
         {
             if (!_input_secondary.empty()) _input_secondary.push_back('\n');
-            _input_secondary += parent;
+            if (oid == _snapshot->working_copy)
+                _input_secondary += '@';
+            else
+            {
+                const auto revision = std::ranges::find_if(
+                    _snapshot->revisions, [&](const Revision& candidate) { return candidate.oid == oid; });
+                _input_secondary += revision == _snapshot->revisions.end() || revision->change_id.empty()
+                    ? oid
+                    : revision->change_id;
+            }
         }
     }
     if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)

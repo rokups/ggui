@@ -388,8 +388,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         const std::vector<std::string> parents = application.NewParentsForTest();
         IM_CHECK_EQ(parents.size(), 2U);
-        IM_CHECK_EQ(parents[0], "left");
-        IM_CHECK_EQ(parents[1], "right");
+        IM_CHECK_EQ(parents[0], "change-left");
+        IM_CHECK_EQ(parents[1], "change-right");
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
     };
