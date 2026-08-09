@@ -293,6 +293,8 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     ASSERT_EQ(opened->remotes.size(), 1U);
     EXPECT_EQ(opened->remotes.front().name, "origin");
     EXPECT_EQ(opened->remotes.front().fetch_url, "https://example.test/repository.git");
+    EXPECT_TRUE(opened->can_undo);
+    EXPECT_FALSE(opened->can_redo);
     std::this_thread::sleep_for(1200ms);
     const auto idle_events = engine.PollEvents();
     EXPECT_TRUE(std::none_of(idle_events.begin(), idle_events.end(),

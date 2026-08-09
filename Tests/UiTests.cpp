@@ -181,6 +181,8 @@ RepoSnapshot RichSnapshot()
         {"current", snapshot.root, "merge", false}, {"stale", "/missing/workspace", "left", true}};
     snapshot.remotes = {{"origin", "https://example.test/repository.git", "ssh://example.test/repository.git"}};
     snapshot.conflicts = {{"conflict file.txt", 2, 3}};
+    snapshot.can_undo = true;
+    snapshot.can_redo = true;
     return snapshot;
 }
 
@@ -314,6 +316,27 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
         context->Yield();
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "OperationAvailability");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.can_undo = false;
+        snapshot.can_redo = false;
+        Application::Instance().SetSnapshotForTest(std::move(snapshot));
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+        snapshot = RichSnapshot();
+        snapshot.can_undo = true;
+        snapshot.can_redo = false;
+        Application::Instance().SetSnapshotForTest(std::move(snapshot));
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "PureHelpers");

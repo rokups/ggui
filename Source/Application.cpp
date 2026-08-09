@@ -644,8 +644,12 @@ void Application::RenderFrame()
     {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
         if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N)) OpenDialog(Dialog::New);
-        if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Z)) _engine.Enqueue(Undo{});
-        if (_snapshot != nullptr && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Y)) _engine.Enqueue(Redo{});
+        if (_snapshot != nullptr && _snapshot->can_undo && _active_operation.empty() && io.KeyCtrl
+            && ImGui::IsKeyPressed(ImGuiKey_Z))
+            _engine.Enqueue(Undo{});
+        if (_snapshot != nullptr && _snapshot->can_redo && _active_operation.empty() && io.KeyCtrl
+            && ImGui::IsKeyPressed(ImGuiKey_Y))
+            _engine.Enqueue(Redo{});
         if (_snapshot != nullptr && ImGui::IsKeyPressed(ImGuiKey_F5)) _engine.Enqueue(Refresh{});
         const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
         if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty() && plain_key
@@ -781,8 +785,10 @@ void Application::RenderMenuBar()
     }
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr))
     {
-        if (ImGui::MenuItem("Undo", "Ctrl+Z")) _engine.Enqueue(Undo{});
-        if (ImGui::MenuItem("Redo", "Ctrl+Y")) _engine.Enqueue(Redo{});
+        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, _snapshot->can_undo && _active_operation.empty()))
+            _engine.Enqueue(Undo{});
+        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, _snapshot->can_redo && _active_operation.empty()))
+            _engine.Enqueue(Redo{});
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View"))
@@ -831,9 +837,13 @@ void Application::RenderToolbar()
     ImGui::SameLine();
     if (ImGui::Button("Next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
     ImGui::SameLine();
+    ImGui::BeginDisabled(!_snapshot->can_undo);
     if (ImGui::Button("Undo")) _engine.Enqueue(Undo{});
+    ImGui::EndDisabled();
     ImGui::SameLine();
+    ImGui::BeginDisabled(!_snapshot->can_redo);
     if (ImGui::Button("Redo")) _engine.Enqueue(Redo{});
+    ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Refresh")) _engine.Enqueue(Refresh{});
     ImGui::PopStyleColor(3);

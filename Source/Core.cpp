@@ -533,6 +533,11 @@ struct RepositoryEngine::Impl
                 {OidString(source.oid), source.description == nullptr ? "" : source.description, source.time});
         }
 
+        gg_operation_capabilities capabilities{};
+        Check(gg_repository_operation_capabilities(&capabilities, gg), "load operation capabilities");
+        result->can_undo = capabilities.can_undo != 0;
+        result->can_redo = capabilities.can_redo != 0;
+
         Workspaces workspaces;
         Check(gg_repository_workspaces(&workspaces.value, gg), "load workspaces");
         result->workspaces.reserve(workspaces.value.count);

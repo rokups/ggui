@@ -88,6 +88,8 @@ struct RepoSnapshot
     std::vector<Workspace> workspaces;
     std::vector<Remote> remotes;
     std::vector<Conflict> conflicts;
+    bool can_undo = false;
+    bool can_redo = false;
 };
 
 struct DiffResult
