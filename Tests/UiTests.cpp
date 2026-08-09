@@ -343,6 +343,79 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(3);
+
+        ApplyOpenDialog(context, "//##MainMenuBar/Repository/Clone...");
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+        context->Yield(2);
+        IM_CHECK(!ImGui::FindWindowByName("ggui action")->Active);
+
+        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_N);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK_EQ(ImGui::GetActiveID(), context->ItemInfo("Description").ID);
+        context->ItemInputValue("Description", "keyboard submission");
+        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Enter);
+        context->Yield(2);
+        IM_CHECK(!ImGui::FindWindowByName("ggui action")->Active);
+
+        FocusWindow(context, "Changes");
+        context->ItemClick("**/M  modified.txt");
+        context->SetRef("ggui dockspace");
+        context->ItemClick("Commit");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        IM_CHECK(application.DialogFilesetsForTest().empty());
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Commit only this file");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        IM_CHECK_EQ(application.DialogFilesetsForTest(), std::vector<std::string>{"modified.txt"});
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/Create bookmark");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemInputValue("Name", "validated");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+
+        application.ApplyEventForTest(OperationStarted{"visible operation"});
+        application.ApplyEventForTest(OperationProgress{"preparing", 0, 0});
+        context->Yield();
+        application.ApplyEventForTest(OperationProgress{"writing", 1, 2});
+        context->Yield();
+        application.ApplyEventForTest(OperationFinished{"visible operation"});
+        context->Yield();
+        application.ApplyEventForTest(ErrorEvent{"visible operation", "visible failure"});
+        context->Yield();
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("**/Dismiss error"));
+        context->ItemClick("**/Dismiss error");
+        context->Yield();
+        IM_CHECK(!context->ItemExists("**/Dismiss error"));
+
+        context->MouseMove("Move @ earlier");
+        context->Yield();
+        context->MouseMove("Move @ later");
+        context->Yield();
+        const std::string repository_name = Repository().Path().filename().string();
+        context->MouseMove(repository_name.c_str());
+        context->Yield();
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
     test->TestFunc = [](ImGuiTestContext*) {
         std::size_t original_size = 0;
