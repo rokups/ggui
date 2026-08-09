@@ -26,6 +26,7 @@ struct Revision
     std::int64_t timestamp = 0;
     bool working_copy = false;
     bool conflicted = false;
+    bool pushed = false;
 };
 
 struct NamedRef
@@ -332,6 +333,7 @@ private:
 
 std::string ShortId(const std::string& value, std::size_t length = 8);
 std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& values, std::size_t minimum = 8);
+void MarkPushedRevisions(std::vector<Revision>& revisions, const std::vector<NamedRef>& refs);
 std::string FirstLine(const std::string& value);
 
 } // namespace Ggui

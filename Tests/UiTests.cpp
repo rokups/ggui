@@ -143,11 +143,11 @@ RepoSnapshot RichSnapshot()
     snapshot.root = Repository().Path().string();
     snapshot.working_copy = "merge";
     snapshot.revisions = {
-        {"merge", {"left", "right", "third"}, "change-merge", "Merge subject\nbody", "Merger", 5, true, true},
-        {"left", {"base"}, "change-left", "Left", "Left Author", 4, false, false},
-        {"right", {"base"}, "change-right", "Right", "Right Author", 3, false, false},
-        {"third", {"base"}, "change-third", "", "Third Author", 2, false, false},
-        {"base", {}, "change-base", "Base", "Base Author", 1, false, false},
+        {"merge", {"left", "right", "third"}, "change-merge", "Merge subject\nbody", "Merger", 5, true, true, false},
+        {"left", {"base"}, "change-left", "Left", "Left Author", 4, false, false, false},
+        {"right", {"base"}, "change-right", "Right", "Right Author", 3, false, false, true},
+        {"third", {"base"}, "change-third", "", "Third Author", 2, false, false, false},
+        {"base", {}, "change-base", "Base", "Base Author", 1, false, false, true},
     };
     snapshot.refs = {
         {"coverage-bookmark", {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, true, true},

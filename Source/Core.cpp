@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace Ggui
@@ -467,6 +468,7 @@ struct RepositoryEngine::Impl
                 source.remote == nullptr ? "" : source.remote, OidString(source.target), source.kind,
                 source.tracked != 0, source.conflicted != 0});
         }
+        MarkPushedRevisions(result->revisions, result->refs);
 
         gg_status_options status_options = GG_STATUS_OPTIONS_INIT;
         Status status;
@@ -1016,6 +1018,32 @@ std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& val
         result[order[position]] = std::min(values[order[position]].size(), std::max(minimum, required));
     }
     return result;
+}
+
+void MarkPushedRevisions(std::vector<Revision>& revisions, const std::vector<NamedRef>& refs)
+{
+    std::unordered_map<std::string, Revision*> by_oid;
+    by_oid.reserve(revisions.size());
+    for (Revision& revision : revisions)
+    {
+        revision.pushed = false;
+        by_oid.emplace(revision.oid, &revision);
+    }
+    std::vector<std::string> pending;
+    for (const NamedRef& ref : refs)
+    {
+        if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK || ref.kind == GG_NAMED_REF_REMOTE_TAG)
+            pending.push_back(ref.target);
+    }
+    while (!pending.empty())
+    {
+        const auto found = by_oid.find(pending.back());
+        pending.pop_back();
+        if (found == by_oid.end() || found->second->pushed)
+            continue;
+        found->second->pushed = true;
+        pending.insert(pending.end(), found->second->parents.begin(), found->second->parents.end());
+    }
 }
 
 std::string FirstLine(const std::string& value)

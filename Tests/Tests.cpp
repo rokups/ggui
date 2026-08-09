@@ -262,6 +262,19 @@ TEST(TextHelpers, ShortensAndSelectsFirstLine)
     EXPECT_EQ(FirstLine("subject\nbody"), "subject");
 }
 
+TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
+{
+    std::vector<Revision> revisions{
+        {"tip", {"root"}, {}, {}, {}, 0, false, false, false},
+        {"side", {"root"}, {}, {}, {}, 0, false, false, false},
+        {"root", {}, {}, {}, {}, 0, false, false, false},
+    };
+    MarkPushedRevisions(revisions, {{"main", "origin", "tip", GG_NAMED_REF_REMOTE_BOOKMARK, true, false}});
+    EXPECT_TRUE(revisions[0].pushed);
+    EXPECT_FALSE(revisions[1].pushed);
+    EXPECT_TRUE(revisions[2].pushed);
+}
+
 TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
 {
     TemporaryRepository repository;

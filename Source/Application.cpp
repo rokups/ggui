@@ -57,6 +57,7 @@ constexpr ImU32 kStatusDeleted = IM_COL32(248, 81, 73, 255);
 constexpr ImU32 kStatusRenamed = IM_COL32(47, 129, 247, 255);
 constexpr ImU32 kStatusSpecial = IM_COL32(166, 91, 216, 255);
 constexpr ImU32 kStatusConflict = IM_COL32(255, 123, 114, 255);
+constexpr ImU32 kStatusPushed = IM_COL32(82, 132, 196, 255);
 
 #ifdef IMGUI_BUILD_TESTING
 Application* test_application = nullptr;
@@ -1089,8 +1090,12 @@ void Application::RenderHistory()
                 draw->AddCircle(ImVec2(dot_x, center), kDotRadius + 3.0f, IM_COL32(47, 129, 247, 150), 0, 2.0f);
             draw->AddCircleFilled(ImVec2(dot_x, center), kDotRadius,
                 revision.conflicted ? kStatusConflict
-                                    : revision.working_copy ? kStatusAdded : IM_COL32(246, 248, 250, 255));
+                    : revision.working_copy ? kStatusAdded
+                    : revision.pushed       ? kStatusPushed
+                                            : IM_COL32(246, 248, 250, 255));
             draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
+            if (hovered && revision.pushed)
+                ImGui::SetTooltip("Pushed (locked)");
 
             const float content_x = minimum.x + graph_width + 12.0f;
             ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(maximum.x - 8.0f, maximum.y), true);
