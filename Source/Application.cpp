@@ -36,7 +36,7 @@ namespace Ggui
 namespace
 {
 
-constexpr float kRowHeight = 50.0f;
+constexpr float kRowHeight = 34.0f;
 constexpr float kLaneWidth = 20.0f;
 constexpr float kDotRadius = 5.0f;
 constexpr float kGraphPadding = 12.0f;
@@ -1117,17 +1117,17 @@ void Application::RenderHistory()
             const float content_x = minimum.x + graph_width + 12.0f;
             ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(maximum.x - 8.0f, maximum.y), true);
             const std::string description = FirstLine(revision.description);
-            ImGui::SetCursorScreenPos(ImVec2(content_x, minimum.y + 6.0f));
-            ImGui::TextUnformatted(description.empty() ? "(no description)" : description.c_str());
-            ImVec2 meta_cursor(content_x, minimum.y + 28.0f);
-            meta_cursor.x = DrawHighlightedId(
-                draw, meta_cursor, revision.change_id, ChangePrefix(revision.change_id));
-            meta_cursor.x += ImGui::CalcTextSize("  ").x;
-            meta_cursor.x = DrawHighlightedId(draw, meta_cursor, revision.oid, RevisionPrefix(revision.oid));
-            meta_cursor.x += ImGui::CalcTextSize("  ").x;
-            draw->AddText(meta_cursor, kTextMuted, revision.author.c_str());
-            ImVec2 badge_cursor(
-                meta_cursor.x + ImGui::CalcTextSize(revision.author.c_str()).x + 12.0f, minimum.y + 28.0f);
+            const char* title = description.empty() ? "(no description)" : description.c_str();
+            ImVec2 content_cursor(content_x, center - ImGui::GetTextLineHeight() * 0.5f);
+            draw->AddText(content_cursor, ImGui::GetColorU32(ImGuiCol_Text), title);
+            content_cursor.x += ImGui::CalcTextSize(title).x + 16.0f;
+            content_cursor.x = DrawHighlightedId(
+                draw, content_cursor, revision.change_id, ChangePrefix(revision.change_id));
+            content_cursor.x += ImGui::CalcTextSize("  ").x;
+            content_cursor.x = DrawHighlightedId(draw, content_cursor, revision.oid, RevisionPrefix(revision.oid));
+            content_cursor.x += ImGui::CalcTextSize("  ").x;
+            draw->AddText(content_cursor, kTextMuted, revision.author.c_str());
+            ImVec2 badge_cursor(content_cursor.x + ImGui::CalcTextSize(revision.author.c_str()).x + 12.0f, center);
             for (const NamedRef& ref : _snapshot->refs)
             {
                 if (ref.target != revision.oid) continue;
@@ -1138,7 +1138,7 @@ void Application::RenderHistory()
                         return other.target == ref.target && other.name == ref.name && other.kind == remote_kind;
                     }))
                     continue;
-                DrawBadge(draw, badge_cursor, minimum.y + 36.0f, ref.name, RefBadgeColor(ref));
+                DrawBadge(draw, badge_cursor, center, ref.name, RefBadgeColor(ref));
             }
             ImGui::PopClipRect();
 

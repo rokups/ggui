@@ -539,6 +539,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         {
             const ImGuiTestItemInfo current = context->ItemInfo(rows[row]);
             const ImGuiTestItemInfo next = context->ItemInfo(rows[row + 1]);
+            IM_CHECK_LE(current.RectFull.GetHeight(), 36.0f);
             IM_CHECK_LE(std::fabs(current.RectFull.Max.y - next.RectFull.Min.y), 0.01f);
         }
         if (rows.size() >= 2)
