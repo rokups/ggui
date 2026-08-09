@@ -492,7 +492,6 @@ void Application::LoadSettings()
         nlohmann::json json;
         input >> json;
         _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
-        _dark_theme = json.value("darkTheme", true);
         _default_layout = json.value("defaultLayout", true);
     }
     catch (const std::exception& error)
@@ -508,8 +507,8 @@ void Application::SaveSettings()
     try
     {
         std::filesystem::create_directories(_settings_path.parent_path());
-        const nlohmann::json json{{"recentRepositories", _recent_repositories}, {"darkTheme", _dark_theme},
-            {"defaultLayout", _default_layout}};
+        const nlohmann::json json{
+            {"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout}};
         const std::filesystem::path temporary = _settings_path.string() + ".tmp";
         std::ofstream(temporary) << json.dump(2) << '\n';
         std::error_code error;
@@ -654,14 +653,14 @@ void Application::RenderFrame()
     else
     {
         SetupDockspace();
-        RenderBookmarks();
-        RenderTags();
-        RenderWorkspaces();
-        RenderRemotes();
-        RenderHistory();
-        RenderChanges();
-        RenderDiff();
-        RenderOperations();
+        if (_show_bookmarks) RenderBookmarks();
+        if (_show_tags) RenderTags();
+        if (_show_workspaces) RenderWorkspaces();
+        if (_show_remotes) RenderRemotes();
+        if (_show_history) RenderHistory();
+        if (_show_changes) RenderChanges();
+        if (_show_diff) RenderDiff();
+        if (_show_operations) RenderOperations();
     }
     RenderDialogs();
 }
@@ -688,12 +687,9 @@ void Application::SetupDockspace()
         ImGui::DockBuilderRemoveNode(dockspace);
         ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace, viewport->WorkSize);
-        ImGuiID operations = 0;
-        ImGuiID content = 0;
-        ImGui::DockBuilderSplitNode(dockspace, ImGuiDir_Down, 0.25f, &operations, &content);
         ImGuiID references = 0;
         ImGuiID main = 0;
-        ImGui::DockBuilderSplitNode(content, ImGuiDir_Left, 0.24f, &references, &main);
+        ImGui::DockBuilderSplitNode(dockspace, ImGuiDir_Left, 0.24f, &references, &main);
         ImGuiID center = 0;
         ImGuiID diff = 0;
         ImGui::DockBuilderSplitNode(main, ImGuiDir_Left, 0.68f, &center, &diff);
@@ -707,7 +703,7 @@ void Application::SetupDockspace()
         ImGui::DockBuilderDockWindow("History", history);
         ImGui::DockBuilderDockWindow("Changes", changes);
         ImGui::DockBuilderDockWindow("Diff", diff);
-        ImGui::DockBuilderDockWindow("Operations", operations);
+        ImGui::DockBuilderDockWindow("Operations", diff);
         ImGui::DockBuilderFinish(dockspace);
         _default_layout = false;
     }
@@ -767,14 +763,26 @@ void Application::RenderMenuBar()
     }
     if (ImGui::BeginMenu("View"))
     {
-        bool dark = _dark_theme;
-        if (ImGui::MenuItem("Dark theme", nullptr, &dark))
+        if (_snapshot != nullptr)
         {
-            _dark_theme = dark;
-            ApplyTheme();
+            ImGui::MenuItem("Bookmarks", nullptr, &_show_bookmarks);
+            ImGui::MenuItem("Tags", nullptr, &_show_tags);
+            ImGui::MenuItem("Workspaces", nullptr, &_show_workspaces);
+            ImGui::MenuItem("Remotes", nullptr, &_show_remotes);
+            ImGui::Separator();
+            ImGui::MenuItem("History", nullptr, &_show_history);
+            ImGui::MenuItem("Changes", nullptr, &_show_changes);
+            ImGui::MenuItem("Diff", nullptr, &_show_diff);
+            ImGui::MenuItem("Operations", nullptr, &_show_operations);
+            ImGui::Separator();
         }
         if (ImGui::MenuItem("Reset layout"))
+        {
             _default_layout = true;
+            _show_bookmarks = _show_tags = _show_workspaces = _show_remotes = true;
+            _show_history = _show_changes = _show_diff = true;
+            _show_operations = false;
+        }
         ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
@@ -872,7 +880,11 @@ void Application::RenderWelcome()
 
 void Application::RenderBookmarks()
 {
-    ImGui::Begin("Bookmarks");
+    if (!ImGui::Begin("Bookmarks", &_show_bookmarks))
+    {
+        ImGui::End();
+        return;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
     for (const NamedRef& ref : _snapshot->refs)
@@ -905,7 +917,11 @@ void Application::RenderBookmarks()
 
 void Application::RenderTags()
 {
-    ImGui::Begin("Tags");
+    if (!ImGui::Begin("Tags", &_show_tags))
+    {
+        ImGui::End();
+        return;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
     for (const NamedRef& ref : _snapshot->refs)
@@ -937,7 +953,11 @@ void Application::RenderTags()
 
 void Application::RenderWorkspaces()
 {
-    ImGui::Begin("Workspaces");
+    if (!ImGui::Begin("Workspaces", &_show_workspaces))
+    {
+        ImGui::End();
+        return;
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Add workspace", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::WorkspaceAdd);
     for (const Workspace& workspace : _snapshot->workspaces)
@@ -969,7 +989,11 @@ void Application::RenderWorkspaces()
 
 void Application::RenderRemotes()
 {
-    ImGui::Begin("Remotes");
+    if (!ImGui::Begin("Remotes", &_show_remotes))
+    {
+        ImGui::End();
+        return;
+    }
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
@@ -1058,7 +1082,11 @@ std::size_t Application::OperationPrefix(const std::string& oid) const
 
 void Application::RenderHistory()
 {
-    ImGui::Begin("History");
+    if (!ImGui::Begin("History", &_show_history))
+    {
+        ImGui::End();
+        return;
+    }
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##graph filter", "Filter changes, IDs, bookmarks, tags", &_graph_filter);
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
@@ -1258,7 +1286,11 @@ void Application::RenderHistory()
 
 void Application::RenderChanges()
 {
-    ImGui::Begin("Changes");
+    if (!ImGui::Begin("Changes", &_show_changes))
+    {
+        ImGui::End();
+        return;
+    }
     if (_diff.files.empty())
         ImGui::TextDisabled("Selected change is empty.");
     else
@@ -1336,7 +1368,11 @@ void Application::RenderChanges()
 
 void Application::RenderDiff()
 {
-    ImGui::Begin("Diff");
+    if (!ImGui::Begin("Diff", &_show_diff))
+    {
+        ImGui::End();
+        return;
+    }
     if (_diff.revision.empty())
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
@@ -1409,7 +1445,11 @@ void Application::RenderDiff()
 
 void Application::RenderOperations()
 {
-    ImGui::Begin("Operations");
+    if (!ImGui::Begin("Operations", &_show_operations))
+    {
+        ImGui::End();
+        return;
+    }
     if (!_error_message.empty())
     {
         ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s", _error_message.c_str());

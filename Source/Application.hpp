@@ -161,6 +161,14 @@ private:
     bool _running = true;
     bool _default_layout = true;
     bool _dark_theme = true;
+    bool _show_bookmarks = true;
+    bool _show_tags = true;
+    bool _show_workspaces = true;
+    bool _show_remotes = true;
+    bool _show_history = true;
+    bool _show_changes = true;
+    bool _show_diff = true;
+    bool _show_operations = false;
 #ifdef IMGUI_BUILD_TESTING
     ImGuiTestEngine* _test_engine = nullptr;
     bool _test_mode = false;

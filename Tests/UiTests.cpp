@@ -229,12 +229,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Application", "OpenRepositoryAndPanels");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
-        for (const char* panel : {"History", "Changes", "Diff", "Operations"})
+        for (const char* panel : {"History", "Changes", "Diff"})
         {
             ImGuiWindow* window = WaitForWindow(context, panel);
             IM_CHECK_NE(window, nullptr);
             IM_CHECK(window->Active);
         }
+        ImGuiWindow* operations = ImGui::FindWindowByName("Operations");
+        IM_CHECK(operations == nullptr || !operations->Active);
         ImGuiWindow* bookmarks = WaitForWindow(context, "Bookmarks");
         IM_CHECK_NE(bookmarks, nullptr);
         for (const char* panel : {"Tags", "Workspaces", "Remotes"})
@@ -277,8 +279,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             OpenAndCancel(context, path.c_str());
         }
 
-        context->MenuClick("//##MainMenuBar/View/Dark theme");
-        context->MenuClick("//##MainMenuBar/View/Dark theme");
+        for (const char* panel : {"Bookmarks", "Tags", "Workspaces", "Remotes", "History", "Changes", "Diff"})
+        {
+            const std::string path = std::string("//##MainMenuBar/View/") + panel;
+            context->MenuClick(path.c_str());
+            context->Yield();
+            ImGuiWindow* hidden = ImGui::FindWindowByName(panel);
+            IM_CHECK(hidden == nullptr || !hidden->Active);
+            context->MenuClick(path.c_str());
+            IM_CHECK_NE(WaitForWindow(context, panel), nullptr);
+        }
+        context->MenuClick("//##MainMenuBar/View/Operations");
+        IM_CHECK_NE(WaitForWindow(context, "Operations"), nullptr);
+        context->MenuClick("//##MainMenuBar/View/Operations");
+        context->Yield();
+        IM_CHECK(!ImGui::FindWindowByName("Operations")->Active);
         context->MenuClick("//##MainMenuBar/View/Reset layout");
         context->MenuClick("//##MainMenuBar/Repository/Refresh");
         context->Yield(3);
@@ -416,7 +431,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
         context->Yield(2);
 
-        context->SetRef("Operations");
+        context->MenuClick("//##MainMenuBar/View/Operations");
+        FocusWindow(context, "Operations");
         context->ItemClick("**/Restore");
         context->Yield(2);
 
