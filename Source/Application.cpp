@@ -169,7 +169,7 @@ float DrawHighlightedId(
     if (shown == 0)
         return position.x;
     const std::size_t unique = std::min(shown, unique_length);
-    draw->AddText(position, ImGui::GetColorU32(ImGuiCol_Text), id.data(), id.data() + unique);
+    draw->AddText(position, ImGui::GetColorU32(ImGuiCol_TextLink), id.data(), id.data() + unique);
     position.x += ImGui::CalcTextSize(id.data(), id.data() + unique).x;
     draw->AddText(position, suffix_color, id.data() + unique, id.data() + shown);
     return position.x + ImGui::CalcTextSize(id.data() + unique, id.data() + shown).x;
@@ -179,7 +179,9 @@ void TextHighlightedId(std::string_view id, std::size_t unique_length)
 {
     const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
     const std::size_t unique = std::min(shown, unique_length);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextLink));
     ImGui::TextUnformatted(id.data(), id.data() + unique);
+    ImGui::PopStyleColor();
     if (unique != shown)
     {
         ImGui::SameLine(0.0f, 0.0f);
