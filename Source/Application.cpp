@@ -1177,14 +1177,19 @@ void Application::RenderChanges()
     {
         ImGui::PushID(&file);
         const std::string label = std::string(DeltaName(file.status)) + "  " + file.path;
+        const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
-        ImGui::PushStyleColor(ImGuiCol_Text, accent);
-        const bool selected = ImGui::Selectable(label.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
-        ImGui::PopStyleColor();
+        const bool selected =
+            ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
-        ImGui::GetWindowDrawList()->AddRectFilled(
-            minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f, ImDrawFlags_RoundCornersLeft);
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f,
+            ImDrawFlags_RoundCornersLeft);
+        draw->AddText(
+            ImVec2(minimum.x + 12.0f,
+                minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f),
+            accent, label.c_str());
         if (selected) SelectFile(file.path);
         if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
         {
