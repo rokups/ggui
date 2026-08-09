@@ -822,13 +822,16 @@ void Application::RenderNavigator()
                 if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK)
                     continue;
                 ImGui::PushID(&ref);
-                if (ImGui::Selectable(ref.name.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+                const std::string item_id = "###" + ref.name;
+                if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
                     SelectRevision(ref.target);
                 const ImVec2 minimum = ImGui::GetItemRectMin();
                 const ImVec2 maximum = ImGui::GetItemRectMax();
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), RefBadgeColor(ref), 4.0f,
                     ImDrawFlags_RoundCornersLeft);
+                draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text),
+                    ref.name.c_str());
                 DrawHighlightedId(
                     draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target, RevisionPrefix(ref.target));
                 if (ImGui::BeginPopupContextItem("bookmark context"))
@@ -849,12 +852,15 @@ void Application::RenderNavigator()
                 if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
                     continue;
                 ImGui::PushID(&ref);
-                if (ImGui::Selectable(ref.name.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
+                const std::string item_id = "###" + ref.name;
+                if (ImGui::Selectable(item_id.c_str(), ref.target == _selected_revision, 0, ImVec2(0.0f, 38.0f)))
                     SelectRevision(ref.target);
                 const ImVec2 minimum = ImGui::GetItemRectMin();
                 const ImVec2 maximum = ImGui::GetItemRectMax();
                 ImGui::GetWindowDrawList()->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y),
                     RefBadgeColor(ref), 4.0f, ImDrawFlags_RoundCornersLeft);
+                ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f),
+                    ImGui::GetColorU32(ImGuiCol_Text), ref.name.c_str());
                 DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
                     ref.target, RevisionPrefix(ref.target));
                 if (ImGui::BeginPopupContextItem("tag context"))
