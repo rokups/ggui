@@ -287,7 +287,10 @@ TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
         {"side", {"root"}, {}, {}, {}, 0, false, false, false},
         {"root", {}, {}, {}, {}, 0, false, false, false},
     };
-    MarkPushedRevisions(revisions, {{"main", "origin", "tip", GG_NAMED_REF_REMOTE_BOOKMARK, true, false}});
+    MarkPushedRevisions(revisions,
+        {{"main", "origin", "tip", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
+            {"release", "origin", "tip", GG_NAMED_REF_REMOTE_TAG, true, false},
+            {"missing", "origin", "absent", GG_NAMED_REF_REMOTE_BOOKMARK, true, false}});
     EXPECT_TRUE(revisions[0].pushed);
     EXPECT_FALSE(revisions[1].pushed);
     EXPECT_TRUE(revisions[2].pushed);
