@@ -438,7 +438,6 @@ struct RepositoryEngine::Impl
 
         gg_revision_query_options query = GG_REVISION_QUERY_OPTIONS_INIT;
         query.revisions = "all()";
-        query.limit = 2000;
         Revisions revisions;
         Check(gg_repository_revisions(&revisions.value, gg, &query), "load revisions");
         result->revisions.reserve(revisions.value.count);
