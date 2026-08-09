@@ -37,6 +37,14 @@ void CheckGit(int result)
     }
 }
 
+std::string Quote(const std::filesystem::path& value)
+{
+    std::string result = "'";
+    for (const char character : value.string())
+        result += character == '\'' ? "'\\''" : std::string(1, character);
+    return result + "'";
+}
+
 struct TemporaryRepository
 {
     TemporaryRepository()
@@ -329,6 +337,21 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     ASSERT_NE(refreshed, nullptr);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+}
+
+TEST(RepositoryEngine, OpensLinkedWorktree)
+{
+    TemporaryRepository repository;
+    RemovePath worktree{repository.path.string() + "-worktree"};
+    const std::string command =
+        "git -C " + Quote(repository.path) + " worktree add --detach " + Quote(worktree.path) + " >/dev/null 2>&1";
+    ASSERT_EQ(std::system(command.c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{worktree.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    EXPECT_EQ(std::filesystem::weakly_canonical(opened->root), std::filesystem::weakly_canonical(worktree.path));
 }
 
 TEST(RepositoryEngine, ClonesThroughATemporaryDestination)
