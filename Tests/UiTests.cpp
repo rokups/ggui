@@ -170,7 +170,6 @@ RepoSnapshot RichSnapshot()
     snapshot.operations = {{"operation-id", "Undoable operation", 1}};
     snapshot.workspaces = {
         {"current", snapshot.root, "merge", false}, {"stale", "/missing/workspace", "left", true}};
-    snapshot.sparse_patterns = {"Source/**", "!Source/generated/**"};
     snapshot.conflicts = {{"conflict file.txt", 2, 3}};
     return snapshot;
 }
@@ -351,10 +350,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("navigator tabs/Workspaces");
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/Add workspace"));
-        context->ItemClick("navigator tabs/Sparse");
-        context->Yield(2);
-        context->ItemClick("**/Reset patterns");
-        context->Yield(2);
         context->ItemClick("navigator tabs/Bookmarks");
         context->Yield(2);
         context->ItemClick("**/coverage-bookmark");

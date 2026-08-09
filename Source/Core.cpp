@@ -86,12 +86,6 @@ struct Workspaces
     ~Workspaces() { gg_workspace_array_dispose(&value); }
 };
 
-struct SparsePatterns
-{
-    gg_owned_string_array value{};
-    ~SparsePatterns() { gg_owned_string_array_dispose(&value); }
-};
-
 struct Conflicts
 {
     gg_conflict_array value{};
@@ -501,11 +495,6 @@ struct RepositoryEngine::Impl
                 source.root == nullptr ? "" : source.root, OidString(source.working_copy), source.stale != 0});
         }
 
-        SparsePatterns sparse;
-        Check(gg_repository_sparse_patterns(&sparse.value, gg), "load sparse patterns");
-        for (size_t index = 0; index < sparse.value.count; ++index)
-            result->sparse_patterns.emplace_back(sparse.value.strings[index]);
-
         if (!result->working_copy.empty())
         {
             Conflicts conflicts;
@@ -750,12 +739,11 @@ struct RepositoryEngine::Impl
                 },
                 [&](const WorkspaceAdd& value) {
                     gg_workspace_add_options options = GG_WORKSPACE_ADD_OPTIONS_INIT;
-                    static constexpr const char* modes[] = {"copy", "full", "empty"};
                     options.destination = value.destination.c_str();
                     options.name = value.name.c_str();
                     options.revision = value.revision.c_str();
                     options.message = value.message.c_str();
-                    options.sparse_patterns = modes[std::clamp(value.sparse_mode, 0, 2)];
+                    options.sparse_patterns = "full";
                     Mutate("add workspace", [&](auto* out, auto* operation) {
                         return gg_repository_workspace_add(out, gg, &options, operation);
                     });
@@ -769,11 +757,6 @@ struct RepositoryEngine::Impl
                 [&](const WorkspaceRename& value) {
                     Mutate("rename workspace", [&](auto* out, auto* operation) {
                         return gg_repository_workspace_rename(out, gg, value.name.c_str(), operation);
-                    });
-                },
-                [&](const SparseReset&) {
-                    Mutate("reset sparse patterns", [&](auto* out, auto* operation) {
-                        return gg_repository_sparse_reset(out, gg, operation);
                     });
                 },
                 [&](const TrackPaths& value) {
@@ -816,7 +799,6 @@ struct RepositoryEngine::Impl
                 [](const WorkspaceAdd&) { return "add workspace"; },
                 [](const WorkspaceForget&) { return "forget workspace"; },
                 [](const WorkspaceRename&) { return "rename workspace"; },
-                [](const SparseReset&) { return "reset sparse patterns"; },
                 [](const TrackPaths&) { return "track paths"; }, [](const UntrackPaths&) { return "untrack paths"; },
                 [](const ChmodPaths&) { return "chmod"; }},
             command);

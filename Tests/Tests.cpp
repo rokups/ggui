@@ -423,10 +423,9 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Undo{}, "undo"},
         {Redo{}, "redo"},
         {RestoreOperation{"missing"}, "restore operation"},
-        {WorkspaceAdd{workspace.path.string(), "coverage", "@", "workspace", 7}, "add workspace"},
+        {WorkspaceAdd{workspace.path.string(), "coverage", "@", "workspace"}, "add workspace"},
         {WorkspaceForget{{"missing"}}, "forget workspace"},
         {WorkspaceRename{"coverage-renamed"}, "rename workspace"},
-        {SparseReset{}, "reset sparse patterns"},
     };
     for (const auto& [command, operation] : commands)
         ExerciseCommand(engine, command, operation);

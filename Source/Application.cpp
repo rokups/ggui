@@ -878,13 +878,6 @@ void Application::RenderNavigator()
             }
             ImGui::EndTabItem();
         }
-        if (ImGui::BeginTabItem("Sparse"))
-        {
-            if (ImGui::Button("Reset patterns", ImVec2(-1.0f, 0.0f))) _engine.Enqueue(SparseReset{});
-            for (const std::string& pattern : _snapshot->sparse_patterns)
-                ImGui::BulletText("%s", pattern.c_str());
-            ImGui::EndTabItem();
-        }
         ImGui::EndTabBar();
     }
     ImGui::PopStyleVar();
@@ -1384,7 +1377,6 @@ void Application::RenderDialogs()
         if (ImGui::Button("Browse")) _input_primary = PickFolder();
         ImGui::InputTextWithHint("Name", "derived from directory if empty", &_input_secondary);
         ImGui::InputTextWithHint("Revision", "defaults to @", &_input_tertiary);
-        ImGui::Combo("Sparse patterns", &_input_mode, "Copy current\0Full\0Empty\0");
         break;
     case Dialog::WorkspaceRename:
         ImGui::TextUnformatted("Rename current workspace");
@@ -1477,7 +1469,7 @@ void Application::SubmitDialog()
         break;
     case Dialog::WorkspaceAdd:
         _engine.Enqueue(WorkspaceAdd{_input_primary, _input_secondary,
-            _input_tertiary.empty() ? "@" : _input_tertiary, {}, _input_mode});
+            _input_tertiary.empty() ? "@" : _input_tertiary, {}});
         break;
     case Dialog::WorkspaceRename: _engine.Enqueue(WorkspaceRename{_input_primary}); break;
     case Dialog::Credentials:

@@ -79,7 +79,6 @@ struct RepoSnapshot
     std::vector<StatusEntry> status;
     std::vector<Operation> operations;
     std::vector<Workspace> workspaces;
-    std::vector<std::string> sparse_patterns;
     std::vector<Conflict> conflicts;
 };
 
@@ -218,7 +217,6 @@ struct WorkspaceAdd
     std::string name;
     std::string revision;
     std::string message;
-    int sparse_mode = 0;
 };
 struct WorkspaceForget
 {
@@ -227,9 +225,6 @@ struct WorkspaceForget
 struct WorkspaceRename
 {
     std::string name;
-};
-struct SparseReset
-{
 };
 struct TrackPaths
 {
@@ -248,7 +243,7 @@ struct ChmodPaths
 
 using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, LoadDiff, NewChange, Describe,
     Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, Restore, SimplifyParents, Bookmark,
-    Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, SparseReset, TrackPaths,
+    Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
     UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
