@@ -188,6 +188,7 @@ private:
     bool _show_changes = true;
     bool _show_diff = true;
     bool _show_operations = false;
+    bool _diff_side_by_side = true;
 #ifdef IMGUI_BUILD_TESTING
     ImGuiTestEngine* _test_engine = nullptr;
     bool _test_mode = false;

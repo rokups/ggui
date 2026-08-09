@@ -606,6 +606,7 @@ void Application::LoadSettings()
         input >> json;
         _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
         _default_layout = json.value("defaultLayout", true);
+        _diff_side_by_side = json.value("diffSideBySide", true);
     }
     catch (const std::exception& error)
     {
@@ -620,8 +621,8 @@ void Application::SaveSettings()
     try
     {
         std::filesystem::create_directories(_settings_path.parent_path());
-        const nlohmann::json json{
-            {"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout}};
+        const nlohmann::json json{{"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout},
+            {"diffSideBySide", _diff_side_by_side}};
         const std::filesystem::path temporary = _settings_path.string() + ".tmp";
         std::ofstream(temporary) << json.dump(2) << '\n';
         std::error_code error;
@@ -1551,13 +1552,15 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
+    ImGui::Checkbox("Side by side", &_diff_side_by_side);
+    ImGui::Separator();
     if (_diff.revision.empty())
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
     }
     else if (_diff.binary)
     {
-        ImGui::Text("%s is binary.", _diff.path.c_str());
+        ImGui::TextUnformatted("Binary file; no text diff available.");
     }
     else
     {
@@ -1591,8 +1594,8 @@ void Application::RenderDiff()
             loaded_path = _diff.path;
             diff.SetLanguage(DiffLanguage(_diff.path));
             diff.SetText(loaded_before, loaded_after);
-            diff.SetSideBySideMode(true);
         }
+        diff.SetSideBySideMode(_diff_side_by_side);
         if (dark_palette != _dark_theme)
         {
             dark_palette = _dark_theme;
@@ -1601,17 +1604,6 @@ void Application::RenderDiff()
             diff.SetPalette(palette);
             diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
                 _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
-        }
-        TextHighlightedId(_diff.revision, RevisionPrefix(_diff.revision),
-            CommitIdColor(_diff.revision == _snapshot->working_copy));
-        if (!_diff.path.empty())
-        {
-            ImGui::SameLine();
-            ImGui::TextDisabled("%s", _diff.path.c_str());
-            ImGui::SameLine();
-            bool side_by_side = diff.GetSideBySideMode();
-            if (ImGui::Checkbox("Side by side", &side_by_side))
-                diff.SetSideBySideMode(side_by_side);
         }
         if (_diff.path.empty())
             editor.Render("##diff editor", ImGui::GetContentRegionAvail(), true);

@@ -803,6 +803,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DiffOptionsAreGlobal");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.ApplyEventForTest(
+            DiffReady{{1000, "merge", "first.cpp", "old\n", "new\n", {}, false, RichSnapshot().status}});
+        context->Yield(2);
+        context->SetRef("Diff");
+        context->ItemUncheck("Side by side");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "merge", "second.cpp", "before\n", "after\n", {}, false, RichSnapshot().status}});
+        context->Yield(2);
+        context->SetRef("Diff");
+        IM_CHECK(!context->ItemIsChecked("Side by side"));
+        context->ItemCheck("Side by side");
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
