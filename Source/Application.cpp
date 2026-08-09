@@ -1102,11 +1102,6 @@ void Application::RenderToolbar()
         ImGui::EndChild();
         ImGui::PopStyleColor();
     }
-    else if (!_status_message.empty())
-    {
-        ImGui::SetCursorPosX(10.0f);
-        ImGui::TextDisabled("%s", _status_message.c_str());
-    }
 }
 
 void Application::RenderWelcome()
