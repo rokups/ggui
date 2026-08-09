@@ -569,7 +569,7 @@ void Application::WindowSettingsApplyAll(ImGuiContext*, ImGuiSettingsHandler* ha
         return; // GCOV_EXCL_LINE: handler is registered only while the SDL window exists
     const SDL_WindowFlags flags = SDL_GetWindowFlags(application->_window);
     if ((flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)) != 0)
-        SDL_RestoreWindow(application->_window);
+        SDL_RestoreWindow(application->_window); // GCOV_EXCL_LINE: headless Xvfb has no window manager state to restore
     if (application->_window_has_size)
         SDL_SetWindowSize(application->_window, application->_window_width, application->_window_height);
     if (application->_window_has_position)
