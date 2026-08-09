@@ -680,6 +680,38 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "StickyFileSelection");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.ApplyEventForTest(
+            DiffReady{{1000, "merge", {}, {}, {}, {}, false, RichSnapshot().status}});
+        context->Yield(2);
+
+        context->SetRef("Changes");
+        IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
+        context->ItemClick("**/M  modified.txt");
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+
+        context->SetRef("Navigator");
+        context->ItemClick("**/feature");
+        application.ApplyEventForTest(DiffReady{{1000, "left", {}, {}, {}, {}, false,
+            {{{}, "fallback.txt", GIT_DELTA_ADDED, false}}}});
+        context->Yield(2);
+        context->SetRef("Changes");
+        IM_CHECK_EQ(application.SelectedFileForTest(), "fallback.txt");
+
+        context->SetRef("Navigator");
+        context->ItemClick("**/coverage-bookmark");
+        application.ApplyEventForTest(DiffReady{{1000, "merge", {}, {}, {}, {}, false,
+            {{{}, "fallback.txt", GIT_DELTA_ADDED, false},
+                {"modified.txt", "modified.txt", GIT_DELTA_MODIFIED, false}}}});
+        context->Yield(2);
+        context->SetRef("Changes");
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+    };
+
 }
 
 } // namespace Ggui

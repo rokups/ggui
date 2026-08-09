@@ -31,6 +31,7 @@ public:
     void OpenTestRepository(const std::string& path);
     void RefreshForTest();
     std::shared_ptr<const RepoSnapshot> SnapshotForTest() const;
+    const std::string& SelectedFileForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
     void ShowWorkspaceRenameForTest();
@@ -130,6 +131,7 @@ private:
     std::unordered_map<std::string, std::size_t> _operation_prefixes;
     std::string _selected_revision;
     std::string _selected_file;
+    std::string _preferred_file;
     std::vector<std::string> _recent_repositories;
     std::filesystem::path _settings_path;
     std::string _imgui_ini_path;

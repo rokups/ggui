@@ -549,6 +549,8 @@ void Application::ApplyEvent(Event event)
                     RememberRepository(_snapshot->root);
                     _graph_generation = 0;
                     const bool repository_changed = old_root != _snapshot->root;
+                    if (repository_changed)
+                        _preferred_file.clear();
                     const bool follow_working_copy = old_working != _snapshot->working_copy
                         && (_selected_revision == old_working
                             || (old_working.empty() && !_snapshot->working_copy.empty()));
@@ -571,7 +573,22 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
-                    if (value.diff.revision == _selected_revision && value.diff.path == _selected_file)
+                    if (value.diff.revision != _selected_revision)
+                        return;
+                    if (value.diff.path.empty())
+                    {
+                        const auto preferred = std::ranges::find_if(value.diff.files,
+                            [this](const StatusEntry& file) { return file.path == _preferred_file; });
+                        _selected_file = preferred != value.diff.files.end() ? preferred->path
+                            : value.diff.files.empty()                        ? ""
+                                                                            : value.diff.files.front().path;
+                        if (_preferred_file.empty())
+                            _preferred_file = _selected_file;
+                        _diff = std::move(value.diff);
+                        if (!_selected_file.empty())
+                            _engine.Enqueue(LoadDiff{_selected_revision, _selected_file});
+                    }
+                    else if (value.diff.path == _selected_file)
                         _diff = std::move(value.diff);
                 }
                 else if constexpr (std::is_same_v<T, OperationStarted>)
@@ -1629,6 +1646,7 @@ void Application::SelectRevision(const std::string& oid)
 void Application::SelectFile(const std::string& path)
 {
     _selected_file = path;
+    _preferred_file = path;
     if (!_selected_revision.empty())
         _engine.Enqueue(LoadDiff{_selected_revision, path});
 }
@@ -1782,6 +1800,11 @@ std::shared_ptr<const RepoSnapshot> Application::SnapshotForTest() const
     return _snapshot;
 }
 
+const std::string& Application::SelectedFileForTest() const
+{
+    return _selected_file;
+}
+
 void Application::ApplyEventForTest(Event event)
 {
     ApplyEvent(std::move(event));
@@ -1810,6 +1833,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
         : _snapshot->working_copy;
     _selected_file.clear();
+    _preferred_file.clear();
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, {}, false, _snapshot->status};
     _graph_generation = 0;
 }
@@ -1822,6 +1846,7 @@ void Application::ClearSnapshotForTest()
     _operation_prefixes.clear();
     _selected_revision.clear();
     _selected_file.clear();
+    _preferred_file.clear();
     _diff = {};
 }
 
