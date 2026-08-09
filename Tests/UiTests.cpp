@@ -423,6 +423,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         std::size_t original_size = 0;
         const char* original_data = ImGui::SaveIniSettingsToMemory(&original_size);
         const std::string original(original_data, original_size);
+        constexpr std::string_view ignored = "[Ggui][OtherWindow]\nSize=400,300\n\n";
+        ImGui::LoadIniSettingsFromMemory(ignored.data(), ignored.size());
+        constexpr std::string_view maximized =
+            "[Ggui][MainWindow]\nPos=101,102\nSize=901,602\nMaximized=1\n\n";
+        ImGui::LoadIniSettingsFromMemory(maximized.data(), maximized.size());
+        context->Yield(2);
         constexpr std::string_view settings =
             "[Ggui][MainWindow]\nPos=101,102\nSize=901,602\nMaximized=0\n\n";
         ImGui::LoadIniSettingsFromMemory(settings.data(), settings.size());
