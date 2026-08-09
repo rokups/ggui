@@ -89,6 +89,7 @@ struct DiffResult
     std::string path;
     std::string patch;
     bool binary = false;
+    std::vector<StatusEntry> files;
 };
 
 struct OpenRepository

@@ -1055,13 +1055,12 @@ void Application::RenderHistory()
 void Application::RenderChanges()
 {
     ImGui::Begin("Changes");
-    if (_snapshot->status.empty())
-        ImGui::TextDisabled("Working change is empty.");
+    if (_diff.files.empty())
+        ImGui::TextDisabled("Selected change is empty.");
     else
-        ImGui::TextDisabled("%zu working-copy file%s", _snapshot->status.size(),
-            _snapshot->status.size() == 1 ? "" : "s");
+        ImGui::TextDisabled("%zu changed file%s", _diff.files.size(), _diff.files.size() == 1 ? "" : "s");
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
-    for (const StatusEntry& file : _snapshot->status)
+    for (const StatusEntry& file : _diff.files)
     {
         ImGui::PushID(&file);
         const std::string label = std::string(DeltaName(file.status)) + "  " + file.path;
@@ -1074,7 +1073,7 @@ void Application::RenderChanges()
         ImGui::GetWindowDrawList()->AddRectFilled(
             minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f, ImDrawFlags_RoundCornersLeft);
         if (selected) SelectFile(file.path);
-        if (ImGui::BeginPopupContextItem("file context"))
+        if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
         {
             if (ImGui::MenuItem("Commit only this file"))
             {
@@ -1092,7 +1091,7 @@ void Application::RenderChanges()
         ImGui::PopID();
     }
     ImGui::PopStyleVar();
-    if (!_snapshot->conflicts.empty())
+    if (_selected_revision == _snapshot->working_copy && !_snapshot->conflicts.empty())
     {
         ImGui::SeparatorText("Conflicts");
         for (const Conflict& conflict : _snapshot->conflicts)
@@ -1426,9 +1425,8 @@ void Application::SelectRevision(const std::string& oid)
 void Application::SelectFile(const std::string& path)
 {
     _selected_file = path;
-    const std::string revision = _snapshot->working_copy.empty() ? _selected_revision : _snapshot->working_copy;
-    if (!revision.empty())
-        _engine.Enqueue(LoadDiff{revision, path});
+    if (!_selected_revision.empty())
+        _engine.Enqueue(LoadDiff{_selected_revision, path});
 }
 
 // GCOV_EXCL_START: nativefiledialog owns the platform-dependent modal interaction
@@ -1607,7 +1605,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
         : _snapshot->working_copy;
     _selected_file.clear();
-    _diff = {};
+    _diff = {_snapshot->generation, _selected_revision, {}, {}, false, _snapshot->status};
     _graph_generation = 0;
 }
 

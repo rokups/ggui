@@ -539,17 +539,32 @@ struct RepositoryEngine::Impl
             Check(git_commit_tree(&raw_old_tree, parent.get()), "load parent tree");
         }
         std::unique_ptr<git_tree, decltype(&git_tree_free)> old_tree(raw_old_tree, git_tree_free);
-        git_diff_options options = GIT_DIFF_OPTIONS_INIT;
-        char* path = const_cast<char*>(command.path.c_str());
-        if (!command.path.empty())
-            options.pathspec = {&path, 1};
         git_diff* raw_diff = nullptr;
-        Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), &options), "create diff");
+        Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), nullptr), "create diff");
         std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
+        DiffResult result{generation, command.revision, command.path, {}, false, {}};
+        for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
+        {
+            const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
+            if (delta == nullptr)
+                continue;
+            const char* old_path = delta->old_file.path == nullptr ? "" : delta->old_file.path;
+            const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
+            result.files.push_back({old_path, new_path, delta->status, false});
+        }
+        if (!command.path.empty())
+        {
+            git_diff_options options = GIT_DIFF_OPTIONS_INIT;
+            char* path = const_cast<char*>(command.path.c_str());
+            options.pathspec = {&path, 1};
+            raw_diff = nullptr;
+            Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), &options),
+                "create file diff");
+            diff.reset(raw_diff);
+        }
         git_buf patch = GIT_BUF_INIT;
         Check(git_diff_to_buf(&patch, diff.get(), GIT_DIFF_FORMAT_PATCH), "format diff");
-        DiffResult result{generation, command.revision, command.path,
-            patch.ptr == nullptr ? "" : std::string(patch.ptr, patch.size), false};
+        result.patch = patch.ptr == nullptr ? "" : std::string(patch.ptr, patch.size);
         for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
         {
             const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
