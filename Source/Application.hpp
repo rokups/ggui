@@ -36,7 +36,7 @@ public:
     std::shared_ptr<const RepoSnapshot> SnapshotForTest() const;
     const std::string& SelectedFileForTest() const;
     const std::vector<std::string>& SelectedRevisionsForTest() const;
-    std::vector<std::string> NewParentsForTest() const;
+    std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
@@ -58,7 +58,6 @@ private:
     {
         None,
         Clone,
-        New,
         Commit,
         Describe,
         Metaedit,
@@ -124,6 +123,8 @@ private:
     std::size_t OperationPrefix(const std::string& oid) const;
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
+    std::vector<std::string> SelectedParentRevisions() const;
+    void CreateChange();
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);

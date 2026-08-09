@@ -93,6 +93,12 @@ ImGuiWindow* WaitForWindow(ImGuiTestContext* context, const char* name)
     return window;
 }
 
+bool ActionDialogOpen()
+{
+    const ImGuiWindow* window = ImGui::FindWindowByName("ggui action");
+    return window != nullptr && window->Active;
+}
+
 bool WaitForItem(ImGuiTestContext* context, const char* window, const char* item)
 {
     for (int attempt = 0; attempt < 200; ++attempt)
@@ -257,12 +263,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Workflow", "CreateEditAndInspectWorkingChange");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
-        context->MenuClick("//##MainMenuBar/Change/New...");
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        context->ItemInputValue("Description", "work");
-        context->ItemClick("Apply");
+        const std::string previous_working_copy = Application::Instance().SnapshotForTest()->working_copy;
+        context->MenuClick("//##MainMenuBar/Change/New change");
         context->Yield(4);
+        IM_CHECK_NE(Application::Instance().SnapshotForTest()->working_copy, previous_working_copy);
 
         Repository().Write("tracked.txt", "changed\n");
         Application::Instance().RefreshForTest();
@@ -278,7 +282,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
         OpenAndCancel(context, "//##MainMenuBar/Repository/Clone...");
-        for (const char* action : {"New...", "Commit...", "Describe...", "Metaedit...", "Rebase...", "Squash...",
+        for (const char* action : {"Commit...", "Describe...", "Metaedit...", "Rebase...", "Squash...",
                  "Split...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
@@ -353,16 +357,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
         context->Yield(2);
-        IM_CHECK(!ImGui::FindWindowByName("ggui action")->Active);
+        IM_CHECK(!ActionDialogOpen());
 
         context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_N);
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        IM_CHECK_EQ(ImGui::GetActiveID(), context->ItemInfo("Description").ID);
-        context->ItemInputValue("Description", "keyboard submission");
-        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Enter);
         context->Yield(2);
-        IM_CHECK(!ImGui::FindWindowByName("ggui action")->Active);
+        IM_CHECK(!ActionDialogOpen());
 
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt");
@@ -457,16 +456,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedRevisionsForTest().size(), 2U);
         IM_CHECK_EQ(application.SelectedRevisionsForTest()[0], "left");
         IM_CHECK_EQ(application.SelectedRevisionsForTest()[1], "right");
-        context->SetRef("ggui dockspace");
-        IM_CHECK((context->ItemInfo("New").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        context->ItemClick("New");
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        const std::vector<std::string> parents = application.NewParentsForTest();
+        const std::vector<std::string> parents = application.SelectedParentsForTest();
         IM_CHECK_EQ(parents.size(), 2U);
         IM_CHECK_EQ(parents[0], "change-left");
         IM_CHECK_EQ(parents[1], "change-right");
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("New").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("New");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "PureHelpers");
@@ -643,13 +641,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        ApplyOpenDialog(context, "//##MainMenuBar/Change/New...");
-        context->ItemInputValue("Description", "submitted new change");
-        context->ItemInputValue("Parents", "base");
-        context->ItemCheck("Create without editing");
-        context->ItemClick("Apply");
-        context->Yield(2);
-
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Commit...");
         context->ItemInputValue("Description", "submitted commit");
         context->ItemInputValue("Filesets", " modified.txt, added.txt\n");
@@ -823,9 +814,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         context->SetRef("ggui dockspace");
         context->ItemClick("New");
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
         context->SetRef("ggui dockspace");
         context->ItemClick("Commit");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
@@ -840,9 +830,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Edit/Undo");
         context->MenuClick("//##MainMenuBar/Edit/Redo");
         context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_N);
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
         context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z);
         context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Y);
         context->KeyPress(ImGuiKey_F5);
@@ -921,9 +910,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         context->KeyPress(ImGuiKey_E);
         context->KeyPress(ImGuiKey_N);
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
 
         context->KeyPress(ImGuiKey_S);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);

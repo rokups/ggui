@@ -827,7 +827,7 @@ void Application::RenderFrame()
     {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
         if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
-            OpenDialog(Dialog::New);
+            CreateChange();
     }
     if (!io.WantTextInput)
     {
@@ -845,7 +845,7 @@ void Application::RenderFrame()
             if (ImGui::IsKeyPressed(ImGuiKey_E))
                 _engine.Enqueue(Edit{_selected_revision});
             if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
-                OpenDialog(Dialog::New);
+                CreateChange();
             if (ImGui::IsKeyPressed(ImGuiKey_A))
                 OpenDialog(Dialog::Abandon);
             if (ImGui::IsKeyPressed(ImGuiKey_S))
@@ -953,8 +953,8 @@ void Application::RenderMenuBar()
     }
     if (ImGui::BeginMenu("Change", _snapshot != nullptr))
     {
-        if (ImGui::MenuItem("New...", "Ctrl+N", false, CanCreateChange() && _active_operation.empty()))
-            OpenDialog(Dialog::New);
+        if (ImGui::MenuItem("New change", "Ctrl+N", false, CanCreateChange() && _active_operation.empty()))
+            CreateChange();
         if (ImGui::MenuItem("Commit...")) OpenDialog(Dialog::Commit);
         if (ImGui::MenuItem("Describe...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Describe);
         if (ImGui::MenuItem("Metaedit...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
@@ -1013,7 +1013,9 @@ void Application::RenderToolbar()
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(!CanCreateChange());
-    if (ImGui::Button("New")) OpenDialog(Dialog::New);
+    if (ImGui::Button("New")) CreateChange();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Create and edit an empty change on the selected parent(s). This is undoable.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ImGui::Button("Commit")) OpenDialog(Dialog::Commit);
@@ -1761,23 +1763,6 @@ void Application::OpenDialog(Dialog dialog)
     _input_filesets.clear();
     _input_flag = false;
     _input_mode = 0;
-    if (dialog == Dialog::New)
-    {
-        for (const std::string& oid : _selected_revisions)
-        {
-            if (!_input_secondary.empty()) _input_secondary.push_back('\n');
-            if (oid == _snapshot->working_copy)
-                _input_secondary += '@';
-            else
-            {
-                const auto revision = std::ranges::find_if(
-                    _snapshot->revisions, [&](const Revision& candidate) { return candidate.oid == oid; });
-                _input_secondary += revision == _snapshot->revisions.end() || revision->change_id.empty()
-                    ? oid
-                    : revision->change_id;
-            }
-        }
-    }
     if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
@@ -1796,7 +1781,7 @@ void Application::RenderDialogs()
     if (_dialog == Dialog::None)
         return;
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
-        "Create change###ggui action", "Commit change###ggui action", "Describe change###ggui action",
+        "Commit change###ggui action", "Describe change###ggui action",
         "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Create tag###ggui action", "Add workspace###ggui action",
@@ -1821,12 +1806,6 @@ void Application::RenderDialogs()
         ImGui::InputTextWithHint("###Destination", "/path/to/repository", &_input_secondary);
         ImGui::SameLine();
         if (ImGui::Button("Browse")) _input_secondary = PickFolder();
-        break;
-    case Dialog::New:
-        ImGui::TextUnformatted("Create change");
-        DialogMultiline("Description", &_input_primary, 90.0f, focus_first);
-        DialogMultiline("Parents", &_input_secondary, 70.0f);
-        ImGui::Checkbox("Create without editing", &_input_flag);
         break;
     case Dialog::Commit:
         ImGui::TextUnformatted("Commit working change and create a new one");
@@ -1986,9 +1965,6 @@ void Application::SubmitDialog()
     switch (_dialog)
     {
     case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
-    case Dialog::New:
-        _engine.Enqueue(NewChange{_input_primary, SplitLines(_input_secondary), {}, {}, _input_flag});
-        break;
     case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Describe: _engine.Enqueue(Describe{_selected_revision, _input_primary}); break;
     case Dialog::Metaedit: _engine.Enqueue(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
@@ -2068,6 +2044,31 @@ bool Application::CanCreateChange() const
                return std::ranges::any_of(
                    _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
            });
+}
+
+std::vector<std::string> Application::SelectedParentRevisions() const
+{
+    std::vector<std::string> parents;
+    parents.reserve(_selected_revisions.size());
+    for (const std::string& oid : _selected_revisions)
+    {
+        if (oid == _snapshot->working_copy)
+        {
+            parents.emplace_back("@");
+            continue;
+        }
+        const auto revision = std::ranges::find_if(
+            _snapshot->revisions, [&](const Revision& candidate) { return candidate.oid == oid; });
+        parents.push_back(revision == _snapshot->revisions.end() || revision->change_id.empty()
+                ? oid
+                : revision->change_id);
+    }
+    return parents;
+}
+
+void Application::CreateChange()
+{
+    _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
 }
 
 bool Application::CanSubmitDialog() const
@@ -2256,9 +2257,9 @@ const std::vector<std::string>& Application::SelectedRevisionsForTest() const
     return _selected_revisions;
 }
 
-std::vector<std::string> Application::NewParentsForTest() const
+std::vector<std::string> Application::SelectedParentsForTest() const
 {
-    return SplitLines(_input_secondary);
+    return SelectedParentRevisions();
 }
 
 std::vector<std::string> Application::DialogFilesetsForTest() const
