@@ -368,6 +368,77 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "ActionsLockDuringOperation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.ApplyEventForTest(OperationStarted{"locked operation"});
+        context->Yield(3);
+
+        context->SetRef("ggui dockspace");
+        for (const char* action : {"New", "Commit", "Move @ earlier", "Move @ later", "Undo", "Redo",
+                 "Refresh", "Pull", "Fetch", "Push", "Push to..."})
+        {
+            IM_CHECK(context->ItemExists(action));
+            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        }
+        IM_CHECK((context->ItemInfo("Cancel").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+        FocusWindow(context, "Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        for (const char* action : {"Commit only this file", "Restore this file", "Track", "Untrack"})
+            IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
+                & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        FocusWindow(context, "Bookmarks");
+        IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("##bookmark filter").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("**/feature");
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+        context->ItemClick("**/feature", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Delete").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        FocusWindow(context, "Tags");
+        IM_CHECK((context->ItemInfo("**/Create tag").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("##tag filter").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+
+        FocusWindow(context, "Workspaces");
+        IM_CHECK((context->ItemInfo("**/Add workspace").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemClick("**/current", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Open directory").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Forget").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        FocusWindow(context, "Remotes");
+        context->ItemClick("**/origin", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Pull").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Fetch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        application.ApplyEventForTest(CredentialRequest{
+            "https://example.test/repository", "suggested", GIT_CREDENTIAL_USERPASS_PLAINTEXT});
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemInputValue("Token or passphrase", "secret");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+
+        application.ApplyEventForTest(OperationFinished{"locked operation"});
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        FocusWindow(context, "Bookmarks");
+        IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application::Instance().SetSnapshotForTest(RichSnapshot());

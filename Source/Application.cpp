@@ -639,7 +639,7 @@ void Application::ProcessEvent(SDL_Event& event)
     if (event.type == SDL_EVENT_QUIT
         || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(_window)))
         _running = false;
-    if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
+    if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr && _active_operation.empty())
         _engine.Enqueue(OpenRepository{event.drop.data});
     if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST
         && event.window.windowID == SDL_GetWindowID(_window))
@@ -1067,7 +1067,7 @@ void Application::RenderFrame()
     ImGuiIO& io = ImGui::GetIO();
     if (_dialog == Dialog::None)
     {
-        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
+        if (_active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
         if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             CreateChange();
     }
@@ -1079,7 +1079,8 @@ void Application::RenderFrame()
         if (_snapshot != nullptr && _snapshot->can_redo && _active_operation.empty() && io.KeyCtrl
             && ImGui::IsKeyPressed(ImGuiKey_Y))
             _engine.Enqueue(Redo{});
-        if (_snapshot != nullptr && ImGui::IsKeyPressed(ImGuiKey_F5)) _engine.Enqueue(Refresh{});
+        if (_snapshot != nullptr && _active_operation.empty() && ImGui::IsKeyPressed(ImGuiKey_F5))
+            _engine.Enqueue(Refresh{});
         const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
         if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty() && plain_key
             && !_selected_revision.empty())
@@ -1176,8 +1177,10 @@ void Application::RenderMenuBar()
 {
     if (!ImGui::BeginMainMenuBar())
         return; // GCOV_EXCL_LINE: defensive ImGui frame rejection
+    const bool actions_locked = !_active_operation.empty();
     if (ImGui::BeginMenu("Repository"))
     {
+        ImGui::BeginDisabled(actions_locked);
         if (ActionMenuItem(ICON_MS_FOLDER, "Open...", "Ctrl+O"))
             PickAndOpen(false); // GCOV_EXCL_LINE: native folder picker integration
         if (ActionMenuItem(ICON_MS_CREATE_NEW_FOLDER, "Initialize..."))
@@ -1194,11 +1197,12 @@ void Application::RenderMenuBar()
         ImGui::Separator();
         if (ActionMenuItem(ICON_MS_REFRESH, "Refresh", "F5", _snapshot != nullptr))
             _engine.Enqueue(Refresh{});
+        ImGui::EndDisabled();
         if (ActionMenuItem(ICON_MS_CLOSE, "Quit"))
             _running = false; // GCOV_EXCL_LINE: terminating the host aborts an in-process test queue
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Change", _snapshot != nullptr))
+    if (ImGui::BeginMenu("Change", _snapshot != nullptr && !actions_locked))
     {
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
@@ -1219,7 +1223,7 @@ void Application::RenderMenuBar()
                 "Simplifying the parents will rewrite a locked commit.");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Edit", _snapshot != nullptr))
+    if (ImGui::BeginMenu("Edit", _snapshot != nullptr && !actions_locked))
     {
         if (ActionMenuItem(ICON_MS_UNDO, "Undo", "Ctrl+Z", _snapshot->can_undo && _active_operation.empty()))
             _engine.Enqueue(Undo{});
@@ -1404,9 +1408,11 @@ void Application::RenderWelcome()
     if (!_recent_repositories.empty())
     {
         ImGui::SeparatorText("Recent repositories");
+        ImGui::BeginDisabled(!_active_operation.empty());
         for (const std::string& path : _recent_repositories)
             if (ImGui::Selectable(path.c_str(), false, 0, ImVec2(width, 34.0f)))
                 _engine.Enqueue(OpenRepository{path});
+        ImGui::EndDisabled();
     }
     ImGui::EndGroup();
     ImGui::End();
@@ -1420,7 +1426,10 @@ void Application::RenderBookmarks()
         return;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    const bool actions_locked = !_active_operation.empty();
+    ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
+    ImGui::EndDisabled();
     ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
     std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
@@ -1463,6 +1472,7 @@ void Application::RenderBookmarks()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (local != _snapshot->refs.end() && ImGui::BeginPopupContextItem("bookmark context"))
         {
+            ImGui::BeginDisabled(actions_locked);
             const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
                 return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name;
             });
@@ -1481,6 +1491,7 @@ void Application::RenderBookmarks()
             ImGui::Separator();
             if (ActionMenuItem(ICON_MS_DELETE, "Delete"))
                 _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
@@ -1505,7 +1516,10 @@ void Application::RenderTags()
         return;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    const bool actions_locked = !_active_operation.empty();
+    ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
+    ImGui::EndDisabled();
     ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
     for (const NamedRef& ref : _snapshot->refs)
     {
@@ -1524,7 +1538,9 @@ void Application::RenderTags()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("tag context"))
         {
+            ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
@@ -1548,7 +1564,10 @@ void Application::RenderWorkspaces()
         return;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    const bool actions_locked = !_active_operation.empty();
+    ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Add workspace", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::WorkspaceAdd);
+    ImGui::EndDisabled();
     for (const Workspace& workspace : _snapshot->workspaces)
     {
         ImGui::PushID(&workspace);
@@ -1568,8 +1587,10 @@ void Application::RenderWorkspaces()
         {
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
                 SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
+            ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
             if (ActionMenuItem(ICON_MS_EDIT, "Rename current...")) OpenDialog(Dialog::WorkspaceRename);
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
@@ -1594,6 +1615,7 @@ void Application::RenderRemotes()
         return;
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
+    const bool actions_locked = !_active_operation.empty();
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
@@ -1612,8 +1634,10 @@ void Application::RenderRemotes()
                 push_url, kTextMuted);
         if (ImGui::BeginPopupContextItem("remote context"))
         {
+            ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
             if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
@@ -1707,6 +1731,7 @@ void Application::RenderHistory()
         ImGui::End();
         return;
     }
+    const bool actions_locked = !_active_operation.empty();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##graph filter", "Filter changes, IDs, bookmarks, tags", &_graph_filter);
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
@@ -1733,7 +1758,7 @@ void Application::RenderHistory()
             const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
             const bool hovered = ImGui::IsItemHovered();
             if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
-            if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+            if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
             {
                 const bool choose_action = ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Right;
                 ImGui::SetDragDropPayload(
@@ -1745,7 +1770,7 @@ void Application::RenderHistory()
             }
             std::optional<DropAction> hovered_drop;
             bool hovered_action_drop = false;
-            if (ImGui::BeginDragDropTarget())
+            if (!actions_locked && ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
                 const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
@@ -1776,6 +1801,7 @@ void Application::RenderHistory()
             }
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
+                ImGui::BeginDisabled(actions_locked);
                 const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
                 const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
                 if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
@@ -1820,6 +1846,7 @@ void Application::RenderHistory()
                 if (ActionMenuItem(ICON_MS_EDIT, "Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
                 if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
                 if (ActionMenuItem(ICON_MS_DELETE, "Abandon...")) RequestAbandon(revision.oid);
+                ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
             const ImU32 row_fill = _dark_theme
@@ -2006,7 +2033,7 @@ void Application::RenderHistory()
     }
     ImGui::PopStyleVar();
     ImGui::InvisibleButton("move to end", ImVec2(-1.0f, 22.0f));
-    if (!_visible_revisions.empty() && ImGui::BeginDragDropTarget())
+    if (!actions_locked && !_visible_revisions.empty() && ImGui::BeginDragDropTarget())
     {
         ImGui::TextUnformatted("Move after final change");
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
@@ -2031,6 +2058,7 @@ void Application::RenderHistory()
     }
     if (ImGui::BeginPopup("Drop action"))
     {
+        ImGui::BeginDisabled(actions_locked);
         std::optional<DropAction> action;
         if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move before")) action = DropAction::ReorderBefore;
         if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move after")) action = DropAction::ReorderAfter;
@@ -2041,6 +2069,7 @@ void Application::RenderHistory()
             _pending_drop.action = *action;
             OpenDialog(Dialog::ConfirmDrop);
         }
+        ImGui::EndDisabled();
         ImGui::EndPopup();
     }
     ImGui::End();
@@ -2053,6 +2082,7 @@ void Application::RenderChanges()
         ImGui::End();
         return;
     }
+    const bool actions_locked = !_active_operation.empty();
     if (_diff.files.empty())
         ImGui::TextDisabled("Selected change is empty.");
     else
@@ -2080,7 +2110,7 @@ void Application::RenderChanges()
         const bool elided = DrawTextWithin(
             draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
         if (selected) SelectFile(file.path);
-        if (ImGui::BeginDragDropSource())
+        if (!actions_locked && ImGui::BeginDragDropSource())
         {
             std::string payload = _diff.revision;
             payload.push_back('\0');
@@ -2092,6 +2122,7 @@ void Application::RenderChanges()
         }
         if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
         {
+            ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
             {
                 _selected_file = file.path;
@@ -2113,6 +2144,7 @@ void Application::RenderChanges()
             if (ActionMenuItem(ICON_MS_CLOSE, "Mark non-executable"))
                 QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
                     "Changing this file mode will rewrite the locked working-copy commit.");
+            ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
@@ -2301,7 +2333,9 @@ void Application::RenderOperations()
             TextHighlightedId(operation.oid, OperationPrefix(operation.oid), CommitIdColor(false));
             ImGui::TableNextColumn();
             ImGui::PushID(&operation);
+            ImGui::BeginDisabled(!_active_operation.empty());
             if (ImGui::SmallButton("Restore")) _engine.Enqueue(RestoreOperation{operation.oid});
+            ImGui::EndDisabled();
             ImGui::PopID();
         }
         ImGui::EndTable();
@@ -2311,6 +2345,8 @@ void Application::RenderOperations()
 
 void Application::OpenDialog(Dialog dialog)
 {
+    if (!_active_operation.empty() && dialog != Dialog::Credentials)
+        return;
     _dialog = dialog;
     _input_primary.clear();
     _input_secondary.clear();
@@ -2520,15 +2556,16 @@ void Application::RenderDialogs()
     ImGui::Separator();
     ImGui::Spacing();
     const bool can_submit = CanSubmitDialog();
+    const bool operation_blocks_submit = !_active_operation.empty() && _dialog != Dialog::Credentials;
     const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
     if (focus_first && (_dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked))
         ImGui::SetKeyboardFocusHere();
-    ImGui::BeginDisabled(!_active_operation.empty() || !can_submit);
+    ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
     const char* submit_label = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm" : "Apply";
     const bool submit = (modifies_locked ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                          : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
-        || (submit_shortcut && _active_operation.empty() && can_submit);
+        || (submit_shortcut && !operation_blocks_submit && can_submit);
     if (!can_submit && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Fill in the required fields before applying.");
     if (submit)
@@ -2669,6 +2706,8 @@ std::vector<std::string> Application::SelectedParentRevisions() const
 
 void Application::CreateChange()
 {
+    if (!_active_operation.empty())
+        return;
     const auto selected = _selected_revisions.size() == 1
         ? std::ranges::find(_snapshot->revisions, _selected_revisions.front(), &Revision::oid)
         : _snapshot->revisions.end();
@@ -2729,6 +2768,8 @@ bool Application::DialogModifiesLockedCommit() const
 void Application::QueueCommands(
     std::vector<Command> commands, const std::vector<std::string>& revisions, std::string warning)
 {
+    if (!_active_operation.empty())
+        return;
     if (std::ranges::none_of(revisions, [this](const std::string& revision) { return IsLocked(revision); }))
     {
         for (Command& command : commands)
@@ -2742,7 +2783,7 @@ void Application::QueueCommands(
 
 void Application::RequestAbandon(const std::string& revision)
 {
-    if (revision.empty())
+    if (!_active_operation.empty() || revision.empty())
         return;
     if (_selected_revision != revision)
         SelectRevision(revision);
@@ -2787,6 +2828,8 @@ void Application::SelectFile(const std::string& path)
 // GCOV_EXCL_START: nativefiledialog owns the platform-dependent modal interaction
 void Application::PickAndOpen(bool initialize)
 {
+    if (!_active_operation.empty())
+        return;
     const std::string path = PickFolder();
     if (!path.empty())
         _engine.Enqueue(initialize ? Command{InitRepository{path}} : Command{OpenRepository{path}});
