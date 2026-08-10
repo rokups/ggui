@@ -1781,6 +1781,9 @@ void Application::RenderHistory()
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
+            ImVec2 drop_zone_minimum{};
+            ImVec2 drop_zone_maximum{};
+            ImU32 drop_outline_color = 0;
             bool hovered_action_drop = false;
             if (!actions_locked && ImGui::BeginDragDropTarget())
             {
@@ -1881,13 +1884,18 @@ void Application::RenderHistory()
                 const ImU32 zone_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 80)
                     : *hovered_drop == DropAction::Squash                            ? IM_COL32(220, 170, 70, 80)
                                                                                      : IM_COL32(110, 210, 145, 80);
+                drop_outline_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 230)
+                    : *hovered_drop == DropAction::Squash                        ? IM_COL32(220, 170, 70, 230)
+                                                                                 : IM_COL32(110, 210, 145, 230);
                 const float zone_top = *hovered_drop == DropAction::ReorderBefore ? minimum.y
                     : *hovered_drop == DropAction::Squash                          ? minimum.y + kRowHeight * 0.2f
                                                                                   : minimum.y + kRowHeight * 0.8f;
                 const float zone_bottom = *hovered_drop == DropAction::ReorderBefore ? minimum.y + kRowHeight * 0.2f
                     : *hovered_drop == DropAction::Squash                             ? minimum.y + kRowHeight * 0.8f
                                                                                      : maximum.y;
-                draw->AddRectFilled(ImVec2(minimum.x, zone_top), ImVec2(maximum.x, zone_bottom), zone_color);
+                drop_zone_minimum = ImVec2(minimum.x, zone_top);
+                drop_zone_maximum = ImVec2(maximum.x, zone_bottom);
+                draw->AddRectFilled(drop_zone_minimum, drop_zone_maximum, zone_color);
             }
             const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
             draw->AddRectFilled(minimum, ImVec2(minimum.x + graph_width, maximum.y),
@@ -2045,17 +2053,29 @@ void Application::RenderHistory()
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }
+            if (hovered_drop.has_value())
+                draw->AddRect(drop_zone_minimum + ImVec2(1.0f, 1.0f), drop_zone_maximum - ImVec2(1.0f, 1.0f),
+                    drop_outline_color, 3.0f, ImDrawFlags_None, 2.0f);
+            else if (hovered_action_drop)
+                draw->AddRect(ImVec2(minimum.x + 1.0f, minimum.y + 1.0f),
+                    ImVec2(maximum.x - 1.0f, maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
+                    ImDrawFlags_None, 2.0f);
             ImGui::SetCursorScreenPos(ImVec2(minimum.x, maximum.y));
             ImGui::PopID();
         }
     }
     ImGui::PopStyleVar();
     ImGui::InvisibleButton("move to end", ImVec2(-1.0f, 22.0f));
+    const ImVec2 end_minimum = ImGui::GetItemRectMin();
+    const ImVec2 end_maximum = ImGui::GetItemRectMax();
+    bool hovered_end_drop = false;
     if (!actions_locked && !_visible_revisions.empty() && ImGui::BeginDragDropTarget())
     {
         ImGui::TextUnformatted("Move after final change");
         const Revision& final = _snapshot->revisions[_visible_revisions.back()];
         const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+        hovered_end_drop = dragging != nullptr
+            && (dragging->IsDataType("GGUI_CHANGE") || dragging->IsDataType("GGUI_CHANGE_ACTION"));
         if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
         {
             const std::string tooltip = DropTooltip(DropAction::ReorderAfter, final.change_id);
@@ -2075,6 +2095,10 @@ void Application::RenderHistory()
         }
         ImGui::EndDragDropTarget();
     }
+    if (hovered_end_drop)
+        draw->AddRect(ImVec2(end_minimum.x + 1.0f, end_minimum.y + 1.0f),
+            ImVec2(end_maximum.x - 1.0f, end_maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
+            ImDrawFlags_None, 2.0f);
     ImGui::EndChild();
     if (_open_drop_actions)
     {
