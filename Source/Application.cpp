@@ -1421,6 +1421,7 @@ void Application::RenderBookmarks()
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
+    ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
     std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
     {
@@ -1431,6 +1432,8 @@ void Application::RenderBookmarks()
     }
     for (const std::string& name : names)
     {
+        if (!ContainsInsensitive(name, _bookmark_filter))
+            continue;
         const auto local = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
             return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
         });
@@ -1503,9 +1506,10 @@ void Application::RenderTags()
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
+    ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
     for (const NamedRef& ref : _snapshot->refs)
     {
-        if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
+        if (ref.kind != GG_NAMED_REF_LOCAL_TAG || !ContainsInsensitive(ref.name, _tag_filter))
             continue;
         ImGui::PushID(&ref);
         bool elided = false;

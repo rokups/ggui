@@ -856,6 +856,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "ReferenceFilters");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemInputValue("##bookmark filter", "FEATURE");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/feature"));
+        IM_CHECK(!context->ItemExists("**/coverage-bookmark"));
+        context->ItemInputValue("##bookmark filter", "");
+
+        FocusWindow(context, "Tags");
+        context->ItemInputValue("##tag filter", "missing");
+        context->Yield(2);
+        IM_CHECK(!context->ItemExists("**/coverage-tag"));
+        context->ItemInputValue("##tag filter", "COVERAGE");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/coverage-tag"));
+        context->ItemInputValue("##tag filter", "");
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

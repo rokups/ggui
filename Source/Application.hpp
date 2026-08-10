@@ -155,6 +155,8 @@ private:
     std::vector<int> _visible_revisions;
     std::vector<GraphRow> _graph_rows;
     std::uint64_t _graph_generation = 0;
+    std::string _bookmark_filter;
+    std::string _tag_filter;
     std::string _graph_filter;
     std::string _built_filter;
     std::unordered_map<std::string, std::size_t> _revision_prefixes;
