@@ -364,6 +364,39 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
 }
 
+TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
+{
+    TemporaryRepository repository;
+    RemovePath remote{repository.path.string() + "-bare"};
+    git_repository* raw_remote = nullptr;
+    CheckGit(git_repository_init(&raw_remote, remote.path.string().c_str(), 1));
+    git_repository_free(raw_remote);
+
+    git_repository* raw_repository = nullptr;
+    CheckGit(git_repository_open(&raw_repository, repository.path.string().c_str()));
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> local(raw_repository, git_repository_free);
+    CheckGit(git_remote_set_url(local.get(), "origin", remote.path.string().c_str()));
+    local.reset();
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+
+    engine.Enqueue(Push{"main", "origin"});
+    EXPECT_TRUE(WaitForTerminal(engine, "push").finished);
+    CheckGit(git_repository_open_bare(&raw_remote, remote.path.string().c_str()));
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> bare(raw_remote, git_repository_free);
+    git_reference* raw_main = nullptr;
+    EXPECT_EQ(git_reference_lookup(&raw_main, bare.get(), "refs/heads/main"), GIT_OK);
+    git_reference_free(raw_main);
+    bare.reset();
+
+    engine.Enqueue(Fetch{"origin", false});
+    EXPECT_TRUE(WaitForTerminal(engine, "fetch").finished);
+    engine.Enqueue(Fetch{"origin", true});
+    EXPECT_TRUE(WaitForTerminal(engine, "pull").finished);
+}
+
 TEST(RepositoryEngine, OpensLinkedWorktree)
 {
     TemporaryRepository repository;
