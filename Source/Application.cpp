@@ -1054,8 +1054,6 @@ void Application::RenderToolbar()
     ImGui::TextDisabled("REPOSITORY");
     ImGui::SameLine();
     const std::string repository_name = RepositoryName(_snapshot->root);
-    ImGui::PushStyleVar(
-        ImGuiStyleVar_FramePadding, ImVec2(0.0f, ImGui::GetStyle().FramePadding.y));
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
         _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
@@ -1064,7 +1062,6 @@ void Application::RenderToolbar()
     if (ImGui::Button(repository_name.c_str()))
         SDL_OpenURL(FileUrl(_snapshot->root).c_str()); // GCOV_EXCL_LINE: external application handoff
     ImGui::PopStyleColor(3);
-    ImGui::PopStyleVar();
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
     if (!_snapshot->working_copy.empty())

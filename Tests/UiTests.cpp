@@ -416,6 +416,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const std::string repository_name = Repository().Path().filename().string();
         context->MouseMove(repository_name.c_str());
         context->Yield();
+        const ImGuiTestItemInfo repository_button = context->ItemInfo(repository_name.c_str());
+        IM_CHECK_GT(repository_button.RectFull.GetWidth(), ImGui::CalcTextSize(repository_name.c_str()).x + 12.0f);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
