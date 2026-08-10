@@ -389,7 +389,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
-        for (const char* action : {"Commit only this file", "Restore this file", "Track", "Untrack"})
+        for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
+                 "Restore this file", "Track", "Untrack"})
             IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
                 & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
@@ -1231,6 +1232,27 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             }
         }
 
+        context->SetRef("Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Move to parent"));
+        IM_CHECK(context->ItemExists("**/Move to child"));
+        context->KeyPress(ImGuiKey_Escape);
+
+        application.SelectRevisionForTest("right");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "right", {}, {}, {}, false, RichSnapshot().status}});
+        context->Yield(2);
+        context->SetRef("Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        for (const char* action : {"Move to parent", "Move to child"})
+            IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
+                & ImGuiItemFlags_Disabled) == 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
         context->SetRef("Changes");
         for (const char* action : {"Restore this file", "Track", "Untrack", "Mark executable", "Mark non-executable"})
         {

@@ -2137,6 +2137,24 @@ void Application::RenderChanges()
         return;
     }
     const bool actions_locked = !_active_operation.empty();
+    std::string parent;
+    std::string child;
+    const auto source = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
+    if (source != _snapshot->revisions.end())
+    {
+        if (source->parents.size() == 1)
+            parent = source->parents.front();
+        int children = 0;
+        for (const Revision& revision : _snapshot->revisions)
+        {
+            if (std::ranges::find(revision.parents, source->oid) == revision.parents.end())
+                continue;
+            child = revision.oid;
+            ++children;
+        }
+        if (children != 1)
+            child.clear();
+    }
     if (_diff.files.empty())
         ImGui::TextDisabled("Selected change is empty.");
     else
@@ -2179,31 +2197,45 @@ void Application::RenderChanges()
             ImGui::Text("Move %s", file.path.c_str());
             ImGui::EndDragDropSource();
         }
-        if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
+        if (ImGui::BeginPopupContextItem("file context"))
         {
-            ImGui::BeginDisabled(actions_locked);
-            if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
-            {
-                _selected_file = file.path;
-                OpenDialog(Dialog::Commit);
-                _input_filesets = file.path;
-            }
-            if (ActionMenuItem(ICON_MS_RESTORE, "Restore this file"))
-                QueueCommands({Restore{"@-", "@", {file.path}}}, {"@"},
-                    "Restoring this file will rewrite the locked working-copy commit.");
-            if (ActionMenuItem(ICON_MS_ADD, "Track"))
-                QueueCommands({TrackPaths{{file.path}}}, {"@"},
-                    "Tracking this file will rewrite the locked working-copy commit.");
-            if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
-                QueueCommands({UntrackPaths{{file.path}}}, {"@"},
-                    "Untracking this file will rewrite the locked working-copy commit.");
-            if (ActionMenuItem(ICON_MS_CHECK, "Mark executable"))
-                QueueCommands({ChmodPaths{{file.path}, true}}, {"@"},
-                    "Changing this file mode will rewrite the locked working-copy commit.");
-            if (ActionMenuItem(ICON_MS_CLOSE, "Mark non-executable"))
-                QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
-                    "Changing this file mode will rewrite the locked working-copy commit.");
+            ImGui::BeginDisabled(actions_locked || parent.empty());
+            if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to parent"))
+                QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
+                    "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
+            ImGui::BeginDisabled(actions_locked || child.empty());
+            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to child"))
+                QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
+                    "Moving this file will rewrite a locked source or destination commit.");
+            ImGui::EndDisabled();
+            if (_selected_revision == _snapshot->working_copy)
+            {
+                ImGui::Separator();
+                ImGui::BeginDisabled(actions_locked);
+                if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
+                {
+                    _selected_file = file.path;
+                    OpenDialog(Dialog::Commit);
+                    _input_filesets = file.path;
+                }
+                if (ActionMenuItem(ICON_MS_RESTORE, "Restore this file"))
+                    QueueCommands({Restore{"@-", "@", {file.path}}}, {"@"},
+                        "Restoring this file will rewrite the locked working-copy commit.");
+                if (ActionMenuItem(ICON_MS_ADD, "Track"))
+                    QueueCommands({TrackPaths{{file.path}}}, {"@"},
+                        "Tracking this file will rewrite the locked working-copy commit.");
+                if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
+                    QueueCommands({UntrackPaths{{file.path}}}, {"@"},
+                        "Untracking this file will rewrite the locked working-copy commit.");
+                if (ActionMenuItem(ICON_MS_CHECK, "Mark executable"))
+                    QueueCommands({ChmodPaths{{file.path}, true}}, {"@"},
+                        "Changing this file mode will rewrite the locked working-copy commit.");
+                if (ActionMenuItem(ICON_MS_CLOSE, "Mark non-executable"))
+                    QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
+                        "Changing this file mode will rewrite the locked working-copy commit.");
+                ImGui::EndDisabled();
+            }
             ImGui::EndPopup();
         }
         if (hovered && elided)
