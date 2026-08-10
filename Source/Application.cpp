@@ -2251,12 +2251,6 @@ void Application::RenderChanges()
                 if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
                     QueueCommands({UntrackPaths{{file.path}}}, {"@"},
                         "Untracking this file will rewrite the locked working-copy commit.");
-                if (ActionMenuItem(ICON_MS_CHECK, "Mark executable"))
-                    QueueCommands({ChmodPaths{{file.path}, true}}, {"@"},
-                        "Changing this file mode will rewrite the locked working-copy commit.");
-                if (ActionMenuItem(ICON_MS_CLOSE, "Mark non-executable"))
-                    QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
-                        "Changing this file mode will rewrite the locked working-copy commit.");
                 ImGui::EndDisabled();
             }
             ImGui::EndPopup();

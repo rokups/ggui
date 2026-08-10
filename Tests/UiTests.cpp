@@ -1330,7 +1330,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(2);
         context->SetRef("Changes");
-        for (const char* action : {"Restore this file", "Track", "Untrack", "Mark executable", "Mark non-executable"})
+        for (const char* action : {"Restore this file", "Track", "Untrack"})
         {
             context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
             context->Yield();
@@ -1338,6 +1338,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(path.c_str());
             context->Yield(2);
         }
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(!context->ItemExists("**/Mark executable"));
+        IM_CHECK(!context->ItemExists("**/Mark non-executable"));
+        context->KeyPress(ImGuiKey_Escape);
 
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark", ImGuiMouseButton_Right);
