@@ -1471,7 +1471,7 @@ void Application::RenderBookmarks()
         elided |= DrawHighlightedIdWithin(ImGui::GetWindowDrawList(),
             ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), maximum.x - 8.0f, ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
-        if (local != _snapshot->refs.end() && ImGui::BeginPopupContextItem("bookmark context"))
+        if (ImGui::BeginPopupContextItem("bookmark context"))
         {
             ImGui::BeginDisabled(actions_locked);
             const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
@@ -1481,17 +1481,29 @@ void Application::RenderBookmarks()
                 : std::ranges::any_of(_snapshot->remotes, [](const Remote& candidate) { return candidate.name == "origin"; })
                 ? "origin"
                 : _snapshot->remotes.empty() ? "" : _snapshot->remotes.front().name;
-            if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, !remote.empty()))
+            const bool has_local = local != _snapshot->refs.end();
+            if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, has_local && !remote.empty()))
                 _engine.Enqueue(Push{name, remote});
-            if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr, !_snapshot->remotes.empty()))
+            if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
+                    has_local && !_snapshot->remotes.empty()))
             {
                 OpenDialog(Dialog::PushTo);
                 _input_primary = remote;
                 _input_secondary = name;
             }
             ImGui::Separator();
-            if (ActionMenuItem(ICON_MS_DELETE, "Delete"))
-                _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
+            const std::string delete_label = IconLabel(ICON_MS_DELETE, "Delete");
+            if (ImGui::BeginMenu(delete_label.c_str()))
+            {
+                if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
+                    _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
+                for (const NamedRef& candidate : _snapshot->refs)
+                    if (candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name
+                        && !candidate.remote.empty()
+                        && ActionMenuItem(ICON_MS_CLOUD, candidate.remote))
+                        _engine.Enqueue(RemoteBookmarkDelete{name, candidate.remote});
+                ImGui::EndMenu();
+            }
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }

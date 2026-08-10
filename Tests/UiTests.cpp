@@ -986,6 +986,37 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/M  modified.txt"));
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "BookmarkContextMenus");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        FocusWindow(context, "Bookmarks");
+
+        context->ItemClick("**/remote-only", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Delete").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("**/Delete");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/upstream").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->KeyPress(ImGuiKey_Escape);
+        context->KeyPress(ImGuiKey_Escape);
+        FocusWindow(context, "Bookmarks");
+
+        context->ItemClick("**/remote-bookmark", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("**/Delete");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/origin").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->KeyPress(ImGuiKey_Escape);
+        context->KeyPress(ImGuiKey_Escape);
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
@@ -1183,6 +1214,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Push"));
         IM_CHECK(context->ItemExists("**/Push to..."));
         context->ItemClick("**/Delete");
+        context->Yield();
+        context->ItemClick("**/Local");
         context->Yield(2);
 
         FocusWindow(context, "Tags");
