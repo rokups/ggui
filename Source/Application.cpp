@@ -2882,7 +2882,12 @@ void Application::RequestAbandon(const std::string& revision)
     if (selected != _snapshot->revisions.end() && selected->empty && !has_refs && !selected->pushed)
         _engine.Enqueue(Abandon{{revision}, false, false, {}});
     else
+    {
         OpenDialog(Dialog::Abandon);
+        _input_flag = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision;
+        });
+    }
 }
 
 bool Application::CanSubmitDialog() const
