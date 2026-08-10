@@ -382,8 +382,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(dialog, nullptr);
         IM_CHECK_LE(std::fabs(dialog->SizeFull.x - width), 0.01f);
         IM_CHECK_LE(std::fabs(dialog->SizeFull.x - 560.0f), 0.01f);
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        context->WindowClose("//$FOCUSED");
+        context->Yield(3);
+        dialog = ImGui::FindWindowByName("ggui action");
+        IM_CHECK(dialog == nullptr || !dialog->Active);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");

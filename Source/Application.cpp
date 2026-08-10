@@ -2232,10 +2232,23 @@ void Application::RenderDialogs()
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
         ImVec2(560.0f, 0.0f), ImVec2(560.0f, std::numeric_limits<float>::max()));
+    const auto close_dialog = [this]() {
+        if (_dialog == Dialog::Credentials) _engine.CancelCredential();
+        if (_dialog == Dialog::ConfirmLocked)
+        {
+            _pending_commands.clear();
+            _pending_change_info_save = false;
+        }
+        _dialog = Dialog::None;
+        ImGui::ClearActiveID();
+    };
     bool open = true;
     if (!ImGui::BeginPopupModal(
             popup_titles[static_cast<std::size_t>(_dialog)], &open, ImGuiWindowFlags_AlwaysAutoResize))
-        return; // GCOV_EXCL_LINE: defensive ImGui popup frame rejection
+    {
+        if (!open) close_dialog();
+        return;
+    }
     const bool focus_first = ImGui::IsWindowAppearing();
     const float browse_width = ImGui::CalcTextSize("Browse").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
@@ -2413,29 +2426,9 @@ void Application::RenderDialogs()
     ImGui::TextDisabled("Ctrl+Enter apply | Esc cancel");
     if (cancel)
     {
-        if (_dialog == Dialog::Credentials) _engine.CancelCredential();
-        if (_dialog == Dialog::ConfirmLocked)
-        {
-            _pending_commands.clear();
-            _pending_change_info_save = false;
-        }
-        _dialog = Dialog::None;
-        ImGui::ClearActiveID();
+        close_dialog();
         ImGui::CloseCurrentPopup();
     }
-    if (!open) // GCOV_EXCL_START: native title-bar close path; Cancel is automated instead
-    {
-        if (_dialog == Dialog::Credentials) _engine.CancelCredential();
-        if (_dialog == Dialog::ConfirmLocked)
-        {
-            _pending_commands.clear();
-            _pending_change_info_save = false;
-        }
-        _dialog = Dialog::None;
-        ImGui::ClearActiveID();
-        ImGui::CloseCurrentPopup();
-    }
-    // GCOV_EXCL_STOP
     ImGui::EndPopup();
 }
 
