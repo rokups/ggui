@@ -941,6 +941,16 @@ struct RepositoryEngine::Impl
                     });
                 },
                 [&](const RemoteBookmarkDelete& value) { RemoveRemoteBookmark(value, true); },
+                [&](const AddRemote& value) {
+                    git_remote* raw_remote = nullptr;
+                    Check(git_remote_create(&raw_remote, git.get(), value.name.c_str(), value.url.c_str()), "add remote");
+                    std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
+                    PublishSnapshot();
+                },
+                [&](const DeleteRemote& value) {
+                    Check(git_remote_delete(git.get(), value.name.c_str()), "delete remote");
+                    PublishSnapshot();
+                },
                 [&](const Restore& value) {
                     gg_restore_options options = GG_RESTORE_OPTIONS_INIT;
                     const StringArray filesets(value.filesets);
@@ -1055,6 +1065,8 @@ struct RepositoryEngine::Impl
                 [](const CloneRepository&) { return "clone"; }, [](const Refresh&) { return "refresh"; },
                 [](const Fetch& value) { return value.tracked_only ? "pull" : "fetch"; },
                 [](const Push&) { return "push"; },
+                [](const AddRemote&) { return "add remote"; },
+                [](const DeleteRemote&) { return "delete remote"; },
                 [](const LoadDiff&) { return "diff"; }, [](const NewChange&) { return "new"; },
                 [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
                 [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },

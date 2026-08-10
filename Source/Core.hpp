@@ -131,6 +131,15 @@ struct Push
     std::string bookmark;
     std::string remote;
 };
+struct AddRemote
+{
+    std::string name;
+    std::string url;
+};
+struct DeleteRemote
+{
+    std::string name;
+};
 struct LoadDiff
 {
     std::string revision;
@@ -277,10 +286,10 @@ struct ChmodPaths
     bool executable = false;
 };
 
-using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, Fetch, Push, LoadDiff, NewChange, Describe,
-    Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles,
-    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
-    UntrackPaths, ChmodPaths>;
+using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, Fetch, Push, AddRemote, DeleteRemote,
+    LoadDiff, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon,
+    RemoteBookmarkDelete, Restore, MoveFiles, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd,
+    WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {

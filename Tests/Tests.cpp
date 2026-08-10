@@ -455,6 +455,18 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     bare.reset(raw_remote);
     raw_main = nullptr;
     EXPECT_EQ(git_reference_lookup(&raw_main, bare.get(), "refs/heads/main"), GIT_ENOTFOUND);
+
+    engine.Enqueue(AddRemote{"backup", remote.path.string()});
+    const auto added = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return std::ranges::any_of(snapshot.remotes, [](const Remote& candidate) { return candidate.name == "backup"; });
+    });
+    ASSERT_NE(added, nullptr);
+
+    engine.Enqueue(DeleteRemote{"backup"});
+    const auto deleted = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return std::ranges::none_of(snapshot.remotes, [](const Remote& candidate) { return candidate.name == "backup"; });
+    });
+    ASSERT_NE(deleted, nullptr);
 }
 
 TEST(RepositoryEngine, OpensLinkedWorktree)
@@ -622,6 +634,8 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Squash{"missing-source", "missing-destination", "combined"}, "squash"},
         {Abandon{{"missing"}, true, true, {}}, "abandon"},
         {RemoteBookmarkDelete{"missing", "missing"}, "delete remote bookmark"},
+        {AddRemote{"origin", "https://example.test/duplicate.git"}, "add remote"},
+        {DeleteRemote{"missing"}, "delete remote"},
         {Restore{"missing-from", "missing-into", {"tracked.txt"}}, "restore"},
         {MoveFiles{"missing-source", "missing-destination", {"tracked.txt"}}, "move files"},
         {SimplifyParents{{"missing"}}, "simplify parents"},

@@ -77,6 +77,7 @@ private:
         Restore,
         Bookmark,
         Tag,
+        RemoteAdd,
         WorkspaceAdd,
         WorkspaceRename,
         PushTo,

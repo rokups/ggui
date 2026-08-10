@@ -419,10 +419,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_Escape);
 
         FocusWindow(context, "Remotes");
+        IM_CHECK((context->ItemInfo("**/Add remote").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->ItemClick("**/origin", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Pull").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Fetch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Delete remote").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
 
         application.ApplyEventForTest(CredentialRequest{
@@ -504,6 +506,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->ItemInputValue("Name", "validated");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "Remotes");
+        context->ItemClick("**/Add remote");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemInputValue("Name", "backup");
+        context->ItemInputValue("URL", "https://example.test/backup.git");
         context->Yield();
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("Cancel");
@@ -816,11 +829,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Open directory"));
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Remotes");
+        IM_CHECK(context->ItemExists("**/Add remote"));
         IM_CHECK(context->ItemExists("**/origin"));
         context->ItemClick("**/origin", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK(context->ItemExists("**/Pull"));
         IM_CHECK(context->ItemExists("**/Fetch"));
+        IM_CHECK(context->ItemExists("**/Delete remote"));
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Bookmarks");
         IM_CHECK(context->ItemExists("**/remote-only"));

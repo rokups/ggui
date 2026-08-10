@@ -1636,6 +1636,9 @@ void Application::RenderRemotes()
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
+    ImGui::BeginDisabled(actions_locked);
+    if (ActionButton(ICON_MS_ADD, "Add remote", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::RemoteAdd);
+    ImGui::EndDisabled();
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
@@ -1657,6 +1660,8 @@ void Application::RenderRemotes()
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
             if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});
+            ImGui::Separator();
+            if (ActionMenuItem(ICON_MS_DELETE, "Delete remote")) _engine.Enqueue(DeleteRemote{remote.name});
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
@@ -2468,8 +2473,8 @@ void Application::RenderDialogs()
         "Commit change###ggui action", "Describe change###ggui action",
         "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
-        "Create bookmark###ggui action", "Create tag###ggui action", "Add workspace###ggui action",
-        "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
+        "Create bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
+        "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action", "Locked commit warning###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
@@ -2589,6 +2594,11 @@ void Application::RenderDialogs()
         DialogInput("Name", "tag name", &_input_primary, focus_first);
         DialogInput("Revision", "defaults to selected change", &_input_secondary);
         ImGui::Checkbox("Allow move", &_input_flag);
+        break;
+    case Dialog::RemoteAdd:
+        ImGui::TextUnformatted("Add remote");
+        DialogInput("Name", "origin", &_input_primary, focus_first);
+        DialogInput("URL", "https://host/owner/repository.git", &_input_secondary);
         break;
     case Dialog::WorkspaceAdd:
         ImGui::TextUnformatted("Add workspace");
@@ -2730,6 +2740,7 @@ void Application::SubmitDialog()
         _engine.Enqueue(Tag{GG_TAG_SET, {_input_primary},
             _input_secondary.empty() ? _selected_revision : _input_secondary, _input_flag});
         break;
+    case Dialog::RemoteAdd: _engine.Enqueue(AddRemote{_input_primary, _input_secondary}); break;
     case Dialog::WorkspaceAdd:
         _engine.Enqueue(WorkspaceAdd{_input_primary, _input_secondary,
             _input_tertiary.empty() ? "@" : _input_tertiary, {}});
@@ -2992,6 +3003,7 @@ bool Application::CanSubmitDialog() const
     case Dialog::Tag:
     case Dialog::WorkspaceAdd:
     case Dialog::WorkspaceRename: return HasText(_input_primary);
+    case Dialog::RemoteAdd: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::PushTo: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
