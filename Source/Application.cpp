@@ -1347,7 +1347,7 @@ void Application::RenderToolbar()
             ImGui::Text("Working: %s (%s %zu/%zu)", _active_operation.c_str(), _progress_phase.c_str(),
                 _progress_completed, _progress_total);
         ImGui::SameLine();
-        if (ActionSmallButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
+        if (ActionButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
     }
     ImGui::Dummy(ImVec2(0.0f, 6.0f));
     if (!_error_message.empty())

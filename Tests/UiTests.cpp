@@ -383,6 +383,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
         }
         IM_CHECK((context->ItemInfo("Cancel").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK_GE(context->ItemInfo("Cancel").RectFull.GetHeight(),
+            context->ItemInfo("Refresh").RectFull.GetHeight() - 1.0f);
 
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
