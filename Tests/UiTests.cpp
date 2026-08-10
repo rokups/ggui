@@ -888,6 +888,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK(context->ItemExists("**/Push"));
+        IM_CHECK(context->ItemExists("**/Push to..."));
         context->ItemClick("**/Delete");
         context->Yield(2);
 

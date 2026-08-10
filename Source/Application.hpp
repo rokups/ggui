@@ -72,6 +72,7 @@ private:
         Tag,
         WorkspaceAdd,
         WorkspaceRename,
+        PushTo,
         Credentials,
         ConfirmDrop,
     };

@@ -1235,7 +1235,24 @@ void Application::RenderBookmarks()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("bookmark context"))
         {
-            if (ImGui::MenuItem("Delete")) _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
+            const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
+                return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == ref.name;
+            });
+            const std::string remote = tracked != _snapshot->refs.end() ? tracked->remote
+                : std::ranges::any_of(_snapshot->remotes, [](const Remote& candidate) { return candidate.name == "origin"; })
+                ? "origin"
+                : _snapshot->remotes.empty() ? "" : _snapshot->remotes.front().name;
+            if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, !remote.empty()))
+                _engine.Enqueue(Push{ref.name, remote});
+            if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr, !_snapshot->remotes.empty()))
+            {
+                OpenDialog(Dialog::PushTo);
+                _input_primary = remote;
+                _input_secondary = ref.name;
+            }
+            ImGui::Separator();
+            if (ActionMenuItem(ICON_MS_DELETE, "Delete"))
+                _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -1858,7 +1875,8 @@ void Application::RenderDialogs()
         "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Create tag###ggui action", "Add workspace###ggui action",
-        "Rename workspace###ggui action", "Credentials###ggui action", "Confirm operation###ggui action"};
+        "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
+        "Confirm operation###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
@@ -1956,6 +1974,18 @@ void Application::RenderDialogs()
     case Dialog::WorkspaceRename:
         ImGui::TextUnformatted("Rename current workspace");
         DialogInput("New name", "workspace name", &_input_primary, focus_first);
+        break;
+    case Dialog::PushTo:
+        ImGui::Text("Push bookmark %s", _input_secondary.c_str());
+        ImGui::TextUnformatted("Remote");
+        ImGui::SetNextItemWidth(-1.0f);
+        if (ImGui::BeginCombo("###Remote", _input_primary.c_str()))
+        {
+            for (const Remote& remote : _snapshot->remotes)
+                if (ImGui::Selectable(remote.name.c_str(), remote.name == _input_primary))
+                    _input_primary = remote.name;
+            ImGui::EndCombo();
+        }
         break;
     case Dialog::Credentials:
         ImGui::TextWrapped("Credentials requested by %s", _credential_request.url.c_str());
@@ -2061,6 +2091,7 @@ void Application::SubmitDialog()
             _input_tertiary.empty() ? "@" : _input_tertiary, {}});
         break;
     case Dialog::WorkspaceRename: _engine.Enqueue(WorkspaceRename{_input_primary}); break;
+    case Dialog::PushTo: _engine.Enqueue(Push{_input_secondary, _input_primary}); break;
     case Dialog::Credentials:
     {
         CredentialResponse response;
@@ -2161,6 +2192,7 @@ bool Application::CanSubmitDialog() const
     case Dialog::Tag:
     case Dialog::WorkspaceAdd:
     case Dialog::WorkspaceRename: return HasText(_input_primary);
+    case Dialog::PushTo: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));
