@@ -1370,8 +1370,15 @@ void Application::RenderToolbar()
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
+        ImGui::BeginGroup();
         TextLabelledId("@ ", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy), CommitIdColor(true));
+        ImGui::EndGroup();
         ImGui::PopStyleColor();
+        if (ImGui::BeginPopupContextItem("working copy ID context"))
+        {
+            IdCopyMenuItems("commit ID", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy));
+            ImGui::EndPopup();
+        }
     }
     if (!_active_operation.empty())
     {
