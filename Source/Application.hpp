@@ -54,6 +54,7 @@ public:
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
     static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
+    static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
 #endif
 
 private:

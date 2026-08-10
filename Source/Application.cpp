@@ -51,6 +51,8 @@ constexpr ImU32 kRowSelected = IM_COL32(33, 52, 74, 255);
 constexpr ImU32 kRowBorder = IM_COL32(48, 54, 61, 180);
 constexpr ImU32 kGraphBackground = IM_COL32(18, 22, 29, 255);
 constexpr ImU32 kBadgeBookmark = IM_COL32(9, 105, 218, 235);
+constexpr ImU32 kBadgeBookmarkSynced = IM_COL32(31, 136, 61, 235);
+constexpr ImU32 kBadgeBookmarkDiverged = IM_COL32(219, 109, 40, 235);
 constexpr ImU32 kBadgeTag = IM_COL32(88, 70, 155, 235);
 constexpr ImU32 kBadgeRemote = IM_COL32(66, 68, 90, 235);
 constexpr ImU32 kBadgeWorkingCopy = IM_COL32(31, 136, 61, 235);
@@ -217,10 +219,28 @@ const TextEditor::Language* DiffLanguage(const std::string& path)
     return nullptr;
 }
 
-ImU32 RefBadgeColor(const NamedRef& ref)
+ImU32 BookmarkBadgeColor(std::string_view name, const std::vector<NamedRef>& refs)
 {
-    if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK)
-        return ref.tracked ? kBadgeWorkingCopy : kBadgeBookmark;
+    const auto local = std::ranges::find_if(refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+    });
+    const bool remote = std::ranges::any_of(refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
+    });
+    if (local == refs.end())
+        return kBadgeRemote;
+    if (!remote)
+        return kBadgeBookmark;
+    const bool synchronized = std::ranges::all_of(refs, [&](const NamedRef& ref) {
+        return ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK || ref.name != name || ref.target == local->target;
+    });
+    return synchronized ? kBadgeBookmarkSynced : kBadgeBookmarkDiverged;
+}
+
+ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
+{
+    if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK)
+        return BookmarkBadgeColor(ref.name, refs);
     if (ref.kind == GG_NAMED_REF_LOCAL_TAG)
         return kBadgeTag;
     return kBadgeRemote;
@@ -1284,37 +1304,51 @@ void Application::RenderBookmarks()
     }
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
+    std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
     {
-        if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK)
+        if ((ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
+            || std::ranges::find(names, ref.name) != names.end())
             continue;
-        ImGui::PushID(&ref);
-        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref)))
+        names.push_back(ref.name);
+    }
+    for (const std::string& name : names)
+    {
+        const auto local = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+        });
+        const auto remote_ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
+        });
+        const NamedRef& ref = local != _snapshot->refs.end() ? *local : *remote_ref;
+        ImGui::PushID(name.c_str());
+        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
+                BookmarkBadgeColor(name, _snapshot->refs)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
         DrawHighlightedId(draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
-        if (ImGui::BeginPopupContextItem("bookmark context"))
+        if (local != _snapshot->refs.end() && ImGui::BeginPopupContextItem("bookmark context"))
         {
             const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
-                return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == ref.name;
+                return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name;
             });
             const std::string remote = tracked != _snapshot->refs.end() ? tracked->remote
                 : std::ranges::any_of(_snapshot->remotes, [](const Remote& candidate) { return candidate.name == "origin"; })
                 ? "origin"
                 : _snapshot->remotes.empty() ? "" : _snapshot->remotes.front().name;
             if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, !remote.empty()))
-                _engine.Enqueue(Push{ref.name, remote});
+                _engine.Enqueue(Push{name, remote});
             if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr, !_snapshot->remotes.empty()))
             {
                 OpenDialog(Dialog::PushTo);
                 _input_primary = remote;
-                _input_secondary = ref.name;
+                _input_secondary = name;
             }
             ImGui::Separator();
             if (ActionMenuItem(ICON_MS_DELETE, "Delete"))
-                _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
+                _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -1337,7 +1371,7 @@ void Application::RenderTags()
         if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
             continue;
         ImGui::PushID(&ref);
-        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref)))
+        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref, _snapshot->refs)))
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
@@ -1690,26 +1724,27 @@ void Application::RenderHistory()
             if (!elided)
                 draw_text(revision.author, kTextMuted, 16.0f);
             ImVec2 badge_cursor(content_cursor.x + 12.0f, center);
+            std::vector<std::string> drawn_refs;
             for (const NamedRef& ref : _snapshot->refs)
             {
                 if (elided)
                     break;
                 if (ref.target != revision.oid) continue;
-                const gg_named_ref_kind remote_kind = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-                    ? GG_NAMED_REF_REMOTE_BOOKMARK
-                    : ref.kind == GG_NAMED_REF_LOCAL_TAG ? GG_NAMED_REF_REMOTE_TAG : ref.kind;
-                if (remote_kind != ref.kind && std::ranges::any_of(_snapshot->refs, [&](const NamedRef& other) {
-                        return other.target == ref.target && other.name == ref.name && other.kind == remote_kind;
-                    }))
+                const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                    || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
+                const std::string key = (bookmark ? "bookmark:" : "tag:") + ref.name;
+                if (std::ranges::find(drawn_refs, key) != drawn_refs.end())
                     continue;
+                drawn_refs.push_back(key);
                 const float badge_width = ImGui::CalcTextSize(ref.name.c_str()).x + FontPx(14.0f);
                 if (badge_cursor.x + badge_width > content_right)
                 {
-                    DrawElidedBadge(draw, badge_cursor, center, content_right, ref.name, RefBadgeColor(ref));
+                    DrawElidedBadge(draw, badge_cursor, center, content_right, ref.name,
+                        RefBadgeColor(ref, _snapshot->refs));
                     elided = true;
                     break;
                 }
-                DrawBadge(draw, badge_cursor, center, ref.name, RefBadgeColor(ref));
+                DrawBadge(draw, badge_cursor, center, ref.name, RefBadgeColor(ref, _snapshot->refs));
             }
             ImGui::PopClipRect();
 
@@ -2799,6 +2834,11 @@ std::string Application::FileUrlForTest(const std::string& path)
 std::string Application::LimitLinesForTest(const std::string& text, std::size_t maximum)
 {
     return LimitedLines(text, maximum);
+}
+
+unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
+{
+    return BookmarkBadgeColor(name, refs);
 }
 #endif
 

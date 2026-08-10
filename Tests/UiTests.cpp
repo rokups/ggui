@@ -170,6 +170,9 @@ RepoSnapshot RichSnapshot()
         {"coverage-tag", {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false},
         {"remote-bookmark", {}, "right", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
         {"remote-bookmark", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
+        {"remote-only", "upstream", "base", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
+        {"diverged", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
+        {"diverged", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
     };
     snapshot.status = {
         {{}, "added.txt", GIT_DELTA_ADDED, false},
@@ -517,6 +520,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(limited, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16...");
         IM_CHECK(!Application::SupportsDiffLanguageForTest("README"));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
+        const RepoSnapshot snapshot = RichSnapshot();
+        const std::array bookmark_colors{
+            Application::BookmarkColorForTest("coverage-bookmark", snapshot.refs),
+            Application::BookmarkColorForTest("remote-only", snapshot.refs),
+            Application::BookmarkColorForTest("remote-bookmark", snapshot.refs),
+            Application::BookmarkColorForTest("diverged", snapshot.refs)};
+        for (std::size_t left = 0; left < bookmark_colors.size(); ++left)
+            for (std::size_t right = left + 1; right < bookmark_colors.size(); ++right)
+                IM_CHECK_NE(bookmark_colors[left], bookmark_colors[right]);
         IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
         IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
