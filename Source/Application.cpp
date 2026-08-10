@@ -2358,10 +2358,24 @@ void Application::RenderChangeInformation()
     const std::string date = FormatTimestamp(revision->timestamp);
     ImGui::Text("%s%s", date.c_str(), revision->pushed ? "  locked" : "");
     ImGui::SameLine(0.0f, 12.0f);
+    ImGui::BeginGroup();
     TextLabelledId("Change ", revision->change_id, ChangePrefix(revision->change_id),
         ChangeIdColor(revision->working_copy));
+    ImGui::EndGroup();
+    if (ImGui::BeginPopupContextItem("change ID context"))
+    {
+        IdCopyMenuItems("change ID", revision->change_id, ChangePrefix(revision->change_id));
+        ImGui::EndPopup();
+    }
     ImGui::SameLine(0.0f, 12.0f);
+    ImGui::BeginGroup();
     TextLabelledId("Commit ", revision->oid, RevisionPrefix(revision->oid), CommitIdColor(revision->working_copy));
+    ImGui::EndGroup();
+    if (ImGui::BeginPopupContextItem("commit ID context"))
+    {
+        IdCopyMenuItems("commit ID", revision->oid, RevisionPrefix(revision->oid));
+        ImGui::EndPopup();
+    }
     const float button_height = ImGui::GetFrameHeight();
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
     const ImVec2 message_size = ImGui::CalcTextSize(
