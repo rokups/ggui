@@ -120,6 +120,23 @@ bool DangerButton(const char* label, const ImVec2& size = {})
     return clicked;
 }
 
+std::string LimitedLines(std::string_view text, std::size_t maximum)
+{
+    if (maximum == 0)
+        return text.empty() ? "" : "...";
+    std::size_t start = 0;
+    for (std::size_t line = 0; line < maximum; ++line)
+    {
+        const std::size_t next = text.find('\n', start);
+        if (next == std::string_view::npos)
+            return std::string(text);
+        if (line + 1 == maximum)
+            return next + 1 == text.size() ? std::string(text) : std::string(text.substr(0, next)) + "...";
+        start = next + 1;
+    }
+    return std::string(text);
+}
+
 void LoadUiFont()
 {
 #ifdef _WIN32
@@ -220,6 +237,34 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
     draw->AddText(ImVec2(minimum.x + pad_x, minimum.y + pad_top), IM_COL32_WHITE, label.data(), label.data() + label.size());
     cursor.x = maximum.x + FontPx(6.0f);
+}
+
+void DrawElidedText(
+    ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view text, ImU32 color)
+{
+    if (maximum_x <= position.x)
+        return;
+    const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
+    ImGui::PushStyleColor(ImGuiCol_Text, color);
+    ImGui::RenderTextEllipsis(draw, position,
+        ImVec2(maximum_x, position.y + ImGui::GetTextLineHeight()), maximum_x,
+        text.data(), text.data() + text.size(), &size);
+    ImGui::PopStyleColor();
+}
+
+void DrawElidedBadge(
+    ImDrawList* draw, ImVec2 cursor, float center_y, float maximum_x, std::string_view label, ImU32 color)
+{
+    if (maximum_x <= cursor.x)
+        return;
+    const float pad_x = FontPx(7.0f);
+    const float pad_top = FontPx(3.0f);
+    const float pad_bottom = FontPx(1.0f);
+    const float text_y = center_y - ImGui::GetTextLineHeight() * 0.5f;
+    const ImVec2 minimum(cursor.x, text_y - pad_top);
+    const ImVec2 maximum(maximum_x, text_y + ImGui::GetTextLineHeight() + pad_bottom);
+    draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
+    DrawElidedText(draw, ImVec2(minimum.x + pad_x, text_y), maximum.x - pad_x, label, IM_COL32_WHITE);
 }
 
 bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32 color)
@@ -1452,8 +1497,7 @@ void Application::RenderHistory()
     ImGui::InputTextWithHint("##graph filter", "Filter changes, IDs, bookmarks, tags", &_graph_filter);
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
         RebuildGraph();
-    const int column_count = GraphColumnCount(_graph_rows);
-    ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
@@ -1466,7 +1510,7 @@ void Application::RenderHistory()
             const GraphRow& row = _graph_rows[visible];
             ImGui::PushID(revision.oid.c_str());
             const int row_column_count = GraphColumnCount(row);
-            const float width = std::max(ImGui::GetContentRegionAvail().x, column_count * kLaneWidth + 520.0f);
+            const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
             ImGui::InvisibleButton("row", ImVec2(width, kRowHeight),
                 ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
             const ImVec2 minimum = ImGui::GetItemRectMin();
@@ -1605,27 +1649,51 @@ void Application::RenderHistory()
                     : revision.pushed       ? kStatusPushed
                                             : kStatusUnpushed);
             draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
-            if (hovered && revision.pushed)
-                ImGui::SetTooltip("Pushed (locked)");
-
-            const float content_x = minimum.x + graph_width + 12.0f;
-            ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(maximum.x - 8.0f, maximum.y), true);
+            const float content_x = std::min(minimum.x + graph_width + 12.0f, maximum.x - 8.0f);
+            const float content_right = maximum.x - 8.0f;
+            ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(content_right, maximum.y), true);
             const std::string description = FirstLine(revision.description);
-            const char* title = description.empty() ? "(no description)" : description.c_str();
+            const std::string_view title = description.empty() ? "(no description)" : std::string_view(description);
             ImVec2 content_cursor(content_x, center - ImGui::GetTextLineHeight() * 0.5f);
-            draw->AddText(content_cursor, ImGui::GetColorU32(ImGuiCol_Text), title);
-            content_cursor.x += ImGui::CalcTextSize(title).x + 16.0f;
-            content_cursor.x = DrawHighlightedId(
-                draw, content_cursor, revision.change_id, ChangePrefix(revision.change_id),
-                ChangeIdColor(revision.working_copy));
-            content_cursor.x += ImGui::CalcTextSize("  ").x;
-            content_cursor.x = DrawHighlightedId(draw, content_cursor, revision.oid, RevisionPrefix(revision.oid),
-                CommitIdColor(revision.working_copy));
-            content_cursor.x += ImGui::CalcTextSize("  ").x;
-            draw->AddText(content_cursor, kTextMuted, revision.author.c_str());
-            ImVec2 badge_cursor(content_cursor.x + ImGui::CalcTextSize(revision.author.c_str()).x + 12.0f, center);
+            bool elided = false;
+            const auto draw_text = [&](std::string_view text, ImU32 color, float gap) {
+                content_cursor.x += gap;
+                const float text_width = ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
+                if (content_cursor.x + text_width > content_right)
+                {
+                    DrawElidedText(draw, content_cursor, content_right, text, color);
+                    elided = true;
+                    return false;
+                }
+                draw->AddText(content_cursor, color, text.data(), text.data() + text.size());
+                content_cursor.x += text_width;
+                return true;
+            };
+            draw_text(title, ImGui::GetColorU32(ImGuiCol_Text), 0.0f);
+            const auto draw_id = [&](const std::string& id, std::size_t prefix, ImU32 color) {
+                if (elided)
+                    return;
+                content_cursor.x += 16.0f;
+                const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, prefix));
+                const std::string_view visible(id.data(), shown);
+                if (content_cursor.x + ImGui::CalcTextSize(visible.data(), visible.data() + visible.size()).x
+                    > content_right)
+                {
+                    DrawElidedText(draw, content_cursor, content_right, visible, color);
+                    elided = true;
+                    return;
+                }
+                content_cursor.x = DrawHighlightedId(draw, content_cursor, id, prefix, color);
+            };
+            draw_id(revision.change_id, ChangePrefix(revision.change_id), ChangeIdColor(revision.working_copy));
+            draw_id(revision.oid, RevisionPrefix(revision.oid), CommitIdColor(revision.working_copy));
+            if (!elided)
+                draw_text(revision.author, kTextMuted, 16.0f);
+            ImVec2 badge_cursor(content_cursor.x + 12.0f, center);
             for (const NamedRef& ref : _snapshot->refs)
             {
+                if (elided)
+                    break;
                 if (ref.target != revision.oid) continue;
                 const gg_named_ref_kind remote_kind = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
                     ? GG_NAMED_REF_REMOTE_BOOKMARK
@@ -1634,9 +1702,51 @@ void Application::RenderHistory()
                         return other.target == ref.target && other.name == ref.name && other.kind == remote_kind;
                     }))
                     continue;
+                const float badge_width = ImGui::CalcTextSize(ref.name.c_str()).x + FontPx(14.0f);
+                if (badge_cursor.x + badge_width > content_right)
+                {
+                    DrawElidedBadge(draw, badge_cursor, center, content_right, ref.name, RefBadgeColor(ref));
+                    elided = true;
+                    break;
+                }
                 DrawBadge(draw, badge_cursor, center, ref.name, RefBadgeColor(ref));
             }
             ImGui::PopClipRect();
+
+            if (hovered && elided)
+            {
+                ImGui::BeginTooltip();
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
+                const std::string message = LimitedLines(revision.description, 16);
+                ImGui::TextUnformatted(message.empty() ? "(no description)" : message.c_str());
+                ImGui::Separator();
+                ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
+                ImGui::Text("Change: %s", revision.change_id.c_str());
+                ImGui::Text("Commit: %s", revision.oid.c_str());
+                if (!revision.parents.empty())
+                {
+                    std::string parents;
+                    for (const std::string& parent : revision.parents)
+                    {
+                        if (!parents.empty()) parents += ", ";
+                        parents += parent;
+                    }
+                    ImGui::TextWrapped("Parents: %s", parents.c_str());
+                }
+                std::string refs;
+                for (const NamedRef& ref : _snapshot->refs)
+                {
+                    if (ref.target != revision.oid) continue;
+                    if (!refs.empty()) refs += ", ";
+                    refs += ref.remote.empty() ? ref.name : ref.remote + "/" + ref.name;
+                }
+                if (!refs.empty()) ImGui::TextWrapped("Refs: %s", refs.c_str());
+                ImGui::TextUnformatted(revision.pushed ? "Locked (pushed)" : "Not pushed");
+                ImGui::PopTextWrapPos();
+                ImGui::EndTooltip();
+            }
+            else if (hovered && revision.pushed)
+                ImGui::SetTooltip("Pushed (locked)");
 
             ImGui::SetCursorScreenPos(ImVec2(minimum.x, maximum.y));
             ImGui::PopID();
@@ -2673,6 +2783,11 @@ bool Application::SupportsDiffLanguageForTest(const std::string& path)
 std::string Application::FileUrlForTest(const std::string& path)
 {
     return FileUrl(path);
+}
+
+std::string Application::LimitLinesForTest(const std::string& text, std::size_t maximum)
+{
+    return LimitedLines(text, maximum);
 }
 #endif
 

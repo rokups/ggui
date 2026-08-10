@@ -510,6 +510,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(Application::IdColorForTest(false, false), Application::IdColorForTest(false, true));
         IM_CHECK(Application::SupportsDiffLanguageForTest("source.cpp"));
         IM_CHECK(Application::SupportsDiffLanguageForTest("shader.glsl"));
+        const std::string limited = Application::LimitLinesForTest(
+            "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16\n17", 16);
+        IM_CHECK_EQ(static_cast<std::size_t>(std::ranges::count(limited, '\n')), 15U);
+        IM_CHECK_EQ(limited, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16...");
         IM_CHECK(!Application::SupportsDiffLanguageForTest("README"));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
     };

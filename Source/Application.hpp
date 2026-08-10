@@ -53,6 +53,7 @@ public:
     static unsigned int IdColorForTest(bool change_id, bool working_copy);
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
+    static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
 #endif
 
 private:
