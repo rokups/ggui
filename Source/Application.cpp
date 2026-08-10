@@ -1977,9 +1977,6 @@ void Application::RenderHistory()
                 ImGui::PopTextWrapPos();
                 ImGui::EndTooltip();
             }
-            else if (hovered && revision.pushed)
-                ImGui::SetTooltip("Pushed (locked)");
-
             ImGui::SetCursorScreenPos(ImVec2(minimum.x, maximum.y));
             ImGui::PopID();
         }
