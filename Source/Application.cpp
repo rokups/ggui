@@ -1251,11 +1251,12 @@ void Application::RenderRemotes()
         ImGui::End();
         return;
     }
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
         const bool separate_push = !remote.push_url.empty() && remote.push_url != remote.fetch_url;
-        ImGui::Selectable(remote.name.c_str(), false, 0, ImVec2(0.0f, separate_push ? 56.0f : 40.0f));
+        BadgedSelectable(remote.name, false, separate_push ? 56.0f : 40.0f, kBadgeRemote);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted, remote.fetch_url.c_str());
@@ -1264,6 +1265,7 @@ void Application::RenderRemotes()
                 ("Push: " + remote.push_url).c_str());
         ImGui::PopID();
     }
+    ImGui::PopStyleVar();
     ImGui::End();
 }
 
