@@ -391,6 +391,32 @@ TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
     EXPECT_NE(std::ranges::find(diff->files, "untracked.txt", &StatusEntry::path), diff->files.end());
 }
 
+TEST(RepositoryEngine, ShowsRenamedFilesAsSingleChange)
+{
+    TemporaryRepository repository;
+    std::filesystem::rename(repository.path / "tracked.txt", repository.path / "renamed.txt");
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.working_copy.empty()
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                return entry.status == GIT_DELTA_RENAMED;
+            });
+    });
+    ASSERT_NE(opened, nullptr);
+
+    engine.Enqueue(LoadDiff{opened->working_copy, "renamed.txt"});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    ASSERT_EQ(diff->files.size(), 1U);
+    EXPECT_EQ(diff->files.front().status, GIT_DELTA_RENAMED);
+    EXPECT_EQ(diff->files.front().old_path, "tracked.txt");
+    EXPECT_EQ(diff->files.front().path, "renamed.txt");
+    EXPECT_EQ(diff->before, "base\n");
+    EXPECT_EQ(diff->after, "base\n");
+}
+
 TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
 {
     TemporaryRepository repository;

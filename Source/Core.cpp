@@ -789,6 +789,11 @@ struct RepositoryEngine::Impl
         git_diff* raw_diff = nullptr;
         Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), nullptr), "create diff");
         std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
+        git_diff_find_options find_options{};
+        Check(git_diff_find_options_init(&find_options, GIT_DIFF_FIND_OPTIONS_VERSION),
+            "initialize rename detection");
+        find_options.flags = GIT_DIFF_FIND_RENAMES;
+        Check(git_diff_find_similar(diff.get(), &find_options), "find renamed files");
         DiffResult result{generation, command.revision, command.path, {}, {}, false, {}};
         for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
         {
@@ -802,16 +807,11 @@ struct RepositoryEngine::Impl
             result.path = result.files.empty() ? "" : result.files.front().path;
         if (!result.path.empty())
         {
-            git_diff_options options = GIT_DIFF_OPTIONS_INIT;
-            char* path = result.path.data();
-            options.pathspec = {&path, 1};
-            raw_diff = nullptr;
-            Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), &options),
-                "create file diff");
-            diff.reset(raw_diff);
-            const git_diff_delta* delta = git_diff_num_deltas(diff.get()) == 0 ? nullptr : git_diff_get_delta(diff.get(), 0);
-            const char* old_path = delta == nullptr ? result.path.c_str() : delta->old_file.path;
-            const char* new_path = delta == nullptr ? result.path.c_str() : delta->new_file.path;
+            const auto file = std::ranges::find_if(result.files, [&](const StatusEntry& entry) {
+                return entry.path == result.path || entry.old_path == result.path;
+            });
+            const char* old_path = file == result.files.end() ? result.path.c_str() : file->old_path.c_str();
+            const char* new_path = file == result.files.end() ? result.path.c_str() : file->path.c_str();
             result.before = BlobText(git.get(), old_tree.get(), old_path, result.binary);
             result.after = BlobText(git.get(), new_tree.get(), new_path, result.binary);
         }
