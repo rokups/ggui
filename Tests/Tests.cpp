@@ -329,12 +329,37 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
         return !snapshot.working_copy.empty();
     });
     ASSERT_NE(working, nullptr);
+    const auto empty_change = std::ranges::find(working->revisions, working->working_copy, &Revision::oid);
+    ASSERT_NE(empty_change, working->revisions.end());
+    EXPECT_TRUE(empty_change->empty);
+
+    engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
+    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > working->generation && snapshot.working_copy != working->working_copy;
+    });
+    ASSERT_NE(child, nullptr);
+    engine.Enqueue(Abandon{{working->working_copy}, true, false});
+    const auto replacement = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > child->generation
+            && std::ranges::none_of(snapshot.revisions,
+                [&](const Revision& revision) { return revision.oid == working->working_copy; });
+    });
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_EQ(replacement->revisions.size(), working->revisions.size());
+    const auto replacement_change =
+        std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
+    ASSERT_NE(replacement_change, replacement->revisions.end());
+    EXPECT_TRUE(replacement_change->empty);
+    EXPECT_EQ(replacement_change->parents, empty_change->parents);
 
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
     const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > working->generation && !snapshot.status.empty();
+        return snapshot.generation > replacement->generation && !snapshot.status.empty();
     });
     ASSERT_NE(refreshed, nullptr);
+    const auto nonempty_change = std::ranges::find(refreshed->revisions, refreshed->working_copy, &Revision::oid);
+    ASSERT_NE(nonempty_change, refreshed->revisions.end());
+    EXPECT_FALSE(nonempty_change->empty);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
 }

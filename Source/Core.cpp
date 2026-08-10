@@ -141,6 +141,19 @@ struct StringArray
     std::vector<const char*> values;
 };
 
+bool CommitIsEmpty(git_repository* repository, const git_oid& oid)
+{
+    git_commit* raw_commit = nullptr;
+    Check(git_commit_lookup(&raw_commit, repository, &oid), "load revision");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+    if (git_commit_parentcount(commit.get()) == 0)
+        return false;
+    git_commit* raw_parent = nullptr;
+    Check(git_commit_parent(&raw_parent, commit.get(), 0), "load revision parent");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+    return git_oid_equal(git_commit_tree_id(commit.get()), git_commit_tree_id(parent.get())) != 0;
+}
+
 template <class... Ts> struct Overloaded : Ts...
 {
     using Ts::operator()...;
@@ -639,6 +652,7 @@ struct RepositoryEngine::Impl
             value.timestamp = source.committer == nullptr ? 0 : source.committer->when.time;
             value.working_copy = value.oid == result->working_copy;
             value.conflicted = source.has_conflicts != 0;
+            value.empty = CommitIsEmpty(git.get(), source.oid);
             result->revisions.push_back(std::move(value));
         }
 

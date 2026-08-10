@@ -2178,6 +2178,15 @@ std::vector<std::string> Application::SelectedParentRevisions() const
 
 void Application::CreateChange()
 {
+    const auto selected = _selected_revisions.size() == 1
+        ? std::ranges::find(_snapshot->revisions, _selected_revisions.front(), &Revision::oid)
+        : _snapshot->revisions.end();
+    if (selected != _snapshot->revisions.end() && selected->empty && !selected->parents.empty())
+    {
+        _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
+        _engine.Enqueue(Abandon{{selected->oid}, true, false});
+        return;
+    }
     _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
 }
 

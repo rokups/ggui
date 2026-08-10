@@ -160,7 +160,7 @@ RepoSnapshot RichSnapshot()
         {"merge", {"left", "right", "third"}, "change-merge", "Merge subject\nbody", "Merger", 5, true, true, false},
         {"left", {"base"}, "change-left", "Left", "Left Author", 4, false, false, false},
         {"right", {"base"}, "change-right", "Right", "Right Author", 3, false, false, true},
-        {"third", {"base"}, "change-third", "", "Third Author", 2, false, false, false},
+        {"third", {"base"}, "change-third", "", "Third Author", 2, false, false, false, true},
         {"base", {}, "change-base", "Base", "Base Author", 1, false, false, true},
     };
     snapshot.refs = {

@@ -27,6 +27,7 @@ struct Revision
     bool working_copy = false;
     bool conflicted = false;
     bool pushed = false;
+    bool empty = false;
 };
 
 struct NamedRef
