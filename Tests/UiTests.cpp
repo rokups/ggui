@@ -698,6 +698,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
+        const std::vector<std::string> branch = application.AbandonRevisionsForTest("base");
+        IM_CHECK_EQ(branch.size(), 5U);
+        for (const char* revision : {"base", "left", "right", "third", "merge"})
+            IM_CHECK(std::ranges::find(branch, revision) != branch.end());
         application.SelectRevisionForTest("right");
         context->Yield(3);
 
@@ -725,6 +729,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Apply"));
+        IM_CHECK(context->ItemExists("Also abandon all descendants (full branch)"));
         IM_CHECK(context->ItemExists("Also delete bookmark from remote"));
         IM_CHECK(context->ItemIsChecked("Retain bookmarks"));
         context->ItemCheck("Also delete bookmark from remote");
@@ -737,6 +742,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         IM_CHECK(!context->ItemExists("Also delete bookmark from remote"));
         IM_CHECK(context->ItemIsChecked("Retain bookmarks"));
+        context->ItemClick("Cancel");
+
+        application.SelectRevisionForTest("base");
+        FocusWindow(context, "History");
+        context->KeyPress(ImGuiKey_A);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemCheck("Also abandon all descendants (full branch)");
         context->ItemClick("Cancel");
 
         application.SelectRevisionForTest("right");

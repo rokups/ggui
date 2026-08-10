@@ -2406,6 +2406,7 @@ void Application::OpenDialog(Dialog dialog)
     _input_filesets.clear();
     _input_flag = false;
     _input_flag_secondary = false;
+    _input_flag_tertiary = false;
     _input_mode = 0;
     if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)
     {
@@ -2512,11 +2513,24 @@ void Application::RenderDialogs()
         TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
-        ImGui::TextWrapped("and restack its descendants? This remains undoable.");
+        ImGui::TextWrapped("and restack its descendants. This remains undoable.");
         if (focus_first)
             ImGui::SetKeyboardFocusHere();
+        if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary)
+            && _input_flag_tertiary)
+        {
+            const std::vector<std::string> revisions = AbandonRevisions(_selected_revision, true);
+            _input_flag = _input_flag || std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                    && std::ranges::find(revisions, ref.target) != revisions.end();
+            });
+        }
+        const std::vector<std::string> revisions =
+            AbandonRevisions(_selected_revision, _input_flag_tertiary);
+        if (_input_flag_tertiary)
+            ImGui::TextDisabled("%zu changes will be abandoned.", revisions.size());
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
-        const std::vector<RemoteBookmarkDelete> remote_bookmarks = RemoteBookmarksAt(_selected_revision);
+        const std::vector<RemoteBookmarkDelete> remote_bookmarks = RemoteBookmarksAt(revisions);
         if (!remote_bookmarks.empty())
         {
             ImGui::Checkbox("Also delete bookmark from remote", &_input_flag_secondary);
@@ -2658,10 +2672,14 @@ void Application::SubmitDialog()
     case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
     case Dialog::Split: _engine.Enqueue(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Abandon:
-        _engine.Enqueue(Abandon{{_selected_revision}, _input_flag, false,
-            _input_flag_secondary ? RemoteBookmarksAt(_selected_revision)
+    {
+        const std::vector<std::string> revisions =
+            AbandonRevisions(_selected_revision, _input_flag_tertiary);
+        _engine.Enqueue(Abandon{revisions, _input_flag, false,
+            _input_flag_secondary ? RemoteBookmarksAt(revisions)
                                   : std::vector<RemoteBookmarkDelete>{}});
         break;
+    }
     case Dialog::Restore:
         _engine.Enqueue(Restore{_input_primary, _selected_revision, SplitLines(_input_filesets)});
         break;
@@ -2811,8 +2829,14 @@ bool Application::DialogModifiesLockedCommit() const
     case Dialog::Commit: return IsLocked(_snapshot->working_copy);
     case Dialog::Describe:
     case Dialog::Metaedit:
-    case Dialog::Split:
-    case Dialog::Abandon: return IsLocked(_selected_revision);
+    case Dialog::Split: return IsLocked(_selected_revision);
+    case Dialog::Abandon:
+    {
+        const std::vector<std::string> revisions =
+            AbandonRevisions(_selected_revision, _input_flag_tertiary);
+        return std::ranges::any_of(
+            revisions, [this](const std::string& revision) { return IsLocked(revision); });
+    }
     case Dialog::Rebase: return IsLocked(_selected_revision) || IsLocked(_input_primary);
     case Dialog::Squash:
     {
@@ -2848,17 +2872,45 @@ void Application::QueueCommands(
     OpenDialog(Dialog::ConfirmLocked);
 }
 
-std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(const std::string& revision) const
+std::vector<std::string> Application::AbandonRevisions(
+    const std::string& selected, bool include_descendants) const
+{
+    std::vector<std::string> result{selected};
+    if (!include_descendants)
+        return result;
+    bool added = true;
+    while (added)
+    {
+        added = false;
+        for (const Revision& revision : _snapshot->revisions)
+        {
+            if (std::ranges::find(result, revision.oid) != result.end())
+                continue;
+            if (std::ranges::any_of(revision.parents, [&](const std::string& parent) {
+                    return std::ranges::find(result, parent) != result.end();
+                }))
+            {
+                result.push_back(revision.oid);
+                added = true;
+            }
+        }
+    }
+    return result;
+}
+
+std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(
+    const std::vector<std::string>& revisions) const
 {
     std::vector<RemoteBookmarkDelete> result;
     for (const NamedRef& local : _snapshot->refs)
     {
-        if (local.kind != GG_NAMED_REF_LOCAL_BOOKMARK || local.target != revision)
+        if (local.kind != GG_NAMED_REF_LOCAL_BOOKMARK
+            || std::ranges::find(revisions, local.target) == revisions.end())
             continue;
         for (const NamedRef& remote : _snapshot->refs)
         {
             if (remote.kind != GG_NAMED_REF_REMOTE_BOOKMARK || remote.name != local.name
-                || remote.target != revision || remote.remote.empty())
+                || remote.target != local.target || remote.remote.empty())
                 continue;
             const RemoteBookmarkDelete deletion{local.name, remote.remote};
             if (std::ranges::none_of(result, [&](const RemoteBookmarkDelete& existing) {
@@ -3102,6 +3154,11 @@ void Application::SelectRevisionForTest(const std::string& oid, bool additive)
 std::vector<std::string> Application::SelectedParentsForTest() const
 {
     return SelectedParentRevisions();
+}
+
+std::vector<std::string> Application::AbandonRevisionsForTest(const std::string& revision) const
+{
+    return AbandonRevisions(revision, true);
 }
 
 std::vector<std::string> Application::DialogFilesetsForTest() const

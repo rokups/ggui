@@ -58,6 +58,7 @@ public:
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
     static std::string DropTooltipForTest(int action, const std::string& target);
+    std::vector<std::string> AbandonRevisionsForTest(const std::string& revision) const;
 #endif
 
 private:
@@ -134,7 +135,10 @@ private:
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     std::vector<std::string> SelectedParentRevisions() const;
-    std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(const std::string& revision) const;
+    std::vector<std::string> AbandonRevisions(
+        const std::string& revision, bool include_descendants) const;
+    std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
+        const std::vector<std::string>& revisions) const;
     void CreateChange();
     void RequestAbandon(const std::string& revision);
     void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
@@ -196,6 +200,7 @@ private:
     std::string _input_filesets;
     bool _input_flag = false;
     bool _input_flag_secondary = false;
+    bool _input_flag_tertiary = false;
     int _input_mode = 0;
     std::string _change_info_revision;
     std::string _change_info_message;
