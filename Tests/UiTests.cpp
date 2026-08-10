@@ -964,6 +964,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemInputValue("##tag filter", "");
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "ChangesFilter");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        FocusWindow(context, "Changes");
+
+        context->ItemInputValue("##changes filter", "MODIFIED.TXT");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/M  modified.txt"));
+        IM_CHECK(!context->ItemExists("**/A  added.txt"));
+
+        context->ItemInputValue("##changes filter", "old.txt");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/R  renamed.txt"));
+        IM_CHECK(!context->ItemExists("**/M  modified.txt"));
+
+        context->ItemInputValue("##changes filter", "");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/A  added.txt"));
+        IM_CHECK(context->ItemExists("**/M  modified.txt"));
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

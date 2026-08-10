@@ -2089,11 +2089,16 @@ void Application::RenderChanges()
         ImGui::TextDisabled("Selected change is empty.");
     else
         ImGui::TextDisabled("%zu changed file%s", _diff.files.size(), _diff.files.size() == 1 ? "" : "s");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##changes filter", "Filter changed files", &_changes_filter);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
     for (const StatusEntry& file : _diff.files)
     {
-        ImGui::PushID(&file);
         const std::string status = DeltaName(file.status);
+        if (!ContainsInsensitive(status, _changes_filter) && !ContainsInsensitive(file.path, _changes_filter)
+            && !ContainsInsensitive(file.old_path, _changes_filter))
+            continue;
+        ImGui::PushID(&file);
         const std::string label = status + "  " + file.path;
         const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
