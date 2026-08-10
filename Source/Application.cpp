@@ -327,6 +327,19 @@ std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view boo
     return remote == nullptr ? "" : remote->name;
 }
 
+std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name, gg_named_ref_kind kind)
+{
+    std::string result;
+    for (const NamedRef& ref : refs)
+    {
+        if (ref.kind != kind || ref.name != name || ref.remote.empty())
+            continue;
+        if (!result.empty()) result += ", ";
+        result += ref.remote;
+    }
+    return result;
+}
+
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color)
 {
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
@@ -1487,26 +1500,17 @@ void Application::RenderBookmarks()
             return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
         });
         const NamedRef& ref = local != _snapshot->refs.end() ? *local : *remote_ref;
-        std::string remotes;
-        for (const NamedRef& candidate : _snapshot->refs)
-        {
-            if (candidate.kind != GG_NAMED_REF_REMOTE_BOOKMARK || candidate.name != name
-                || candidate.remote.empty())
-                continue;
-            if (!remotes.empty()) remotes += ", ";
-            remotes += candidate.remote;
-        }
+        const std::string remotes = RefRemotes(_snapshot->refs, name, GG_NAMED_REF_REMOTE_BOOKMARK);
         ImGui::PushID(name.c_str());
         bool elided = false;
         if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
-                BookmarkBadgeColor(name, _snapshot->refs), remotes, &elided))
+                BookmarkBadgeColor(name, _snapshot->refs), {}, &elided))
             SelectRevision(ref.target);
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
-        elided |= DrawHighlightedIdWithin(ImGui::GetWindowDrawList(),
-            ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), maximum.x - 8.0f, ref.target,
-            RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
+        elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
+            maximum.x - 8.0f, remotes, kTextMuted);
         if (ImGui::BeginPopupContextItem("bookmark context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
@@ -1573,21 +1577,43 @@ void Application::RenderTags()
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
+    std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
     {
-        if (ref.kind != GG_NAMED_REF_LOCAL_TAG || !ContainsInsensitive(ref.name, _tag_filter))
+        if ((ref.kind != GG_NAMED_REF_LOCAL_TAG && ref.kind != GG_NAMED_REF_REMOTE_TAG)
+            || std::ranges::find(names, ref.name) != names.end())
             continue;
-        ImGui::PushID(&ref);
+        names.push_back(ref.name);
+    }
+    for (const std::string& name : names)
+    {
+        if (!ContainsInsensitive(name, _tag_filter))
+            continue;
+        const auto local = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_TAG && ref.name == name;
+        });
+        const auto remote_ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_REMOTE_TAG && ref.name == name;
+        });
+        const NamedRef& ref = local != _snapshot->refs.end() ? *local : *remote_ref;
+        const std::string remotes = RefRemotes(_snapshot->refs, name, GG_NAMED_REF_REMOTE_TAG);
+        ImGui::PushID(name.c_str());
         bool elided = false;
-        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f,
+        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
                 RefBadgeColor(ref, _snapshot->refs), {}, &elided))
             SelectRevision(ref.target);
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
-        elided |= DrawHighlightedIdWithin(ImGui::GetWindowDrawList(),
-            ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), maximum.x - 8.0f, ref.target,
-            RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
+        if (!elided)
+        {
+            const float id_x = minimum.x + 20.0f + ImGui::CalcTextSize(name.c_str()).x;
+            elided = DrawHighlightedIdWithin(ImGui::GetWindowDrawList(), ImVec2(id_x, minimum.y + 3.0f),
+                maximum.x - 8.0f, ref.target, RevisionPrefix(ref.target),
+                CommitIdColor(ref.target == _snapshot->working_copy));
+        }
+        elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
+            maximum.x - 8.0f, remotes, kTextMuted);
         if (ImGui::BeginPopupContextItem("tag context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
@@ -1599,14 +1625,16 @@ void Application::RenderTags()
             }
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
-            if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
+            if (ActionMenuItem(ICON_MS_DELETE, "Delete", nullptr, local != _snapshot->refs.end()))
+                _engine.Enqueue(Tag{GG_TAG_DELETE, {name}, {}, false});
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
-            ImGui::Text("Tag: %s", ref.name.c_str());
+            ImGui::Text("Tag: %s", name.c_str());
+            ImGui::Text("Remotes: %s", remotes.empty() ? "(local only)" : remotes.c_str());
             ImGui::Text("Commit: %s", ref.target.c_str());
             ImGui::EndTooltip();
         }

@@ -168,6 +168,8 @@ RepoSnapshot RichSnapshot()
         {"coverage-bookmark", {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, true, true},
         {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
         {"coverage-tag", {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false},
+        {"coverage-tag", "origin", "left", GG_NAMED_REF_REMOTE_TAG, true, false},
+        {"remote-tag", "upstream", "base", GG_NAMED_REF_REMOTE_TAG, true, false},
         {"remote-bookmark", {}, "right", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
         {"remote-bookmark", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
         {"remote-only", "upstream", "base", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
@@ -888,6 +890,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         FocusWindow(context, "Tags");
         IM_CHECK(context->ItemExists("**/coverage-tag"));
+        IM_CHECK(context->ItemExists("**/remote-tag"));
         context->ItemClick("**/coverage-tag");
         context->Yield(2);
         context->ItemClick("**/coverage-tag", ImGuiMouseButton_Right);
