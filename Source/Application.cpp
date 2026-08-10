@@ -1772,14 +1772,12 @@ void Application::RenderHistory()
             const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
             const bool hovered = ImGui::IsItemHovered();
             if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
-            if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID))
+            if (!actions_locked && ImGui::BeginDragDropSource(
+                    ImGuiDragDropFlags_SourceAllowNullID | ImGuiDragDropFlags_SourceNoPreviewTooltip))
             {
                 const bool choose_action = ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Right;
                 ImGui::SetDragDropPayload(
                     choose_action ? "GGUI_CHANGE_ACTION" : "GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
-                TextLabelledId(choose_action ? "Choose action for " : "Move ", revision.change_id,
-                    ChangePrefix(revision.change_id),
-                    ChangeIdColor(revision.working_copy));
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
@@ -1789,15 +1787,21 @@ void Application::RenderHistory()
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
                 const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
                 if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
+                {
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
                         : ratio < 0.8f                  ? DropAction::Squash
                                                       : DropAction::Rebase;
+                    const std::string tooltip = DropTooltip(*hovered_drop, revision.change_id);
+                    ImGui::SetTooltip("%s", tooltip.c_str());
+                }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop};
                     if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
+                if (hovered_action_drop)
+                    ImGui::SetTooltip("Choose an action for %s", revision.change_id.c_str());
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
                 {
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
@@ -2050,15 +2054,22 @@ void Application::RenderHistory()
     if (!actions_locked && !_visible_revisions.empty() && ImGui::BeginDragDropTarget())
     {
         ImGui::TextUnformatted("Move after final change");
+        const Revision& final = _snapshot->revisions[_visible_revisions.back()];
+        const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+        if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
+        {
+            const std::string tooltip = DropTooltip(DropAction::ReorderAfter, final.change_id);
+            ImGui::SetTooltip("%s", tooltip.c_str());
+        }
+        else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION"))
+            ImGui::SetTooltip("Choose an action after %s", final.change_id.c_str());
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
         {
-            const Revision& final = _snapshot->revisions[_visible_revisions.back()];
             _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
             if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
         }
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
         {
-            const Revision& final = _snapshot->revisions[_visible_revisions.back()];
             _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
             _open_drop_actions = _pending_drop.source != _pending_drop.target;
         }
@@ -2877,6 +2888,15 @@ gg_reorder_placement Application::DropPlacement(DropAction action)
     return action == DropAction::ReorderAfter ? GG_REORDER_BEFORE : GG_REORDER_AFTER;
 }
 
+std::string Application::DropTooltip(DropAction action, std::string_view target)
+{
+    const std::string_view verb = action == DropAction::ReorderBefore ? "Move before "
+        : action == DropAction::ReorderAfter                           ? "Move after "
+        : action == DropAction::Squash                                 ? "Squash into "
+                                                                       : "Rebase onto ";
+    return std::string(verb) + std::string(target);
+}
+
 void Application::SelectFile(const std::string& path)
 {
     _selected_file = path;
@@ -3178,6 +3198,11 @@ std::string Application::FormatTimestampForTest(std::int64_t timestamp)
 int Application::DropPlacementForTest(int action)
 {
     return DropPlacement(static_cast<DropAction>(std::clamp(action, 0, 3)));
+}
+
+std::string Application::DropTooltipForTest(int action, const std::string& target)
+{
+    return DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), target);
 }
 #endif
 

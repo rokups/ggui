@@ -632,6 +632,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
         IM_CHECK_EQ(Application::DropPlacementForTest(0), GG_REORDER_AFTER);
         IM_CHECK_EQ(Application::DropPlacementForTest(1), GG_REORDER_BEFORE);
+        IM_CHECK_EQ(Application::DropTooltipForTest(0, "target"), "Move before target");
+        IM_CHECK_EQ(Application::DropTooltipForTest(1, "target"), "Move after target");
+        IM_CHECK_EQ(Application::DropTooltipForTest(2, "target"), "Squash into target");
+        IM_CHECK_EQ(Application::DropTooltipForTest(3, "target"), "Rebase onto target");
         IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
         IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
