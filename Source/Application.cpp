@@ -112,6 +112,18 @@ bool ActionMenuItem(std::string_view icon, std::string_view label, const char* s
     return ImGui::MenuItem(decorated.c_str(), shortcut, false, enabled);
 }
 
+bool ActionButton(std::string_view icon, std::string_view label, const ImVec2& size = {})
+{
+    const std::string decorated = IconLabel(icon, label);
+    return ImGui::Button(decorated.c_str(), size);
+}
+
+bool ActionSmallButton(std::string_view icon, std::string_view label)
+{
+    const std::string decorated = IconLabel(icon, label);
+    return ImGui::SmallButton(decorated.c_str());
+}
+
 bool DangerButton(const char* label, const ImVec2& size = {})
 {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.12f, 0.12f, 1.0f));
@@ -1163,35 +1175,35 @@ void Application::RenderToolbar()
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(!CanCreateChange());
-    if (ImGui::Button("New")) CreateChange();
+    if (ActionButton(ICON_MS_ADD, "New")) CreateChange();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Create and edit an empty change on the selected parent(s). This is undoable.");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Commit")) OpenDialog(Dialog::Commit);
+    if (ActionButton(ICON_MS_COMMIT, "Commit")) OpenDialog(Dialog::Commit);
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.122f, 0.161f, 0.216f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.176f, 0.235f, 0.314f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.208f, 0.278f, 0.369f, 1.0f));
-    if (ImGui::Button("Move @ earlier")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+    if (ActionButton(ICON_MS_ARROW_UPWARD, "Move @ earlier")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Move the working copy one change earlier. This modifies the repository and can be undone.");
     ImGui::SameLine();
-    if (ImGui::Button("Move @ later")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+    if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Move @ later")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Move the working copy one change later. This modifies the repository and can be undone.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_undo);
-    if (ImGui::Button("Undo")) _engine.Enqueue(Undo{});
+    if (ActionButton(ICON_MS_UNDO, "Undo")) _engine.Enqueue(Undo{});
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_redo);
-    if (ImGui::Button("Redo")) _engine.Enqueue(Redo{});
+    if (ActionButton(ICON_MS_REDO, "Redo")) _engine.Enqueue(Redo{});
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Refresh")) _engine.Enqueue(Refresh{});
+    if (ActionButton(ICON_MS_REFRESH, "Refresh")) _engine.Enqueue(Refresh{});
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
     ImGui::SameLine();
@@ -1203,7 +1215,7 @@ void Application::RenderToolbar()
         _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
         _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
-    if (ImGui::Button(repository_name.c_str()))
+    if (ActionButton(ICON_MS_FOLDER, repository_name))
         SDL_OpenURL(FileUrl(_snapshot->root).c_str()); // GCOV_EXCL_LINE: external application handoff
     ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered())
@@ -1226,7 +1238,7 @@ void Application::RenderToolbar()
             ImGui::Text("Working: %s (%s %zu/%zu)", _active_operation.c_str(), _progress_phase.c_str(),
                 _progress_completed, _progress_total);
         ImGui::SameLine();
-        if (ImGui::SmallButton("Cancel")) _engine.Cancel();
+        if (ActionSmallButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
     }
     ImGui::Dummy(ImVec2(0.0f, 6.0f));
     if (!_error_message.empty())
@@ -1244,7 +1256,7 @@ void Application::RenderToolbar()
             ImGui::TableNextColumn();
             ImGui::TextWrapped("Error: %s", _error_message.c_str());
             ImGui::TableNextColumn();
-            if (ImGui::SmallButton("Dismiss error")) _error_message.clear();
+            if (ActionSmallButton(ICON_MS_CLOSE, "Dismiss error")) _error_message.clear();
             ImGui::EndTable();
         }
         ImGui::EndChild();
