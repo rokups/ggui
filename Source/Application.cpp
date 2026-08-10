@@ -59,7 +59,8 @@ constexpr ImU32 kStatusDeleted = IM_COL32(248, 81, 73, 255);
 constexpr ImU32 kStatusRenamed = IM_COL32(47, 129, 247, 255);
 constexpr ImU32 kStatusSpecial = IM_COL32(166, 91, 216, 255);
 constexpr ImU32 kStatusConflict = IM_COL32(255, 123, 114, 255);
-constexpr ImU32 kStatusPushed = IM_COL32(82, 132, 196, 255);
+constexpr ImU32 kStatusPushed = IM_COL32(246, 248, 250, 255);
+constexpr ImU32 kStatusUnpushed = IM_COL32(219, 109, 40, 255);
 constexpr ImU32 kChangeId = IM_COL32(166, 91, 216, 255);
 constexpr ImU32 kWorkingChangeId = IM_COL32(225, 113, 247, 255);
 constexpr ImU32 kCommitId = IM_COL32(47, 129, 247, 255);
@@ -1500,7 +1501,7 @@ void Application::RenderHistory()
                 revision.conflicted ? kStatusConflict
                     : revision.working_copy ? kStatusAdded
                     : revision.pushed       ? kStatusPushed
-                                            : IM_COL32(246, 248, 250, 255));
+                                            : kStatusUnpushed);
             draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
             if (hovered && revision.pushed)
                 ImGui::SetTooltip("Pushed (locked)");
