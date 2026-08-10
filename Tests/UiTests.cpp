@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Application.hpp"
 
+#include <IconsMaterialSymbols.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_te_context.h>
@@ -516,6 +517,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(limited, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16...");
         IM_CHECK(!Application::SupportsDiffLanguageForTest("README"));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
+        IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
+        IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "SelectionSurvivesSnapshotRefresh");

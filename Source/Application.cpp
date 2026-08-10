@@ -1061,52 +1061,52 @@ void Application::RenderMenuBar()
         return; // GCOV_EXCL_LINE: defensive ImGui frame rejection
     if (ImGui::BeginMenu("Repository"))
     {
-        if (ImGui::MenuItem("Open...", "Ctrl+O"))
+        if (ActionMenuItem(ICON_MS_FOLDER, "Open...", "Ctrl+O"))
             PickAndOpen(false); // GCOV_EXCL_LINE: native folder picker integration
-        if (ImGui::MenuItem("Initialize..."))
+        if (ActionMenuItem(ICON_MS_CREATE_NEW_FOLDER, "Initialize..."))
             PickAndOpen(true); // GCOV_EXCL_LINE: native folder picker integration
-        if (ImGui::MenuItem("Clone..."))
+        if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Clone..."))
             OpenDialog(Dialog::Clone);
         if (!_recent_repositories.empty() && ImGui::BeginMenu("Recent"))
         {
             for (const std::string& path : _recent_repositories)
-                if (ImGui::MenuItem(path.c_str()))
+                if (ActionMenuItem(ICON_MS_FOLDER, path))
                     _engine.Enqueue(OpenRepository{path});
             ImGui::EndMenu();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Refresh", "F5", false, _snapshot != nullptr))
+        if (ActionMenuItem(ICON_MS_REFRESH, "Refresh", "F5", _snapshot != nullptr))
             _engine.Enqueue(Refresh{});
-        if (ImGui::MenuItem("Quit"))
+        if (ActionMenuItem(ICON_MS_CLOSE, "Quit"))
             _running = false; // GCOV_EXCL_LINE: terminating the host aborts an in-process test queue
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Change", _snapshot != nullptr))
     {
-        if (ImGui::MenuItem("New change", "Ctrl+N", false, CanCreateChange() && _active_operation.empty()))
+        if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
-        if (ImGui::MenuItem("Commit...")) OpenDialog(Dialog::Commit);
-        if (ImGui::MenuItem("Describe...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Describe);
-        if (ImGui::MenuItem("Metaedit...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
-        if (ImGui::MenuItem("Edit", nullptr, false, !_selected_revision.empty()))
+        if (ActionMenuItem(ICON_MS_COMMIT, "Commit...")) OpenDialog(Dialog::Commit);
+        if (ActionMenuItem(ICON_MS_EDIT, "Describe...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Describe);
+        if (ActionMenuItem(ICON_MS_INFO, "Metaedit...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
+        if (ActionMenuItem(ICON_MS_EDIT, "Edit", nullptr, !_selected_revision.empty()))
             _engine.Enqueue(Edit{_selected_revision});
-        if (ImGui::MenuItem("Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
-        if (ImGui::MenuItem("Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
-        if (ImGui::MenuItem("Rebase...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Rebase);
-        if (ImGui::MenuItem("Squash...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
-        if (ImGui::MenuItem("Split...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Split);
-        if (ImGui::MenuItem("Restore...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Restore);
-        if (ImGui::MenuItem("Abandon...", nullptr, false, !_selected_revision.empty())) RequestAbandon(_selected_revision);
-        if (ImGui::MenuItem("Simplify parents", nullptr, false, !_selected_revision.empty()))
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+        if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Rebase);
+        if (ActionMenuItem(ICON_MS_MERGE, "Squash...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
+        if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Split);
+        if (ActionMenuItem(ICON_MS_RESTORE, "Restore...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Restore);
+        if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", nullptr, !_selected_revision.empty())) RequestAbandon(_selected_revision);
+        if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, !_selected_revision.empty()))
             QueueCommands({SimplifyParents{{_selected_revision}}}, {_selected_revision},
                 "Simplifying the parents will rewrite a locked commit.");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr))
     {
-        if (ImGui::MenuItem("Undo", "Ctrl+Z", false, _snapshot->can_undo && _active_operation.empty()))
+        if (ActionMenuItem(ICON_MS_UNDO, "Undo", "Ctrl+Z", _snapshot->can_undo && _active_operation.empty()))
             _engine.Enqueue(Undo{});
-        if (ImGui::MenuItem("Redo", "Ctrl+Y", false, _snapshot->can_redo && _active_operation.empty()))
+        if (ActionMenuItem(ICON_MS_REDO, "Redo", "Ctrl+Y", _snapshot->can_redo && _active_operation.empty()))
             _engine.Enqueue(Redo{});
         ImGui::EndMenu();
     }
@@ -1126,7 +1126,7 @@ void Application::RenderMenuBar()
             ImGui::MenuItem("Operations", nullptr, &_show_operations);
             ImGui::Separator();
         }
-        if (ImGui::MenuItem("Reset layout"))
+        if (ActionMenuItem(ICON_MS_HOME, "Reset layout"))
         {
             _default_layout = true;
             _show_bookmarks = _show_tags = _show_workspaces = _show_remotes = true;
@@ -1344,7 +1344,7 @@ void Application::RenderTags()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("tag context"))
         {
-            if (ImGui::MenuItem("Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
+            if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -1373,10 +1373,10 @@ void Application::RenderWorkspaces()
             workspace.stale ? "Unavailable" : workspace.root.c_str());
         if (ImGui::BeginPopupContextItem("workspace context"))
         {
-            if (ImGui::MenuItem("Open directory", nullptr, false, !workspace.stale))
+            if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
                 SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
-            if (ImGui::MenuItem("Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
-            if (ImGui::MenuItem("Rename current...")) OpenDialog(Dialog::WorkspaceRename);
+            if (ActionMenuItem(ICON_MS_DELETE, "Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
+            if (ActionMenuItem(ICON_MS_EDIT, "Rename current...")) OpenDialog(Dialog::WorkspaceRename);
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -1562,10 +1562,10 @@ void Application::RenderHistory()
             }
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
-                if (ImGui::MenuItem("Edit")) _engine.Enqueue(Edit{revision.oid});
-                if (ImGui::MenuItem("Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
-                if (ImGui::MenuItem("Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
-                if (ImGui::MenuItem("Abandon...")) RequestAbandon(revision.oid);
+                if (ActionMenuItem(ICON_MS_EDIT, "Edit")) _engine.Enqueue(Edit{revision.oid});
+                if (ActionMenuItem(ICON_MS_EDIT, "Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
+                if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
+                if (ActionMenuItem(ICON_MS_DELETE, "Abandon...")) RequestAbandon(revision.oid);
                 ImGui::EndPopup();
             }
             const ImU32 row_fill = _dark_theme
@@ -1780,10 +1780,10 @@ void Application::RenderHistory()
     if (ImGui::BeginPopup("Drop action"))
     {
         std::optional<DropAction> action;
-        if (ImGui::MenuItem("Move before")) action = DropAction::ReorderBefore;
-        if (ImGui::MenuItem("Move after")) action = DropAction::ReorderAfter;
-        if (ImGui::MenuItem("Squash")) action = DropAction::Squash;
-        if (ImGui::MenuItem("Rebase")) action = DropAction::Rebase;
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move before")) action = DropAction::ReorderBefore;
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move after")) action = DropAction::ReorderAfter;
+        if (ActionMenuItem(ICON_MS_MERGE, "Squash")) action = DropAction::Squash;
+        if (ActionMenuItem(ICON_MS_REBASE, "Rebase")) action = DropAction::Rebase;
         if (action.has_value())
         {
             _pending_drop.action = *action;
@@ -1838,25 +1838,25 @@ void Application::RenderChanges()
         }
         if (_selected_revision == _snapshot->working_copy && ImGui::BeginPopupContextItem("file context"))
         {
-            if (ImGui::MenuItem("Commit only this file"))
+            if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
             {
                 _selected_file = file.path;
                 OpenDialog(Dialog::Commit);
                 _input_filesets = file.path;
             }
-            if (ImGui::MenuItem("Restore this file"))
+            if (ActionMenuItem(ICON_MS_RESTORE, "Restore this file"))
                 QueueCommands({Restore{"@-", "@", {file.path}}}, {"@"},
                     "Restoring this file will rewrite the locked working-copy commit.");
-            if (ImGui::MenuItem("Track"))
+            if (ActionMenuItem(ICON_MS_ADD, "Track"))
                 QueueCommands({TrackPaths{{file.path}}}, {"@"},
                     "Tracking this file will rewrite the locked working-copy commit.");
-            if (ImGui::MenuItem("Untrack"))
+            if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
                 QueueCommands({UntrackPaths{{file.path}}}, {"@"},
                     "Untracking this file will rewrite the locked working-copy commit.");
-            if (ImGui::MenuItem("Mark executable"))
+            if (ActionMenuItem(ICON_MS_CHECK, "Mark executable"))
                 QueueCommands({ChmodPaths{{file.path}, true}}, {"@"},
                     "Changing this file mode will rewrite the locked working-copy commit.");
-            if (ImGui::MenuItem("Mark non-executable"))
+            if (ActionMenuItem(ICON_MS_CLOSE, "Mark non-executable"))
                 QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
                     "Changing this file mode will rewrite the locked working-copy commit.");
             ImGui::EndPopup();
