@@ -416,22 +416,22 @@ struct RepositoryEngine::Impl
 
     void Attach(GitRepositoryPtr repository)
     {
-        gg_repository* attached = nullptr;
-        Check(gg_repository_attach(&attached, repository.get()), "attach gg repository");
-        gg_operation_options options = OperationOptions();
-        const int adopted = gg_repository_adopt_git_history(attached, &options);
-        if (adopted < 0)
-        {
-            gg_repository_free(attached); // GCOV_EXCL_LINE: libgg returned an attached handle and then rejected it
-            Check(adopted, "adopt Git history"); // GCOV_EXCL_LINE: requires corrupt libgg attach state
-        }
         Close();
         git = std::move(repository);
-        gg = attached;
-        Sync();
-        const char* workdir = git_repository_workdir(git.get());
-        watcher.Watch(workdir == nullptr ? git_repository_path(git.get()) : workdir, git_repository_commondir(git.get()));
-        PublishSnapshot();
+        try
+        {
+            Check(gg_repository_attach(&gg, git.get()), "attach gg repository");
+            Sync();
+            const char* workdir = git_repository_workdir(git.get());
+            watcher.Watch(
+                workdir == nullptr ? git_repository_path(git.get()) : workdir, git_repository_commondir(git.get()));
+            PublishSnapshot();
+        }
+        catch (...)
+        {
+            Close();
+            throw;
+        }
     }
 
     void OpenPath(const std::string& path)
@@ -1095,6 +1095,9 @@ struct RepositoryEngine::Impl
         if (!quiet)
             Post(OperationStarted{name});
         cancel_requested = false;
+        if (std::holds_alternative<OpenRepository>(command) || std::holds_alternative<InitRepository>(command)
+            || std::holds_alternative<CloneRepository>(command))
+            Close();
         try
         {
             if (const auto* value = std::get_if<OpenRepository>(&command))

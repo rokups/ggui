@@ -272,6 +272,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(ImGui::FindWindowByName("Navigator"), nullptr);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "RepositorySwitchFeedback");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        application.ApplyEventForTest(OperationStarted{"open"});
+        context->Yield(2);
+        IM_CHECK_EQ(application.SnapshotForTest(), nullptr);
+        ImGuiWindow* welcome = ImGui::FindWindowByName("Welcome");
+        IM_CHECK(welcome != nullptr && welcome->Active);
+        context->SetRef("Welcome");
+        IM_CHECK((context->ItemInfo("Open repository...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("Cancel").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        application.ApplyEventForTest(OperationFinished{"open"});
+        context->Yield(2);
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "CreateEditAndInspectWorkingChange");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);

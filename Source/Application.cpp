@@ -1039,6 +1039,14 @@ void Application::ApplyEvent(Event event)
                     _active_operation = value.name;
                     _error_message.clear();
                     _status_message.clear();
+                    _progress_phase.clear();
+                    _progress_completed = 0;
+                    _progress_total = 0;
+                    if (value.name == "open" || value.name == "init" || value.name == "clone")
+                    {
+                        _snapshot.reset();
+                        SDL_SetWindowTitle(_window, "Opening repository - ggui");
+                    }
                 }
                 else if constexpr (std::is_same_v<T, OperationProgress>)
                 {
@@ -1407,7 +1415,19 @@ void Application::RenderWelcome()
     if (ImGui::Button("Clone repository...", ImVec2(width, 42.0f))) OpenDialog(Dialog::Clone);
     ImGui::EndDisabled();
     if (!_active_operation.empty())
-        ImGui::TextDisabled("Working: %s", _active_operation.c_str());
+    {
+        const bool opening = _active_operation == "open" || _active_operation == "init"
+            || _active_operation == "clone";
+        if (opening)
+            ImGui::TextDisabled("Opening repository and importing Git history...");
+        else
+            ImGui::TextDisabled("Working: %s", _active_operation.c_str());
+        if (!_progress_phase.empty())
+            ImGui::TextDisabled("%s", _progress_phase.c_str());
+        if (_progress_total != 0)
+            ImGui::ProgressBar(static_cast<float>(_progress_completed) / _progress_total, ImVec2(width, 0.0f));
+        if (ActionButton(ICON_MS_CLOSE, "Cancel", ImVec2(width, 0.0f))) _engine.Cancel();
+    }
     if (!_error_message.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s", _error_message.c_str());
     if (!_recent_repositories.empty())
