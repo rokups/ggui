@@ -681,6 +681,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Fetch"));
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Bookmarks");
+        IM_CHECK(context->ItemExists("**/remote-only"));
+        IM_CHECK(context->ItemExists("**/diverged"));
         context->ItemClick("**/coverage-bookmark");
         context->Yield(2);
 

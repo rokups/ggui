@@ -1327,6 +1327,18 @@ void Application::RenderBookmarks()
             SelectRevision(ref.target);
         const ImVec2 minimum = ImGui::GetItemRectMin();
         ImDrawList* draw = ImGui::GetWindowDrawList();
+        std::string remotes;
+        for (const NamedRef& candidate : _snapshot->refs)
+        {
+            if (candidate.kind != GG_NAMED_REF_REMOTE_BOOKMARK || candidate.name != name
+                || candidate.remote.empty())
+                continue;
+            if (!remotes.empty()) remotes += ", ";
+            remotes += candidate.remote;
+        }
+        if (!remotes.empty())
+            draw->AddText(ImVec2(minimum.x + 20.0f + ImGui::CalcTextSize(name.c_str()).x, minimum.y + 3.0f),
+                kTextMuted, remotes.c_str());
         DrawHighlightedId(draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (local != _snapshot->refs.end() && ImGui::BeginPopupContextItem("bookmark context"))
