@@ -126,6 +126,17 @@ bool ActionSmallButton(std::string_view icon, std::string_view label)
     return ImGui::SmallButton(decorated.c_str());
 }
 
+void IdCopyMenuItems(std::string_view name, std::string_view id, std::size_t unique_length)
+{
+    const std::size_t short_length = std::min(id.size(), std::max<std::size_t>(8, unique_length));
+    const std::string short_label = "Short " + std::string(name);
+    if (ActionMenuItem(ICON_MS_CONTENT_COPY, short_label, nullptr, !id.empty()))
+        ImGui::SetClipboardText(std::string(id.substr(0, short_length)).c_str());
+    const std::string full_label = "Full " + std::string(name);
+    if (ActionMenuItem(ICON_MS_COPY_ALL, full_label, nullptr, !id.empty()))
+        ImGui::SetClipboardText(std::string(id).c_str());
+}
+
 bool DangerButton(const char* label, const ImVec2& size = {})
 {
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.12f, 0.12f, 1.0f));
@@ -1580,6 +1591,12 @@ void Application::RenderTags()
         if (ImGui::BeginPopupContextItem("tag context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
+            const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
+            if (ImGui::BeginMenu(copy_label.c_str()))
+            {
+                IdCopyMenuItems("commit ID", ref.target, RevisionPrefix(ref.target));
+                ImGui::EndMenu();
+            }
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
@@ -1869,6 +1886,14 @@ void Application::RenderHistory()
             }
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
+                const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
+                if (ImGui::BeginMenu(copy_label.c_str()))
+                {
+                    IdCopyMenuItems("change ID", revision.change_id, ChangePrefix(revision.change_id));
+                    IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
                 ImGui::BeginDisabled(actions_locked);
                 const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
                 const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);

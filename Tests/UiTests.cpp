@@ -893,6 +893,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/coverage-tag", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK(context->ItemExists("**/Reveal commit"));
+        context->ItemClick("**/Copy");
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Short commit ID"));
+        IM_CHECK(context->ItemExists("**/Full commit ID"));
+        context->KeyPress(ImGuiKey_Escape);
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Workspaces");
         IM_CHECK(context->ItemExists("**/Add workspace"));
@@ -1300,9 +1305,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK_GE(push_to_item.RectFull.Min.y - push_item.RectFull.Min.y,
                 ImGui::GetTextLineHeight() + 4.0f);
             for (const char* action : {"Push", "Push to...", "Create bookmark...", "Move bookmark here",
-                     "Delete bookmark"})
+                     "Delete bookmark", "Copy"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
             IM_CHECK(!context->ItemExists("**/Describe..."));
+            context->ItemClick("**/Copy");
+            context->Yield();
+            for (const char* action : {"Short change ID", "Full change ID", "Short commit ID", "Full commit ID"})
+                IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
+            context->ItemClick("**/Short change ID");
+            context->Yield();
+            IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "change-m");
+
+            context->SetRef("History");
+            context->ItemClick(rows[0], ImGuiMouseButton_Right);
+            context->Yield();
             context->ItemClick("**/Create bookmark...");
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
             context->SetRef("ggui action");
