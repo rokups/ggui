@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <limits>
 #include <ranges>
 #include <sstream>
 #include <stdexcept>
@@ -2229,7 +2230,8 @@ void Application::RenderDialogs()
         "Confirm operation###ggui action", "Locked commit warning###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
-    ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
+    ImGui::SetNextWindowSizeConstraints(
+        ImVec2(560.0f, 0.0f), ImVec2(560.0f, std::numeric_limits<float>::max()));
     bool open = true;
     if (!ImGui::BeginPopupModal(
             popup_titles[static_cast<std::size_t>(_dialog)], &open, ImGuiWindowFlags_AlwaysAutoResize))

@@ -368,6 +368,24 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        context->ItemClick("Push to...");
+        ImGuiWindow* dialog = WaitForWindow(context, "ggui action");
+        IM_CHECK_NE(dialog, nullptr);
+        const float width = dialog->SizeFull.x;
+        context->Yield(4);
+        dialog = ImGui::FindWindowByName("ggui action");
+        IM_CHECK_NE(dialog, nullptr);
+        IM_CHECK_LE(std::fabs(dialog->SizeFull.x - width), 0.01f);
+        IM_CHECK_LE(std::fabs(dialog->SizeFull.x - 560.0f), 0.01f);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
