@@ -75,6 +75,7 @@ private:
         PushTo,
         Credentials,
         ConfirmDrop,
+        ConfirmLocked,
     };
 
     enum class DropAction
@@ -130,6 +131,10 @@ private:
     std::vector<std::string> SelectedParentRevisions() const;
     void CreateChange();
     void RequestAbandon(const std::string& revision);
+    void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
+        std::string warning);
+    bool IsLocked(const std::string& revision) const;
+    bool DialogModifiesLockedCommit() const;
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);
@@ -169,6 +174,9 @@ private:
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
     bool _open_drop_actions = false;
+    std::vector<Command> _pending_commands;
+    std::string _locked_warning;
+    bool _pending_change_info_save = false;
 
     Dialog _dialog = Dialog::None;
     std::string _input_primary;

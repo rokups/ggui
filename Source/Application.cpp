@@ -110,6 +110,16 @@ bool ActionMenuItem(std::string_view icon, std::string_view label, const char* s
     return ImGui::MenuItem(decorated.c_str(), shortcut, false, enabled);
 }
 
+bool DangerButton(const char* label, const ImVec2& size = {})
+{
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.12f, 0.12f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.86f, 0.17f, 0.17f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.62f, 0.08f, 0.08f, 1.0f));
+    const bool clicked = ImGui::Button(label, size);
+    ImGui::PopStyleColor(3);
+    return clicked;
+}
+
 void LoadUiFont()
 {
 #ifdef _WIN32
@@ -1043,7 +1053,8 @@ void Application::RenderMenuBar()
         if (ImGui::MenuItem("Restore...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Restore);
         if (ImGui::MenuItem("Abandon...", nullptr, false, !_selected_revision.empty())) RequestAbandon(_selected_revision);
         if (ImGui::MenuItem("Simplify parents", nullptr, false, !_selected_revision.empty()))
-            _engine.Enqueue(SimplifyParents{{_selected_revision}});
+            QueueCommands({SimplifyParents{{_selected_revision}}}, {_selected_revision},
+                "Simplifying the parents will rewrite a locked commit.");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr))
@@ -1500,7 +1511,8 @@ void Application::RenderHistory()
                     const char* source = static_cast<const char*>(payload->Data);
                     const char* path = source + std::char_traits<char>::length(source) + 1;
                     if (source != revision.oid && path < source + payload->DataSize && *path != '\0')
-                        _engine.Enqueue(MoveFiles{source, revision.oid, {path}});
+                        QueueCommands({MoveFiles{source, revision.oid, {path}}}, {source, revision.oid},
+                            "Moving this file will rewrite a locked source or destination commit.");
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -1723,11 +1735,20 @@ void Application::RenderChanges()
                 _input_filesets = file.path;
             }
             if (ImGui::MenuItem("Restore this file"))
-                _engine.Enqueue(Restore{"@-", "@", {file.path}});
-            if (ImGui::MenuItem("Track")) _engine.Enqueue(TrackPaths{{file.path}});
-            if (ImGui::MenuItem("Untrack")) _engine.Enqueue(UntrackPaths{{file.path}});
-            if (ImGui::MenuItem("Mark executable")) _engine.Enqueue(ChmodPaths{{file.path}, true});
-            if (ImGui::MenuItem("Mark non-executable")) _engine.Enqueue(ChmodPaths{{file.path}, false});
+                QueueCommands({Restore{"@-", "@", {file.path}}}, {"@"},
+                    "Restoring this file will rewrite the locked working-copy commit.");
+            if (ImGui::MenuItem("Track"))
+                QueueCommands({TrackPaths{{file.path}}}, {"@"},
+                    "Tracking this file will rewrite the locked working-copy commit.");
+            if (ImGui::MenuItem("Untrack"))
+                QueueCommands({UntrackPaths{{file.path}}}, {"@"},
+                    "Untracking this file will rewrite the locked working-copy commit.");
+            if (ImGui::MenuItem("Mark executable"))
+                QueueCommands({ChmodPaths{{file.path}, true}}, {"@"},
+                    "Changing this file mode will rewrite the locked working-copy commit.");
+            if (ImGui::MenuItem("Mark non-executable"))
+                QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
+                    "Changing this file mode will rewrite the locked working-copy commit.");
             ImGui::EndPopup();
         }
         ImGui::PopID();
@@ -1787,12 +1808,22 @@ void Application::RenderChangeInformation()
     if (ImGui::InputTextMultiline("##commit message", &_change_info_message, ImVec2(-1.0f, message_height)))
         _change_info_dirty = true;
     ImGui::BeginDisabled(!_change_info_dirty || !_active_operation.empty());
-    if (ImGui::Button("Save message"))
-    {
-        _engine.Enqueue(Describe{revision->oid, _change_info_message});
-        _change_info_dirty = false;
-    }
+    const bool save = revision->pushed ? DangerButton("Save message") : ImGui::Button("Save message");
     ImGui::EndDisabled();
+    if (save)
+    {
+        if (revision->pushed)
+        {
+            _pending_change_info_save = true;
+            QueueCommands({Describe{revision->oid, _change_info_message}}, {revision->oid},
+                "Saving the message will rewrite this locked commit.");
+        }
+        else
+        {
+            _engine.Enqueue(Describe{revision->oid, _change_info_message});
+            _change_info_dirty = false;
+        }
+    }
     ImGui::End();
 }
 
@@ -1923,7 +1954,7 @@ void Application::RenderDialogs()
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Create tag###ggui action", "Add workspace###ggui action",
         "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
-        "Confirm operation###ggui action"};
+        "Confirm operation###ggui action", "Locked commit warning###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSize(ImVec2(560.0f, 0.0f), ImGuiCond_Appearing);
@@ -2068,7 +2099,20 @@ void Application::RenderDialogs()
             affected, refs);
         break;
     }
+    case Dialog::ConfirmLocked:
+        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f), "Warning: locked commit");
+        ImGui::TextWrapped("%s", _locked_warning.c_str());
+        ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote and require a force push.");
+        break;
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
+    }
+
+    const bool modifies_locked = DialogModifiesLockedCommit();
+    if (modifies_locked && _dialog != Dialog::ConfirmLocked)
+    {
+        ImGui::Spacing();
+        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f), "Warning: this operation modifies a locked commit.");
+        ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote.");
     }
 
     ImGui::Spacing();
@@ -2077,11 +2121,12 @@ void Application::RenderDialogs()
     const bool can_submit = CanSubmitDialog();
     const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
-    if (focus_first && _dialog == Dialog::ConfirmDrop)
+    if (focus_first && (_dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked))
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(!_active_operation.empty() || !can_submit);
-    const bool submit = ImGui::Button(
-                            _dialog == Dialog::ConfirmDrop ? "Confirm" : "Apply", ImVec2(110.0f, 0.0f))
+    const char* submit_label = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm" : "Apply";
+    const bool submit = (modifies_locked ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
+                                         : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && _active_operation.empty() && can_submit);
     if (!can_submit && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Fill in the required fields before applying.");
@@ -2095,6 +2140,11 @@ void Application::RenderDialogs()
     if (cancel)
     {
         if (_dialog == Dialog::Credentials) _engine.CancelCredential();
+        if (_dialog == Dialog::ConfirmLocked)
+        {
+            _pending_commands.clear();
+            _pending_change_info_save = false;
+        }
         _dialog = Dialog::None;
         ImGui::ClearActiveID();
         ImGui::CloseCurrentPopup();
@@ -2102,6 +2152,11 @@ void Application::RenderDialogs()
     if (!open) // GCOV_EXCL_START: native title-bar close path; Cancel is automated instead
     {
         if (_dialog == Dialog::Credentials) _engine.CancelCredential();
+        if (_dialog == Dialog::ConfirmLocked)
+        {
+            _pending_commands.clear();
+            _pending_change_info_save = false;
+        }
         _dialog = Dialog::None;
         ImGui::ClearActiveID();
         ImGui::CloseCurrentPopup();
@@ -2159,6 +2214,14 @@ void Application::SubmitDialog()
         else
             _engine.Enqueue(Reorder{_pending_drop.source, _pending_drop.target,
                 _pending_drop.action == DropAction::ReorderAfter ? GG_REORDER_AFTER : GG_REORDER_BEFORE});
+        break;
+    case Dialog::ConfirmLocked:
+        for (Command& command : _pending_commands)
+            _engine.Enqueue(std::move(command));
+        _pending_commands.clear();
+        if (_pending_change_info_save)
+            _change_info_dirty = false;
+        _pending_change_info_save = false;
         break;
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }
@@ -2230,11 +2293,70 @@ void Application::CreateChange()
         : _snapshot->revisions.end();
     if (selected != _snapshot->revisions.end() && selected->empty && !selected->parents.empty())
     {
-        _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
-        _engine.Enqueue(Abandon{{selected->oid}, true, false});
+        QueueCommands(
+            {NewChange{{}, SelectedParentRevisions(), {}, {}, false}, Abandon{{selected->oid}, true, false}},
+            {selected->oid}, "Replacing this empty change will rewrite a locked commit.");
         return;
     }
     _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
+}
+
+bool Application::IsLocked(const std::string& identifier) const
+{
+    if (_snapshot == nullptr || identifier.empty())
+        return false;
+    std::string oid = identifier == "@" ? _snapshot->working_copy : identifier;
+    const auto ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
+        return candidate.name == oid;
+    });
+    if (ref != _snapshot->refs.end())
+        oid = ref->target;
+    const auto revision = std::ranges::find_if(_snapshot->revisions, [&](const Revision& candidate) {
+        return candidate.oid == oid || candidate.change_id == oid;
+    });
+    return revision != _snapshot->revisions.end() && revision->pushed;
+}
+
+bool Application::DialogModifiesLockedCommit() const
+{
+    switch (_dialog)
+    {
+    case Dialog::Commit: return IsLocked(_snapshot->working_copy);
+    case Dialog::Describe:
+    case Dialog::Metaedit:
+    case Dialog::Split:
+    case Dialog::Abandon: return IsLocked(_selected_revision);
+    case Dialog::Rebase: return IsLocked(_selected_revision) || IsLocked(_input_primary);
+    case Dialog::Squash:
+    {
+        std::string destination = _input_secondary;
+        if (destination.empty())
+        {
+            const auto source = std::ranges::find(_snapshot->revisions, _selected_revision, &Revision::oid);
+            if (source != _snapshot->revisions.end() && !source->parents.empty())
+                destination = source->parents.front();
+        }
+        return IsLocked(_selected_revision) || IsLocked(destination);
+    }
+    case Dialog::Restore: return IsLocked(_selected_revision) || IsLocked(_input_primary);
+    case Dialog::ConfirmDrop: return IsLocked(_pending_drop.source) || IsLocked(_pending_drop.target);
+    case Dialog::ConfirmLocked: return true;
+    default: return false;
+    }
+}
+
+void Application::QueueCommands(
+    std::vector<Command> commands, const std::vector<std::string>& revisions, std::string warning)
+{
+    if (std::ranges::none_of(revisions, [this](const std::string& revision) { return IsLocked(revision); }))
+    {
+        for (Command& command : commands)
+            _engine.Enqueue(std::move(command));
+        return;
+    }
+    _pending_commands = std::move(commands);
+    _locked_warning = std::move(warning);
+    OpenDialog(Dialog::ConfirmLocked);
 }
 
 void Application::RequestAbandon(const std::string& revision)

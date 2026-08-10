@@ -568,6 +568,46 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "LockedChangesAndChangeInformation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("right");
+        context->Yield(3);
+
+        FocusWindow(context, "Change information");
+        context->ItemInputValue("##commit message", "updated locked message");
+        context->ItemClick("Save message");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Confirm"));
+        context->ItemClick("Cancel");
+
+        application.SelectRevisionForTest("third");
+        context->SetRef("ggui dockspace");
+        context->ItemClick("New");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
+        FocusWindow(context, "History");
+        context->KeyPress(ImGuiKey_A);
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
+
+        application.SelectRevisionForTest("right");
+        FocusWindow(context, "History");
+        context->KeyPress(ImGuiKey_A);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Apply"));
+        context->ItemClick("Cancel");
+
+        application.ShowDropConfirmationForTest("left", "right", 0);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Confirm"));
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "RichRepositoryStates");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
