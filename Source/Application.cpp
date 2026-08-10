@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <limits>
 #include <ranges>
@@ -150,6 +151,24 @@ std::string LimitedLines(std::string_view text, std::size_t maximum)
         start = next + 1;
     }
     return std::string(text);
+}
+
+std::string FormatTimestamp(std::int64_t timestamp)
+{
+    if (timestamp <= 0)
+        return "Unknown date";
+    const std::time_t value = static_cast<std::time_t>(timestamp);
+    std::tm local{};
+#ifdef _WIN32
+    if (localtime_s(&local, &value) != 0)
+        return "Unknown date";
+#else
+    if (localtime_r(&value, &local) == nullptr)
+        return "Unknown date";
+#endif
+    std::array<char, 17> result{};
+    return std::strftime(result.data(), result.size(), "%Y-%m-%d %H:%M", &local) == 0
+        ? "Unknown date" : result.data();
 }
 
 void LoadUiFont()
@@ -2147,11 +2166,14 @@ void Application::RenderChangeInformation()
         _change_info_dirty = false;
     }
 
-    ImGui::Text("%s%s", revision->author.empty() ? "Unknown author" : revision->author.c_str(),
-        revision->pushed ? "  -  locked" : "");
+    ImGui::TextUnformatted(revision->author.empty() ? "Unknown author" : revision->author.c_str());
+    ImGui::SameLine(0.0f, 12.0f);
+    const std::string date = FormatTimestamp(revision->timestamp);
+    ImGui::Text("%s%s", date.c_str(), revision->pushed ? "  locked" : "");
+    ImGui::SameLine(0.0f, 12.0f);
     TextLabelledId("Change ", revision->change_id, ChangePrefix(revision->change_id),
         ChangeIdColor(revision->working_copy));
-    ImGui::SameLine();
+    ImGui::SameLine(0.0f, 12.0f);
     TextLabelledId("Commit ", revision->oid, RevisionPrefix(revision->oid), CommitIdColor(revision->working_copy));
     const float button_height = ImGui::GetFrameHeight();
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
@@ -3038,6 +3060,11 @@ std::string Application::LimitLinesForTest(const std::string& text, std::size_t 
 unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
 {
     return BookmarkBadgeColor(name, refs);
+}
+
+std::string Application::FormatTimestampForTest(std::int64_t timestamp)
+{
+    return FormatTimestamp(timestamp);
 }
 #endif
 

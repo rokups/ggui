@@ -557,6 +557,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         for (std::size_t left = 0; left < bookmark_colors.size(); ++left)
             for (std::size_t right = left + 1; right < bookmark_colors.size(); ++right)
                 IM_CHECK_NE(bookmark_colors[left], bookmark_colors[right]);
+        IM_CHECK_EQ(Application::FormatTimestampForTest(0), "Unknown date");
+        IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
         IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
         IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
