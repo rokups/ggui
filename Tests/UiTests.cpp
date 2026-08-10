@@ -1178,6 +1178,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->SetRef("History");
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
+            const ImGuiTestItemInfo push_item = context->ItemInfo("**/Push");
+            const ImGuiTestItemInfo push_to_item = context->ItemInfo("**/Push to...");
+            IM_CHECK_GE(push_to_item.RectFull.Min.y - push_item.RectFull.Min.y,
+                ImGui::GetTextLineHeight() + 4.0f);
             for (const char* action : {"Push", "Push to...", "Create bookmark...", "Move bookmark here",
                      "Delete bookmark"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));

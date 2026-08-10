@@ -1751,7 +1751,6 @@ void Application::RenderHistory()
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
         RebuildGraph();
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 0.0f));
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -2064,7 +2063,6 @@ void Application::RenderHistory()
             ImGui::PopID();
         }
     }
-    ImGui::PopStyleVar();
     ImGui::InvisibleButton("move to end", ImVec2(-1.0f, 22.0f));
     const ImVec2 end_minimum = ImGui::GetItemRectMin();
     const ImVec2 end_maximum = ImGui::GetItemRectMax();
