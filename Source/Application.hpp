@@ -54,6 +54,7 @@ public:
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
     static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
+    static std::string ReferenceLabelForTest(const NamedRef& ref);
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);

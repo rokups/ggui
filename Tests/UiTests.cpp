@@ -621,6 +621,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(limited, "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n16...");
         IM_CHECK(!Application::SupportsDiffLanguageForTest("README"));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
+        IM_CHECK_EQ(Application::ReferenceLabelForTest(
+                        {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK}),
+            "feature");
+        IM_CHECK_EQ(Application::ReferenceLabelForTest(
+                        {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BOOKMARK}),
+            "origin/feature");
         const RepoSnapshot snapshot = RichSnapshot();
         const std::array bookmark_colors{
             Application::BookmarkColorForTest("coverage-bookmark", snapshot.refs),

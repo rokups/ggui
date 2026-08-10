@@ -278,6 +278,12 @@ ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
     return kBadgeRemote;
 }
 
+std::string ReferenceLabel(const NamedRef& ref)
+{
+    return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && !ref.remote.empty()
+        ? ref.remote + "/" + ref.name : ref.name;
+}
+
 const Remote* DefaultRemote(const RepoSnapshot& snapshot)
 {
     const auto origin = std::ranges::find(snapshot.remotes, "origin", &Remote::name);
@@ -1680,7 +1686,7 @@ void Application::RebuildGraph()
         if (!matches)
         {
             matches = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-                return ref.target == revision.oid && ContainsInsensitive(ref.name, _graph_filter);
+                return ref.target == revision.oid && ContainsInsensitive(ReferenceLabel(ref), _graph_filter);
             });
         }
         if (matches)
@@ -2004,19 +2010,20 @@ void Application::RenderHistory()
                 if (ref.target != revision.oid) continue;
                 const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
                     || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-                const std::string key = (bookmark ? "bookmark:" : "tag:") + ref.name;
+                const std::string label = ReferenceLabel(ref);
+                const std::string key = (bookmark ? "bookmark:" : "tag:") + label;
                 if (std::ranges::find(drawn_refs, key) != drawn_refs.end())
                     continue;
                 drawn_refs.push_back(key);
-                const float badge_width = ImGui::CalcTextSize(ref.name.c_str()).x + FontPx(14.0f);
+                const float badge_width = ImGui::CalcTextSize(label.c_str()).x + FontPx(14.0f);
                 if (badge_cursor.x + badge_width > content_right)
                 {
-                    DrawElidedBadge(draw, badge_cursor, center, content_right, ref.name,
+                    DrawElidedBadge(draw, badge_cursor, center, content_right, label,
                         RefBadgeColor(ref, _snapshot->refs));
                     elided = true;
                     break;
                 }
-                DrawBadge(draw, badge_cursor, center, ref.name, RefBadgeColor(ref, _snapshot->refs));
+                DrawBadge(draw, badge_cursor, center, label, RefBadgeColor(ref, _snapshot->refs));
             }
             ImGui::PopClipRect();
 
@@ -3267,6 +3274,11 @@ std::string Application::FileUrlForTest(const std::string& path)
 std::string Application::LimitLinesForTest(const std::string& text, std::size_t maximum)
 {
     return LimitedLines(text, maximum);
+}
+
+std::string Application::ReferenceLabelForTest(const NamedRef& ref)
+{
+    return ReferenceLabel(ref);
 }
 
 unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
