@@ -258,6 +258,38 @@ ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
     return kBadgeRemote;
 }
 
+const Remote* DefaultRemote(const RepoSnapshot& snapshot)
+{
+    const auto origin = std::ranges::find(snapshot.remotes, "origin", &Remote::name);
+    return origin != snapshot.remotes.end() ? &*origin
+                                            : snapshot.remotes.empty() ? nullptr : &snapshot.remotes.front();
+}
+
+const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revision)
+{
+    const auto tracked = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision && ref.tracked;
+    });
+    if (tracked != snapshot.refs.end())
+        return &*tracked;
+    const auto local = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision;
+    });
+    return local == snapshot.refs.end() ? nullptr : &*local;
+}
+
+std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark)
+{
+    const auto tracked = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == bookmark
+            && std::ranges::find(snapshot.remotes, ref.remote, &Remote::name) != snapshot.remotes.end();
+    });
+    if (tracked != snapshot.refs.end())
+        return tracked->remote;
+    const Remote* remote = DefaultRemote(snapshot);
+    return remote == nullptr ? "" : remote->name;
+}
+
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color)
 {
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
@@ -1204,6 +1236,26 @@ void Application::RenderToolbar()
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ActionButton(ICON_MS_REFRESH, "Refresh")) _engine.Enqueue(Refresh{});
+    const Remote* remote = DefaultRemote(*_snapshot);
+    const NamedRef* bookmark = BookmarkAt(*_snapshot, _selected_revision);
+    const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(remote == nullptr);
+    if (ActionButton(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote->name, true});
+    ImGui::SameLine();
+    if (ActionButton(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote->name, false});
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(bookmark == nullptr || push_remote.empty());
+    if (ActionButton(ICON_MS_CLOUD_UPLOAD, "Push")) _engine.Enqueue(Push{bookmark->name, push_remote});
+    ImGui::SameLine();
+    if (ActionButton(ICON_MS_PUBLISH, "Push to..."))
+    {
+        OpenDialog(Dialog::PushTo);
+        _input_primary = push_remote;
+        _input_secondary = bookmark->name;
+    }
+    ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
     ImGui::SameLine();

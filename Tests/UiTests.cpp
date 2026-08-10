@@ -349,15 +349,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        for (const char* action : {"Pull", "Fetch", "Push", "Push to..."})
+        {
+            IM_CHECK(context->ItemExists(action));
+            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        }
 
         snapshot = RichSnapshot();
         snapshot.can_undo = true;
         snapshot.can_redo = false;
+        snapshot.remotes.clear();
         Application::Instance().SetSnapshotForTest(std::move(snapshot));
         context->Yield(2);
         context->SetRef("ggui dockspace");
         IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        for (const char* action : {"Pull", "Fetch", "Push", "Push to..."})
+            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");
