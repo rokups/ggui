@@ -86,6 +86,12 @@ struct Mutation
     ~Mutation() { gg_mutation_result_dispose(&value); }
 };
 
+struct TransportPlan
+{
+    gg_transport_plan value{};
+    ~TransportPlan() { gg_transport_plan_dispose(&value); }
+};
+
 struct Revisions
 {
     gg_revision_array value{};
@@ -247,6 +253,7 @@ struct RepositoryEngine::Impl
     bool credential_cancelled = false;
     bool ssh_agent_attempted = false;
     int credential_attempts = 0;
+    std::string transfer_phase = "clone";
 
     std::atomic_bool cancel_requested = false;
     std::atomic_bool test_commands_suppressed = false;
@@ -389,7 +396,7 @@ struct RepositoryEngine::Impl
     static int TransferProgress(const git_indexer_progress* stats, void* payload)
     {
         auto* self = static_cast<Impl*>(payload);
-        self->Post(OperationProgress{"clone", stats->received_objects, stats->total_objects});
+        self->Post(OperationProgress{self->transfer_phase, stats->received_objects, stats->total_objects});
         return self->cancel_requested.load() ? GIT_EUSER : GIT_OK;
     }
 
@@ -439,6 +446,7 @@ struct RepositoryEngine::Impl
         if (fs::exists(temporary))
             throw std::runtime_error("temporary clone destination already exists: " + temporary.string());
 
+        transfer_phase = "clone";
         git_clone_options options = GIT_CLONE_OPTIONS_INIT;
         options.fetch_opts.callbacks.credentials = CredentialCallback;
         options.fetch_opts.callbacks.transfer_progress = TransferProgress;
@@ -459,6 +467,137 @@ struct RepositoryEngine::Impl
         cloned.reset();
         FinishClone(temporary, destination);
         OpenPath(destination.string());
+    }
+
+    git_remote_callbacks RemoteCallbacks()
+    {
+        git_remote_callbacks callbacks = GIT_REMOTE_CALLBACKS_INIT;
+        callbacks.credentials = CredentialCallback;
+        callbacks.transfer_progress = TransferProgress;
+        callbacks.payload = this;
+        return callbacks;
+    }
+
+    void FetchRemote(const Fetch& command)
+    {
+        Sync();
+        transfer_phase = command.tracked_only ? "pull" : "fetch";
+        git_remote* raw_remote = nullptr;
+        Check(git_remote_lookup(&raw_remote, git.get(), command.remote.c_str()), "find remote");
+        std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
+        ssh_agent_attempted = false;
+        credential_attempts = 0;
+        git_remote_callbacks callbacks = RemoteCallbacks();
+        Check(git_remote_connect(remote.get(), GIT_DIRECTION_FETCH, &callbacks, nullptr, nullptr),
+            "connect to remote");
+        const git_remote_head** heads = nullptr;
+        std::size_t head_count = 0;
+        const int list_result = git_remote_ls(&heads, &head_count, remote.get());
+        if (list_result < 0)
+        {
+            git_remote_disconnect(remote.get());
+            Check(list_result, "list remote refs");
+        }
+        struct Advertised
+        {
+            std::string name;
+            git_oid target{};
+            gg_remote_ref_kind kind = GG_REMOTE_BRANCH;
+        };
+        std::vector<Advertised> advertised;
+        advertised.reserve(head_count);
+        constexpr std::string_view branch_prefix = "refs/heads/";
+        constexpr std::string_view tag_prefix = "refs/tags/";
+        for (std::size_t index = 0; index < head_count; ++index)
+        {
+            const std::string_view reference(heads[index]->name);
+            if (reference.starts_with(branch_prefix))
+                advertised.push_back({std::string(reference.substr(branch_prefix.size())), heads[index]->oid,
+                    GG_REMOTE_BRANCH});
+            else if (reference.starts_with(tag_prefix) && !reference.ends_with("^{}"))
+                advertised.push_back(
+                    {std::string(reference.substr(tag_prefix.size())), heads[index]->oid, GG_REMOTE_TAG});
+        }
+        git_remote_disconnect(remote.get());
+
+        std::vector<gg_advertised_ref> refs;
+        refs.reserve(advertised.size());
+        for (const Advertised& ref : advertised)
+            refs.push_back({command.remote.c_str(), ref.name.c_str(), ref.target, ref.kind});
+        const std::vector<std::string> remote_names{command.remote};
+        const StringArray remotes(remote_names);
+        gg_fetch_options options = GG_FETCH_OPTIONS_INIT;
+        options.advertised_refs = refs.data();
+        options.advertised_ref_count = refs.size();
+        options.remotes = remotes.Get();
+        options.tracked = command.tracked_only;
+        TransportPlan plan;
+        Check(gg_repository_plan_fetch(&plan.value, gg, &options), "plan fetch");
+
+        std::vector<std::string> refspec_storage;
+        std::vector<char*> refspec_values;
+        refspec_storage.reserve(plan.value.refspec_count);
+        refspec_values.reserve(plan.value.refspec_count);
+        for (std::size_t index = 0; index < plan.value.refspec_count; ++index)
+        {
+            const gg_refspec& refspec = plan.value.refspecs[index];
+            refspec_storage.push_back(
+                "+" + std::string(refspec.source) + ":" + std::string(refspec.destination));
+        }
+        for (std::string& refspec : refspec_storage)
+            refspec_values.push_back(refspec.data());
+        git_strarray refspecs{refspec_values.data(), refspec_values.size()};
+        git_fetch_options fetch_options = GIT_FETCH_OPTIONS_INIT;
+        fetch_options.callbacks = RemoteCallbacks();
+        fetch_options.prune = GIT_FETCH_PRUNE;
+        fetch_options.download_tags = GIT_REMOTE_DOWNLOAD_TAGS_NONE;
+        Check(git_remote_fetch(remote.get(), refspec_values.empty() ? nullptr : &refspecs, &fetch_options,
+                  command.tracked_only ? "ggui pull" : "ggui fetch"),
+            command.tracked_only ? "pull remote" : "fetch remote");
+        Mutation mutation;
+        gg_operation_options operation = OperationOptions();
+        Check(gg_repository_complete_fetch(&mutation.value, gg, &plan.value, &operation), "complete fetch");
+        PublishSnapshot();
+    }
+
+    void PushBookmark(const Push& command)
+    {
+        Sync();
+        transfer_phase = "push";
+        const std::vector<std::string> bookmarks{command.bookmark};
+        const StringArray bookmark_names(bookmarks);
+        gg_push_options options = GG_PUSH_OPTIONS_INIT;
+        options.bookmarks = bookmark_names.Get();
+        options.remote = command.remote.c_str();
+        TransportPlan plan;
+        Check(gg_repository_plan_push(&plan.value, gg, &options), "plan push");
+
+        git_remote* raw_remote = nullptr;
+        Check(git_remote_lookup(&raw_remote, git.get(), command.remote.c_str()), "find remote");
+        std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
+        std::vector<std::string> refspec_storage;
+        std::vector<char*> refspec_values;
+        refspec_storage.reserve(plan.value.refspec_count);
+        refspec_values.reserve(plan.value.refspec_count);
+        for (std::size_t index = 0; index < plan.value.refspec_count; ++index)
+        {
+            const gg_refspec& refspec = plan.value.refspecs[index];
+            refspec_storage.push_back(std::string(refspec.source) + ":" + refspec.destination);
+        }
+        for (std::string& refspec : refspec_storage)
+            refspec_values.push_back(refspec.data());
+        git_strarray refspecs{refspec_values.data(), refspec_values.size()};
+        git_push_options push_options = GIT_PUSH_OPTIONS_INIT;
+        push_options.callbacks = RemoteCallbacks();
+        push_options.remote_push_options = {
+            plan.value.push_options.strings, plan.value.push_options.count};
+        ssh_agent_attempted = false;
+        credential_attempts = 0;
+        Check(git_remote_push(remote.get(), &refspecs, &push_options), "push bookmark");
+        Mutation mutation;
+        gg_operation_options operation = OperationOptions();
+        Check(gg_repository_complete_push(&mutation.value, gg, &plan.value, &operation), "complete push");
+        PublishSnapshot();
     }
 
     void Sync()
@@ -863,6 +1002,8 @@ struct RepositoryEngine::Impl
         return std::visit(
             Overloaded{[](const OpenRepository&) { return "open"; }, [](const InitRepository&) { return "init"; },
                 [](const CloneRepository&) { return "clone"; }, [](const Refresh&) { return "refresh"; },
+                [](const Fetch& value) { return value.tracked_only ? "pull" : "fetch"; },
+                [](const Push&) { return "push"; },
                 [](const LoadDiff&) { return "diff"; }, [](const NewChange&) { return "new"; },
                 [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
                 [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },
@@ -903,6 +1044,10 @@ struct RepositoryEngine::Impl
                     Sync();
                 PublishSnapshot();
             }
+            else if (const auto* value = std::get_if<Fetch>(&command))
+                FetchRemote(*value);
+            else if (const auto* value = std::get_if<Push>(&command))
+                PushBookmark(*value);
             else if (const auto* value = std::get_if<LoadDiff>(&command))
                 LoadPatch(*value);
             else

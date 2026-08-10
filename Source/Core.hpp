@@ -120,6 +120,16 @@ struct Refresh
 {
     bool snapshot_working_copy = true;
 };
+struct Fetch
+{
+    std::string remote;
+    bool tracked_only = false;
+};
+struct Push
+{
+    std::string bookmark;
+    std::string remote;
+};
 struct LoadDiff
 {
     std::string revision;
@@ -260,7 +270,7 @@ struct ChmodPaths
     bool executable = false;
 };
 
-using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, LoadDiff, NewChange, Describe,
+using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, Fetch, Push, LoadDiff, NewChange, Describe,
     Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, Restore, MoveFiles,
     SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
     UntrackPaths, ChmodPaths>;
