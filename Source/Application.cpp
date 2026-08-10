@@ -5,6 +5,7 @@
 #include <SDL3/SDL_opengl.h>
 #include <TextDiff.h>
 #include <TextEditor.h>
+#include <IconsMaterialSymbols.h>
 #include <backends/imgui_impl_opengl3.h>
 #include <backends/imgui_impl_sdl3.h>
 #include <imgui.h>
@@ -97,6 +98,18 @@ float FontPx(float value)
     return value * ImGui::GetFontSize() / 16.0f;
 }
 
+std::string IconLabel(std::string_view icon, std::string_view label)
+{
+    return std::string(icon) + "  " + std::string(label) + "###" + std::string(label);
+}
+
+bool ActionMenuItem(std::string_view icon, std::string_view label, const char* shortcut = nullptr,
+    bool enabled = true)
+{
+    const std::string decorated = IconLabel(icon, label);
+    return ImGui::MenuItem(decorated.c_str(), shortcut, false, enabled);
+}
+
 void LoadUiFont()
 {
 #ifdef _WIN32
@@ -107,6 +120,7 @@ void LoadUiFont()
     constexpr std::array paths{"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf"};
 #endif
+    bool loaded = false;
     for (const char* path : paths)
     {
         ImFontConfig config;
@@ -114,8 +128,27 @@ void LoadUiFont()
         config.OversampleV = 2;
         if (std::filesystem::exists(path)
             && ImGui::GetIO().Fonts->AddFontFromFileTTF(path, 16.0f, &config) != nullptr)
-            return;
+        {
+            loaded = true;
+            break;
+        }
     }
+    if (!loaded)
+        ImGui::GetIO().Fonts->AddFontDefault();
+    static constexpr ImWchar ranges[]{0xe000, 0xf8ff, 0};
+    ImFontConfig icons;
+    icons.MergeMode = true;
+    icons.PixelSnapH = true;
+    icons.GlyphMinAdvanceX = 16.0f;
+    icons.GlyphOffset = ImVec2(0.0f, 3.0f);
+    std::vector<std::filesystem::path> icon_paths{GGUI_ICON_FONT_PATH};
+    if (const char* base = SDL_GetBasePath(); base != nullptr)
+        icon_paths.emplace_back(std::filesystem::path(base) / ".." / "share" / "ggui" / "Fonts"
+            / "MaterialSymbolsOutlined.ttf");
+    for (const std::filesystem::path& path : icon_paths)
+        if (std::filesystem::exists(path)
+            && ImGui::GetIO().Fonts->AddFontFromFileTTF(path.string().c_str(), 17.0f, &icons, ranges) != nullptr)
+            break;
 }
 
 ImU32 StatusColor(git_delta_t status)

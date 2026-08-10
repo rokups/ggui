@@ -170,6 +170,8 @@ target_link_libraries(ggui PRIVATE
   nfd::nfd
   nlohmann_json::nlohmann_json
   spdlog::spdlog)
+target_compile_definitions(ggui PRIVATE
+  GGUI_ICON_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/MaterialSymbolsOutlined.ttf")
 if(GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_link_libraries(ggui PRIVATE imgui_test_engine)
 endif()
@@ -206,6 +208,7 @@ if(UNIX AND NOT APPLE AND gg_FOUND)
   install(IMPORTED_RUNTIME_ARTIFACTS gg::gg libgit2::libgit2package LIBRARY DESTINATION lib)
 endif()
 install(FILES README.md LICENSE DESTINATION share/ggui)
+install(FILES Assets/Fonts/MaterialSymbolsOutlined.ttf DESTINATION share/ggui/Fonts)
 if(WIN32)
   set(CPACK_GENERATOR ZIP)
 else()
