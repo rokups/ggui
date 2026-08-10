@@ -583,7 +583,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         FocusWindow(context, "Change information");
-        context->ItemInputValue("##commit message", "updated locked message");
+        context->ItemInputValue("**/##commit message", "updated locked message");
         context->ItemClick("Save message");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");

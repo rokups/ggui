@@ -1915,8 +1915,19 @@ void Application::RenderChangeInformation()
     TextLabelledId("Commit ", revision->oid, RevisionPrefix(revision->oid), CommitIdColor(revision->working_copy));
     const float button_height = ImGui::GetFrameHeight();
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
-    if (ImGui::InputTextMultiline("##commit message", &_change_info_message, ImVec2(-1.0f, message_height)))
+    const ImVec2 message_size = ImGui::CalcTextSize(
+        _change_info_message.data(), _change_info_message.data() + _change_info_message.size(), false);
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    ImGui::BeginChild("commit message scroll", ImVec2(-1.0f, message_height), ImGuiChildFlags_None,
+        ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_AlwaysHorizontalScrollbar
+            | ImGuiWindowFlags_AlwaysVerticalScrollbar);
+    const ImVec2 editor_size(std::max(available.x - ImGui::GetStyle().ScrollbarSize,
+                                 message_size.x + ImGui::GetStyle().FramePadding.x * 2.0f),
+        std::max(message_height - ImGui::GetStyle().ScrollbarSize,
+            message_size.y + ImGui::GetStyle().FramePadding.y * 2.0f));
+    if (ImGui::InputTextMultiline("##commit message", &_change_info_message, editor_size))
         _change_info_dirty = true;
+    ImGui::EndChild();
     ImGui::BeginDisabled(!_change_info_dirty || !_active_operation.empty());
     const bool save = revision->pushed ? DangerButton("Save message") : ImGui::Button("Save message");
     ImGui::EndDisabled();
