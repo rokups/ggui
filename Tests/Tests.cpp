@@ -83,6 +83,7 @@ struct TemporaryRepository
         gitlink.id = git_index_get_bypath(index.get(), "tracked.txt", 0)->id;
         gitlink.path = "gitlink";
         CheckGit(git_index_add(index.get(), &gitlink));
+        std::filesystem::create_directory(path / "gitlink");
         CheckGit(git_index_write(index.get()));
         git_oid tree_oid{};
         CheckGit(git_index_write_tree(&tree_oid, index.get()));
@@ -362,6 +363,32 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_FALSE(nonempty_change->empty);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+}
+
+TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt") << "modified\n";
+    std::ofstream(repository.path / "untracked.txt") << "new\n";
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.working_copy.empty() && snapshot.status.size() == 2;
+    });
+    ASSERT_NE(opened, nullptr);
+    const auto modified = std::ranges::find(opened->status, "tracked.txt", &StatusEntry::path);
+    const auto added = std::ranges::find(opened->status, "untracked.txt", &StatusEntry::path);
+    ASSERT_NE(modified, opened->status.end());
+    ASSERT_NE(added, opened->status.end());
+    EXPECT_EQ(modified->status, GIT_DELTA_MODIFIED);
+    EXPECT_EQ(added->status, GIT_DELTA_ADDED);
+
+    engine.Enqueue(LoadDiff{opened->working_copy, {}, true});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    EXPECT_NE(std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path), diff->files.end());
+    EXPECT_NE(std::ranges::find(diff->files, "untracked.txt", &StatusEntry::path), diff->files.end());
 }
 
 TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
