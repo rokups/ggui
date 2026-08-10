@@ -128,6 +128,7 @@ private:
     void SelectFile(const std::string& path);
     std::vector<std::string> SelectedParentRevisions() const;
     void CreateChange();
+    void RequestAbandon(const std::string& revision);
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);

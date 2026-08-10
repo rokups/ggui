@@ -917,7 +917,7 @@ void Application::RenderFrame()
             if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
                 CreateChange();
             if (ImGui::IsKeyPressed(ImGuiKey_A))
-                OpenDialog(Dialog::Abandon);
+                RequestAbandon(_selected_revision);
             if (ImGui::IsKeyPressed(ImGuiKey_S))
             {
                 const auto selected = std::ranges::find_if(_snapshot->revisions,
@@ -1036,7 +1036,7 @@ void Application::RenderMenuBar()
         if (ImGui::MenuItem("Squash...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
         if (ImGui::MenuItem("Split...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Split);
         if (ImGui::MenuItem("Restore...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Restore);
-        if (ImGui::MenuItem("Abandon...", nullptr, false, !_selected_revision.empty())) OpenDialog(Dialog::Abandon);
+        if (ImGui::MenuItem("Abandon...", nullptr, false, !_selected_revision.empty())) RequestAbandon(_selected_revision);
         if (ImGui::MenuItem("Simplify parents", nullptr, false, !_selected_revision.empty()))
             _engine.Enqueue(SimplifyParents{{_selected_revision}});
         ImGui::EndMenu();
@@ -1503,7 +1503,7 @@ void Application::RenderHistory()
                 if (ImGui::MenuItem("Edit")) _engine.Enqueue(Edit{revision.oid});
                 if (ImGui::MenuItem("Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
                 if (ImGui::MenuItem("Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
-                if (ImGui::MenuItem("Abandon...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Abandon); }
+                if (ImGui::MenuItem("Abandon...")) RequestAbandon(revision.oid);
                 ImGui::EndPopup();
             }
             const ImU32 row_fill = _dark_theme
@@ -2188,6 +2188,21 @@ void Application::CreateChange()
         return;
     }
     _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
+}
+
+void Application::RequestAbandon(const std::string& revision)
+{
+    if (revision.empty())
+        return;
+    if (_selected_revision != revision)
+        SelectRevision(revision);
+    const auto selected = std::ranges::find(_snapshot->revisions, revision, &Revision::oid);
+    const bool has_refs = std::ranges::any_of(
+        _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
+    if (selected != _snapshot->revisions.end() && selected->empty && !has_refs && !selected->pushed)
+        _engine.Enqueue(Abandon{{revision}, false, false});
+    else
+        OpenDialog(Dialog::Abandon);
 }
 
 bool Application::CanSubmitDialog() const
