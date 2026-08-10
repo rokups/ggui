@@ -134,6 +134,7 @@ private:
     std::size_t RevisionPrefix(const std::string& oid) const;
     std::size_t ChangePrefix(const std::string& id) const;
     std::size_t OperationPrefix(const std::string& oid) const;
+    void RevealRevision(const std::string& oid);
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     std::vector<std::string> SelectedParentRevisions() const;
@@ -171,6 +172,7 @@ private:
     std::string _changes_filter;
     std::string _graph_filter;
     std::string _built_filter;
+    std::string _reveal_revision;
     std::unordered_map<std::string, std::size_t> _revision_prefixes;
     std::unordered_map<std::string, std::size_t> _change_prefixes;
     std::unordered_map<std::string, std::size_t> _operation_prefixes;

@@ -402,6 +402,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
         context->ItemClick("**/feature", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK((context->ItemInfo("**/Reveal commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Delete").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
@@ -442,6 +443,56 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         FocusWindow(context, "Bookmarks");
         IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+
+    test = IM_REGISTER_TEST(engine, "Navigation", "RevealCommit");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.generation++;
+        snapshot.revisions.clear();
+        for (int index = 0; index < 80; ++index)
+        {
+            Revision revision;
+            revision.oid = "revision-" + std::to_string(index);
+            if (index + 1 < 80) revision.parents.push_back("revision-" + std::to_string(index + 1));
+            revision.change_id = "change-" + std::to_string(index);
+            revision.description = "Revision " + std::to_string(index);
+            revision.author = "Author";
+            snapshot.revisions.push_back(std::move(revision));
+        }
+        snapshot.working_copy = "revision-0";
+        snapshot.refs = {{"deep-bookmark", {}, "revision-65", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
+            {"deep-tag", {}, "revision-60", GG_NAMED_REF_LOCAL_TAG, false, false}};
+        snapshot.status.clear();
+        application.SetSnapshotForTest(std::move(snapshot));
+        context->Yield(3);
+
+        FocusWindow(context, "History");
+        context->ItemInputValue("##graph filter", "does-not-match");
+        context->Yield(2);
+        IM_CHECK(GatherItems(context, "//History", "row").empty());
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/deep-bookmark", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Reveal commit");
+        context->Yield(3);
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-65"});
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+        IM_CHECK_GT((*graph)->Scroll.y, 0.0f);
+
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/deep-tag", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Reveal commit");
+        context->Yield(2);
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-60"});
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
@@ -822,6 +873,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/coverage-tag"));
         context->ItemClick("**/coverage-tag");
         context->Yield(2);
+        context->ItemClick("**/coverage-tag", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Reveal commit"));
+        context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Workspaces");
         IM_CHECK(context->ItemExists("**/Add workspace"));
         context->ItemClick("**/current", ImGuiMouseButton_Right);
@@ -840,6 +895,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Bookmarks");
         IM_CHECK(context->ItemExists("**/remote-only"));
         IM_CHECK(context->ItemExists("**/diverged"));
+        context->ItemClick("**/feature", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Reveal commit"));
+        context->ItemClick("**/Reveal commit");
+        context->Yield(2);
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
         context->ItemClick("**/coverage-bookmark");
         context->Yield(2);
 

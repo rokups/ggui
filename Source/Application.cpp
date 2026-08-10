@@ -1479,6 +1479,8 @@ void Application::RenderBookmarks()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("bookmark context"))
         {
+            if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
+            ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
             const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
                 return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name;
@@ -1558,6 +1560,8 @@ void Application::RenderTags()
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("tag context"))
         {
+            if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
+            ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
             ImGui::EndDisabled();
@@ -1751,6 +1755,7 @@ std::size_t Application::OperationPrefix(const std::string& oid) const
 
 void Application::RenderHistory()
 {
+    if (!_reveal_revision.empty()) ImGui::SetNextWindowFocus();
     if (!ImGui::Begin("History", &_show_history))
     {
         ImGui::End();
@@ -1762,6 +1767,19 @@ void Application::RenderHistory()
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
         RebuildGraph();
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
+    if (!_reveal_revision.empty())
+    {
+        const auto target = std::ranges::find_if(_visible_revisions, [&](int index) {
+            return _snapshot->revisions[index].oid == _reveal_revision;
+        });
+        if (target != _visible_revisions.end())
+        {
+            const float row = static_cast<float>(target - _visible_revisions.begin()) * kRowHeight;
+            const float viewport = ImGui::GetContentRegionAvail().y;
+            ImGui::SetScrollY(std::max(0.0f, row - (viewport - kRowHeight) * 0.5f));
+        }
+        _reveal_revision.clear();
+    }
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -2808,6 +2826,14 @@ void Application::SelectRevision(const std::string& oid, bool additive)
         _pending_revision = _selected_revision;
         _engine.Enqueue(LoadDiff{_selected_revision, _preferred_file, true});
     }
+}
+
+void Application::RevealRevision(const std::string& oid)
+{
+    _graph_filter.clear();
+    _show_history = true;
+    _reveal_revision = oid;
+    SelectRevision(oid);
 }
 
 bool Application::CanCreateChange() const
