@@ -2664,8 +2664,8 @@ void Application::SubmitDialog()
         else if (_pending_drop.action == DropAction::Rebase)
             _engine.Enqueue(Rebase{_pending_drop.source, _pending_drop.target});
         else
-            _engine.Enqueue(Reorder{_pending_drop.source, _pending_drop.target,
-                _pending_drop.action == DropAction::ReorderAfter ? GG_REORDER_AFTER : GG_REORDER_BEFORE});
+            _engine.Enqueue(Reorder{
+                _pending_drop.source, _pending_drop.target, DropPlacement(_pending_drop.action)});
         break;
     case Dialog::ConfirmLocked:
         for (Command& command : _pending_commands)
@@ -2870,6 +2870,11 @@ bool Application::CanSubmitDialog() const
     case Dialog::None: return false; // GCOV_EXCL_LINE: RenderDialogs returns before validation
     default: return true;
     }
+}
+
+gg_reorder_placement Application::DropPlacement(DropAction action)
+{
+    return action == DropAction::ReorderAfter ? GG_REORDER_BEFORE : GG_REORDER_AFTER;
 }
 
 void Application::SelectFile(const std::string& path)
@@ -3168,6 +3173,11 @@ unsigned int Application::BookmarkColorForTest(const std::string& name, const st
 std::string Application::FormatTimestampForTest(std::int64_t timestamp)
 {
     return FormatTimestamp(timestamp);
+}
+
+int Application::DropPlacementForTest(int action)
+{
+    return DropPlacement(static_cast<DropAction>(std::clamp(action, 0, 3)));
 }
 #endif
 

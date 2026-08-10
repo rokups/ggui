@@ -56,6 +56,7 @@ public:
     static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
+    static int DropPlacementForTest(int action);
 #endif
 
 private:
@@ -139,6 +140,7 @@ private:
         std::string warning);
     bool IsLocked(const std::string& revision) const;
     bool DialogModifiesLockedCommit() const;
+    static gg_reorder_placement DropPlacement(DropAction action);
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);
