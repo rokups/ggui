@@ -941,6 +941,7 @@ void Application::RenderFrame()
         if (_show_remotes) RenderRemotes();
         if (_show_history) RenderHistory();
         if (_show_changes) RenderChanges();
+        if (_show_change_info) RenderChangeInformation();
         if (_show_diff) RenderDiff();
         if (_show_operations) RenderOperations();
     }
@@ -980,13 +981,17 @@ void Application::SetupDockspace()
         ImGui::DockBuilderSplitNode(content, ImGuiDir_Right, 0.36f, &details, &history);
         ImGuiID changes = 0;
         ImGuiID diff = 0;
-        ImGui::DockBuilderSplitNode(details, ImGuiDir_Up, 0.28f, &changes, &diff);
+        ImGui::DockBuilderSplitNode(details, ImGuiDir_Up, 0.48f, &changes, &diff);
+        ImGuiID change_list = 0;
+        ImGuiID change_information = 0;
+        ImGui::DockBuilderSplitNode(changes, ImGuiDir_Down, 0.40f, &change_information, &change_list);
         ImGui::DockBuilderDockWindow("Bookmarks", reference_top);
         ImGui::DockBuilderDockWindow("Tags", reference_top);
         ImGui::DockBuilderDockWindow("Workspaces", reference_bottom);
         ImGui::DockBuilderDockWindow("Remotes", reference_bottom);
         ImGui::DockBuilderDockWindow("History", history);
-        ImGui::DockBuilderDockWindow("Changes", changes);
+        ImGui::DockBuilderDockWindow("Changes", change_list);
+        ImGui::DockBuilderDockWindow("Change information", change_information);
         ImGui::DockBuilderDockWindow("Diff", diff);
         ImGui::DockBuilderDockWindow("Operations", diff);
         ImGui::DockBuilderFinish(dockspace);
@@ -1060,6 +1065,7 @@ void Application::RenderMenuBar()
             ImGui::Separator();
             ImGui::MenuItem("History", nullptr, &_show_history);
             ImGui::MenuItem("Changes", nullptr, &_show_changes);
+            ImGui::MenuItem("Change information", nullptr, &_show_change_info);
             ImGui::MenuItem("Diff", nullptr, &_show_diff);
             ImGui::MenuItem("Operations", nullptr, &_show_operations);
             ImGui::Separator();
@@ -1068,7 +1074,7 @@ void Application::RenderMenuBar()
         {
             _default_layout = true;
             _show_bookmarks = _show_tags = _show_workspaces = _show_remotes = true;
-            _show_history = _show_changes = _show_diff = true;
+            _show_history = _show_changes = _show_change_info = _show_diff = true;
             _show_operations = false;
         }
         ImGui::EndMenu();
@@ -1746,6 +1752,47 @@ void Application::RenderChanges()
         }
         ImGui::TextWrapped("Save resolved files; ggui snapshots them automatically.");
     }
+    ImGui::End();
+}
+
+void Application::RenderChangeInformation()
+{
+    if (!ImGui::Begin("Change information", &_show_change_info))
+    {
+        ImGui::End();
+        return;
+    }
+    const auto revision = std::ranges::find(_snapshot->revisions, _selected_revision, &Revision::oid);
+    if (revision == _snapshot->revisions.end())
+    {
+        ImGui::TextDisabled("Select a change to inspect it.");
+        ImGui::End();
+        return;
+    }
+    if (_change_info_revision != revision->oid)
+    {
+        _change_info_revision = revision->oid;
+        _change_info_message = revision->description;
+        _change_info_dirty = false;
+    }
+
+    ImGui::Text("%s%s", revision->author.empty() ? "Unknown author" : revision->author.c_str(),
+        revision->pushed ? "  •  locked" : "  •  not pushed");
+    TextLabelledId("Change ", revision->change_id, ChangePrefix(revision->change_id),
+        ChangeIdColor(revision->working_copy));
+    ImGui::SameLine();
+    TextLabelledId("Commit ", revision->oid, RevisionPrefix(revision->oid), CommitIdColor(revision->working_copy));
+    const float button_height = ImGui::GetFrameHeight();
+    const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
+    if (ImGui::InputTextMultiline("##commit message", &_change_info_message, ImVec2(-1.0f, message_height)))
+        _change_info_dirty = true;
+    ImGui::BeginDisabled(!_change_info_dirty || !_active_operation.empty());
+    if (ImGui::Button("Save message"))
+    {
+        _engine.Enqueue(Describe{revision->oid, _change_info_message});
+        _change_info_dirty = false;
+    }
+    ImGui::EndDisabled();
     ImGui::End();
 }
 

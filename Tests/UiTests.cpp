@@ -237,7 +237,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Application", "OpenRepositoryAndPanels");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
-        for (const char* panel : {"History", "Changes", "Diff"})
+        for (const char* panel : {"History", "Changes", "Change information", "Diff"})
         {
             ImGuiWindow* window = WaitForWindow(context, panel);
             IM_CHECK_NE(window, nullptr);
@@ -256,7 +256,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(tags->DockNode, bookmarks->DockNode);
         IM_CHECK_EQ(remotes->DockNode, workspaces->DockNode);
         IM_CHECK_NE(workspaces->DockNode, bookmarks->DockNode);
-        IM_CHECK_NE(ImGui::FindWindowByName("Changes")->DockNode, ImGui::FindWindowByName("Diff")->DockNode);
+        ImGuiWindow* changes = ImGui::FindWindowByName("Changes");
+        ImGuiWindow* change_information = ImGui::FindWindowByName("Change information");
+        ImGuiWindow* diff = ImGui::FindWindowByName("Diff");
+        IM_CHECK_NE(changes->DockNode, diff->DockNode);
+        IM_CHECK_NE(change_information->DockNode, changes->DockNode);
+        IM_CHECK_EQ(change_information->DockNode->ParentNode, changes->DockNode->ParentNode);
+        const float information_ratio = change_information->Size.y / ImGui::GetMainViewport()->WorkSize.y;
+        IM_CHECK_GT(information_ratio, 0.14f);
+        IM_CHECK_LT(information_ratio, 0.24f);
         IM_CHECK_EQ(ImGui::FindWindowByName("Navigator"), nullptr);
     };
 
@@ -289,7 +297,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             OpenAndCancel(context, path.c_str());
         }
 
-        for (const char* panel : {"Bookmarks", "Tags", "Workspaces", "Remotes", "History", "Changes", "Diff"})
+        for (const char* panel : {"Bookmarks", "Tags", "Workspaces", "Remotes", "History", "Changes",
+                 "Change information", "Diff"})
         {
             const std::string path = std::string("//##MainMenuBar/View/") + panel;
             context->MenuClick(path.c_str());

@@ -115,6 +115,7 @@ private:
     void RenderRemotes();
     void RenderHistory();
     void RenderChanges();
+    void RenderChangeInformation();
     void RenderDiff();
     void RenderOperations();
     void RenderDialogs();
@@ -176,6 +177,9 @@ private:
     std::string _input_filesets;
     bool _input_flag = false;
     int _input_mode = 0;
+    std::string _change_info_revision;
+    std::string _change_info_message;
+    bool _change_info_dirty = false;
 
     SDL_Window* _window = nullptr;
     SDL_GLContext _gl_context = nullptr;
@@ -195,6 +199,7 @@ private:
     bool _show_remotes = true;
     bool _show_history = true;
     bool _show_changes = true;
+    bool _show_change_info = true;
     bool _show_diff = true;
     bool _show_operations = false;
     bool _diff_side_by_side = false;
