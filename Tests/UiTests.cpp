@@ -537,6 +537,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(application.SelectedRevisionsForTest().empty());
 
         application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false, RichSnapshot().status}});
+        RepoSnapshot rewritten = RichSnapshot();
+        rewritten.generation++;
+        for (Revision& revision : rewritten.revisions)
+            if (revision.oid == "left") revision.oid = "left-rewritten";
+        for (NamedRef& ref : rewritten.refs)
+            if (ref.target == "left") ref.target = "left-rewritten";
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(rewritten))});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left-rewritten"});
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+
+        application.SetSnapshotForTest(RichSnapshot());
         RepoSnapshot empty = RichSnapshot();
         empty.working_copy.clear();
         empty.revisions.clear();

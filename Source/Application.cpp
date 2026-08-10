@@ -706,6 +706,14 @@ void Application::ApplyEvent(Event event)
                     const std::string old_working = _snapshot == nullptr ? "" : _snapshot->working_copy;
                     const std::string old_selection = _selected_revision;
                     const bool had_selection = !_selected_revisions.empty();
+                    std::unordered_map<std::string, std::string> selected_changes;
+                    if (_snapshot != nullptr)
+                    {
+                        for (const Revision& revision : _snapshot->revisions)
+                            if (!revision.change_id.empty()
+                                && std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end())
+                                selected_changes.emplace(revision.oid, revision.change_id);
+                    }
                     _snapshot = std::move(value.snapshot);
                     SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
                     RebuildIdPrefixes();
@@ -743,6 +751,27 @@ void Application::ApplyEvent(Event event)
                                     _selected_revision = _snapshot->working_copy;
                             }
                         }
+                        for (std::string& oid : _selected_revisions)
+                        {
+                            if (std::ranges::any_of(
+                                    _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; }))
+                                continue;
+                            const auto change = selected_changes.find(oid);
+                            const auto replacement = change == selected_changes.end()
+                                ? _snapshot->revisions.end()
+                                : std::ranges::find(_snapshot->revisions, change->second, &Revision::change_id);
+                            if (replacement != _snapshot->revisions.end())
+                            {
+                                if (_selected_revision == oid)
+                                    _selected_revision = replacement->oid;
+                                oid = replacement->oid;
+                            }
+                        }
+                        std::vector<std::string> unique_selection;
+                        for (const std::string& oid : _selected_revisions)
+                            if (std::ranges::find(unique_selection, oid) == unique_selection.end())
+                                unique_selection.push_back(oid);
+                        _selected_revisions = std::move(unique_selection);
                         std::erase_if(_selected_revisions, [this](const std::string& oid) {
                             return std::ranges::none_of(
                                 _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
