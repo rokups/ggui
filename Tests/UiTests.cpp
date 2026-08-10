@@ -804,6 +804,56 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "ListElisionTooltips");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        const std::string long_text(80, 'x');
+        const std::string bookmark = "bookmark-" + long_text;
+        const std::string tag = "tag-" + long_text;
+        const std::string workspace = "workspace-" + long_text;
+        const std::string remote = "remote-" + long_text;
+        const std::string path = "directory/" + long_text + "/file.cpp";
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.refs.push_back({bookmark, {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
+        snapshot.refs.push_back({tag, {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false});
+        snapshot.workspaces.push_back({workspace, "/root/" + long_text, "merge", false});
+        snapshot.remotes.push_back({remote, "https://fetch.example/" + long_text,
+            "ssh://push.example/" + long_text});
+        snapshot.status = {{{}, path, GIT_DELTA_MODIFIED, false}};
+        application.SetSnapshotForTest(std::move(snapshot));
+        context->Yield(3);
+
+        const auto check_tooltip = [&](const char* window, const std::string& item) {
+            FocusWindow(context, window);
+            context->MouseMove(("**/" + item).c_str());
+            context->Yield(2);
+            const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
+            IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
+        };
+        check_tooltip("Bookmarks", bookmark);
+        check_tooltip("Tags", tag);
+        check_tooltip("Workspaces", workspace);
+        check_tooltip("Remotes", remote);
+        FocusWindow(context, "Changes");
+        ImGuiTestItemList change_items;
+        context->GatherItems(&change_items, "//Changes");
+        const ImGuiTestItemInfo* change_row = nullptr;
+        for (int index = 0; index < change_items.GetSize(); ++index)
+        {
+            const ImGuiTestItemInfo* item = change_items.GetByIndex(index);
+            if (std::string_view(item->DebugLabel).starts_with("###M  "))
+            {
+                change_row = item;
+                break;
+            }
+        }
+        IM_CHECK_NE(change_row, nullptr);
+        context->MouseMove(change_row->ID);
+        context->Yield(2);
+        const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
+        IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

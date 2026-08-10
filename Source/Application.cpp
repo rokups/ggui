@@ -317,6 +317,18 @@ void DrawElidedText(
     ImGui::PopStyleColor();
 }
 
+bool DrawTextWithin(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view text, ImU32 color)
+{
+    const float width = ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
+    if (position.x + width <= maximum_x)
+    {
+        draw->AddText(position, color, text.data(), text.data() + text.size());
+        return false;
+    }
+    DrawElidedText(draw, position, maximum_x, text, color);
+    return true;
+}
+
 void DrawElidedBadge(
     ImDrawList* draw, ImVec2 cursor, float center_y, float maximum_x, std::string_view label, ImU32 color)
 {
@@ -332,7 +344,8 @@ void DrawElidedBadge(
     DrawElidedText(draw, ImVec2(minimum.x + pad_x, text_y), maximum.x - pad_x, label, IM_COL32_WHITE);
 }
 
-bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32 color)
+bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32 color,
+    std::string_view suffix = {}, bool* out_elided = nullptr)
 {
     const std::string id = "###" + std::string(label);
     const bool clicked = ImGui::Selectable(id.c_str(), selected, 0, ImVec2(0.0f, height));
@@ -341,8 +354,15 @@ bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(
         minimum, ImVec2(minimum.x + 4.0f, maximum.y), color, 4.0f, ImDrawFlags_RoundCornersLeft);
-    draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 3.0f), ImGui::GetColorU32(ImGuiCol_Text), label.data(),
-        label.data() + label.size());
+    ImVec2 text(minimum.x + 12.0f, minimum.y + 3.0f);
+    bool elided = DrawTextWithin(draw, text, maximum.x - 8.0f, label, ImGui::GetColorU32(ImGuiCol_Text));
+    if (!elided && !suffix.empty())
+    {
+        text.x += ImGui::CalcTextSize(label.data(), label.data() + label.size()).x + 8.0f;
+        elided = DrawTextWithin(draw, text, maximum.x - 8.0f, suffix, kTextMuted);
+    }
+    if (out_elided != nullptr)
+        *out_elided = elided;
     return clicked;
 }
 
@@ -355,6 +375,19 @@ float DrawHighlightedId(
     position.x += ImGui::CalcTextSize(id.data(), id.data() + unique).x;
     draw->AddText(position, kTextMuted, id.data() + unique, id.data() + shown);
     return position.x + ImGui::CalcTextSize(id.data() + unique, id.data() + shown).x;
+}
+
+bool DrawHighlightedIdWithin(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view id,
+    std::size_t unique_length, ImU32 prefix_color)
+{
+    const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
+    if (position.x + ImGui::CalcTextSize(id.data(), id.data() + shown).x <= maximum_x)
+    {
+        DrawHighlightedId(draw, position, id, unique_length, prefix_color);
+        return false;
+    }
+    DrawElidedText(draw, position, maximum_x, std::string_view(id.data(), shown), prefix_color);
+    return true;
 }
 
 void TextHighlightedId(std::string_view id, std::size_t unique_length, ImU32 prefix_color)
@@ -1386,12 +1419,6 @@ void Application::RenderBookmarks()
             return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
         });
         const NamedRef& ref = local != _snapshot->refs.end() ? *local : *remote_ref;
-        ImGui::PushID(name.c_str());
-        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
-                BookmarkBadgeColor(name, _snapshot->refs)))
-            SelectRevision(ref.target);
-        const ImVec2 minimum = ImGui::GetItemRectMin();
-        ImDrawList* draw = ImGui::GetWindowDrawList();
         std::string remotes;
         for (const NamedRef& candidate : _snapshot->refs)
         {
@@ -1401,10 +1428,16 @@ void Application::RenderBookmarks()
             if (!remotes.empty()) remotes += ", ";
             remotes += candidate.remote;
         }
-        if (!remotes.empty())
-            draw->AddText(ImVec2(minimum.x + 20.0f + ImGui::CalcTextSize(name.c_str()).x, minimum.y + 3.0f),
-                kTextMuted, remotes.c_str());
-        DrawHighlightedId(draw, ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
+        ImGui::PushID(name.c_str());
+        bool elided = false;
+        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
+                BookmarkBadgeColor(name, _snapshot->refs), remotes, &elided))
+            SelectRevision(ref.target);
+        const bool hovered = ImGui::IsItemHovered();
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        elided |= DrawHighlightedIdWithin(ImGui::GetWindowDrawList(),
+            ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), maximum.x - 8.0f, ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (local != _snapshot->refs.end() && ImGui::BeginPopupContextItem("bookmark context"))
         {
@@ -1428,6 +1461,14 @@ void Application::RenderBookmarks()
                 _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
             ImGui::EndPopup();
         }
+        if (hovered && elided)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Bookmark: %s", name.c_str());
+            ImGui::Text("Remotes: %s", remotes.empty() ? "(local only)" : remotes.c_str());
+            ImGui::Text("Commit: %s", ref.target.c_str());
+            ImGui::EndTooltip();
+        }
         ImGui::PopID();
     }
     ImGui::PopStyleVar();
@@ -1448,15 +1489,27 @@ void Application::RenderTags()
         if (ref.kind != GG_NAMED_REF_LOCAL_TAG)
             continue;
         ImGui::PushID(&ref);
-        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f, RefBadgeColor(ref, _snapshot->refs)))
+        bool elided = false;
+        if (BadgedSelectable(ref.name, ref.target == _selected_revision, 36.0f,
+                RefBadgeColor(ref, _snapshot->refs), {}, &elided))
             SelectRevision(ref.target);
+        const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
-        DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), ref.target,
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        elided |= DrawHighlightedIdWithin(ImGui::GetWindowDrawList(),
+            ImVec2(minimum.x + 12.0f, minimum.y + 21.0f), maximum.x - 8.0f, ref.target,
             RevisionPrefix(ref.target), CommitIdColor(ref.target == _snapshot->working_copy));
         if (ImGui::BeginPopupContextItem("tag context"))
         {
             if (ActionMenuItem(ICON_MS_DELETE, "Delete")) _engine.Enqueue(Tag{GG_TAG_DELETE, {ref.name}, {}, false});
             ImGui::EndPopup();
+        }
+        if (hovered && elided)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Tag: %s", ref.name.c_str());
+            ImGui::Text("Commit: %s", ref.target.c_str());
+            ImGui::EndTooltip();
         }
         ImGui::PopID();
     }
@@ -1477,11 +1530,17 @@ void Application::RenderWorkspaces()
     {
         ImGui::PushID(&workspace);
         const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
-        if (BadgedSelectable(workspace.name, workspace.working_copy == _selected_revision, 40.0f, accent))
+        bool elided = false;
+        if (BadgedSelectable(workspace.name, workspace.working_copy == _selected_revision, 40.0f,
+                accent, {}, &elided))
             SelectRevision(workspace.working_copy);
+        const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
-        ImGui::GetWindowDrawList()->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted,
-            workspace.stale ? "Unavailable" : workspace.root.c_str());
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        const std::string_view location = workspace.stale ? std::string_view("Unavailable")
+                                                          : std::string_view(workspace.root);
+        elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 23.0f),
+            maximum.x - 8.0f, location, kTextMuted);
         if (ImGui::BeginPopupContextItem("workspace context"))
         {
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
@@ -1489,6 +1548,14 @@ void Application::RenderWorkspaces()
             if (ActionMenuItem(ICON_MS_DELETE, "Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
             if (ActionMenuItem(ICON_MS_EDIT, "Rename current...")) OpenDialog(Dialog::WorkspaceRename);
             ImGui::EndPopup();
+        }
+        if (hovered && elided)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Workspace: %s", workspace.name.c_str());
+            ImGui::Text("Directory: %.*s", static_cast<int>(location.size()), location.data());
+            ImGui::Text("Working copy: %s", workspace.working_copy.c_str());
+            ImGui::EndTooltip();
         }
         ImGui::PopID();
     }
@@ -1508,18 +1575,31 @@ void Application::RenderRemotes()
     {
         ImGui::PushID(&remote);
         const bool separate_push = !remote.push_url.empty() && remote.push_url != remote.fetch_url;
-        BadgedSelectable(remote.name, false, separate_push ? 56.0f : 40.0f, kBadgeRemote);
+        bool elided = false;
+        BadgedSelectable(remote.name, false, separate_push ? 56.0f : 40.0f, kBadgeRemote, {}, &elided);
+        const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), kTextMuted, remote.fetch_url.c_str());
+        elided |= DrawTextWithin(draw, ImVec2(minimum.x + 12.0f, minimum.y + 23.0f), maximum.x - 8.0f,
+            remote.fetch_url, kTextMuted);
+        const std::string push_url = "Push: " + remote.push_url;
         if (separate_push)
-            draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 39.0f), kTextMuted,
-                ("Push: " + remote.push_url).c_str());
+            elided |= DrawTextWithin(draw, ImVec2(minimum.x + 12.0f, minimum.y + 39.0f), maximum.x - 8.0f,
+                push_url, kTextMuted);
         if (ImGui::BeginPopupContextItem("remote context"))
         {
             if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
             if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});
             ImGui::EndPopup();
+        }
+        if (hovered && elided)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Remote: %s", remote.name.c_str());
+            ImGui::Text("Fetch: %s", remote.fetch_url.c_str());
+            ImGui::Text("Push: %s", remote.push_url.empty() ? remote.fetch_url.c_str() : remote.push_url.c_str());
+            ImGui::EndTooltip();
         }
         ImGui::PopID();
     }
@@ -1967,6 +2047,7 @@ void Application::RenderChanges()
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
         const bool selected =
             ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
+        const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
         ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -1976,7 +2057,8 @@ void Application::RenderChanges()
             minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f);
         draw->AddText(text, accent, status.c_str());
         text.x += ImGui::CalcTextSize(status.c_str()).x + ImGui::CalcTextSize("  ").x;
-        draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), file.path.c_str());
+        const bool elided = DrawTextWithin(
+            draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
         if (selected) SelectFile(file.path);
         if (ImGui::BeginDragDropSource())
         {
@@ -2012,6 +2094,15 @@ void Application::RenderChanges()
                 QueueCommands({ChmodPaths{{file.path}, false}}, {"@"},
                     "Changing this file mode will rewrite the locked working-copy commit.");
             ImGui::EndPopup();
+        }
+        if (hovered && elided)
+        {
+            ImGui::BeginTooltip();
+            ImGui::Text("Status: %s", status.c_str());
+            ImGui::Text("Path: %s", file.path.c_str());
+            if (!file.old_path.empty() && file.old_path != file.path)
+                ImGui::Text("Previous path: %s", file.old_path.c_str());
+            ImGui::EndTooltip();
         }
         ImGui::PopID();
     }
