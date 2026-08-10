@@ -294,7 +294,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
         OpenAndCancel(context, "//##MainMenuBar/Repository/Clone...");
-        for (const char* action : {"Commit...", "Describe...", "Metaedit...", "Rebase...", "Squash...",
+        for (const char* action : {"Commit...", "Metaedit...", "Rebase...", "Squash...",
                  "Split...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
@@ -1141,7 +1141,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        for (const char* action : {"Describe...", "Metaedit...", "Squash...", "Restore...", "Abandon..."})
+        for (const char* action : {"Metaedit...", "Squash...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
             ApplyOpenDialog(context, path.c_str());
@@ -1285,13 +1285,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             for (const char* action : {"Push", "Push to...", "Create bookmark...", "Move bookmark here",
                      "Delete bookmark"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
+            IM_CHECK(!context->ItemExists("**/Describe..."));
             context->ItemClick("**/Create bookmark...");
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
             context->SetRef("ggui action");
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Edit", "Describe...", "Split...", "Abandon..."})
+            for (const char* action : {"Edit", "Split...", "Abandon..."})
             {
                 context->SetRef("History");
                 context->ItemClick(rows[0], ImGuiMouseButton_Right);

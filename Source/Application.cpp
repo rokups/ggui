@@ -1213,7 +1213,6 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
         if (ActionMenuItem(ICON_MS_COMMIT, "Commit...")) OpenDialog(Dialog::Commit);
-        if (ActionMenuItem(ICON_MS_EDIT, "Describe...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Describe);
         if (ActionMenuItem(ICON_MS_INFO, "Metaedit...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
         if (ActionMenuItem(ICON_MS_EDIT, "Edit", nullptr, !_selected_revision.empty()))
             _engine.Enqueue(Edit{_selected_revision});
@@ -1892,7 +1891,6 @@ void Application::RenderHistory()
                 }
                 ImGui::Separator();
                 if (ActionMenuItem(ICON_MS_EDIT, "Edit")) _engine.Enqueue(Edit{revision.oid});
-                if (ActionMenuItem(ICON_MS_EDIT, "Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
                 if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
                 if (ActionMenuItem(ICON_MS_DELETE, "Abandon...")) RequestAbandon(revision.oid);
                 ImGui::EndDisabled();
@@ -2464,7 +2462,7 @@ void Application::OpenDialog(Dialog dialog)
     _input_flag_secondary = false;
     _input_flag_tertiary = false;
     _input_mode = 0;
-    if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)
+    if (dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
             _snapshot->revisions, [this](const Revision& revision) { return revision.oid == _selected_revision; });
@@ -2482,8 +2480,7 @@ void Application::RenderDialogs()
     if (_dialog == Dialog::None)
         return;
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
-        "Commit change###ggui action", "Describe change###ggui action",
-        "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
+        "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
         "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
@@ -2528,11 +2525,6 @@ void Application::RenderDialogs()
         DialogMultiline("Description", &_input_primary, 90.0f, focus_first);
         DialogMultiline("Filesets", &_input_filesets, 70.0f);
         ImGui::TextDisabled("Leave empty to commit all changed files.");
-        break;
-    case Dialog::Describe:
-        TextLabelledId("Describe ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
-        DialogMultiline("Description", &_input_primary, 120.0f, focus_first);
         break;
     case Dialog::Metaedit:
         TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision),
@@ -2727,7 +2719,6 @@ void Application::SubmitDialog()
     {
     case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
     case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
-    case Dialog::Describe: _engine.Enqueue(Describe{_selected_revision, _input_primary}); break;
     case Dialog::Metaedit: _engine.Enqueue(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
     case Dialog::Rebase: _engine.Enqueue(Rebase{_selected_revision, _input_primary}); break;
     case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
@@ -2897,7 +2888,6 @@ bool Application::DialogModifiesLockedCommit() const
     switch (_dialog)
     {
     case Dialog::Commit: return IsLocked(_snapshot->working_copy);
-    case Dialog::Describe:
     case Dialog::Metaedit:
     case Dialog::Split: return IsLocked(_selected_revision);
     case Dialog::Abandon:

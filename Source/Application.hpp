@@ -68,7 +68,6 @@ private:
         None,
         Clone,
         Commit,
-        Describe,
         Metaedit,
         Rebase,
         Squash,
