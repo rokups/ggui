@@ -936,6 +936,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 context->Yield(2);
             }
 
+            context->SetRef("History");
+            context->ItemClick(rows[0], ImGuiMouseButton_Right);
+            context->Yield();
+            for (const char* action : {"Push", "Push to...", "Create bookmark...", "Move bookmark here",
+                     "Delete bookmark"})
+                IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
+            context->ItemClick("**/Create bookmark...");
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            context->SetRef("ggui action");
+            context->ItemClick("Cancel");
+            context->Yield(2);
+
             for (const char* action : {"Edit", "Describe...", "Split...", "Abandon..."})
             {
                 context->SetRef("History");

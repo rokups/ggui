@@ -1672,6 +1672,46 @@ void Application::RenderHistory()
             }
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
+                const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
+                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+                if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
+                        bookmark != nullptr && !remote.empty()))
+                    _engine.Enqueue(Push{bookmark->name, remote});
+                if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
+                        bookmark != nullptr && !_snapshot->remotes.empty()))
+                {
+                    OpenDialog(Dialog::PushTo);
+                    _input_primary = remote;
+                    _input_secondary = bookmark->name;
+                }
+                ImGui::Separator();
+                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark..."))
+                {
+                    SelectRevision(revision.oid);
+                    OpenDialog(Dialog::Bookmark);
+                }
+                const bool can_move_bookmark = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid;
+                });
+                const std::string move_bookmark = IconLabel(ICON_MS_MOVE_ITEM, "Move bookmark here");
+                if (ImGui::BeginMenu(move_bookmark.c_str(), can_move_bookmark))
+                {
+                    for (const NamedRef& ref : _snapshot->refs)
+                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
+                            && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
+                            _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
+                    ImGui::EndMenu();
+                }
+                const std::string delete_bookmark = IconLabel(ICON_MS_DELETE, "Delete bookmark");
+                if (ImGui::BeginMenu(delete_bookmark.c_str(), bookmark != nullptr))
+                {
+                    for (const NamedRef& ref : _snapshot->refs)
+                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid
+                            && ActionMenuItem(ICON_MS_DELETE, ref.name))
+                            _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
+                    ImGui::EndMenu();
+                }
+                ImGui::Separator();
                 if (ActionMenuItem(ICON_MS_EDIT, "Edit")) _engine.Enqueue(Edit{revision.oid});
                 if (ActionMenuItem(ICON_MS_EDIT, "Describe...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Describe); }
                 if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
