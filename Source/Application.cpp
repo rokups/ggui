@@ -1325,6 +1325,12 @@ void Application::RenderRemotes()
         if (separate_push)
             draw->AddText(ImVec2(minimum.x + 12.0f, minimum.y + 39.0f), kTextMuted,
                 ("Push: " + remote.push_url).c_str());
+        if (ImGui::BeginPopupContextItem("remote context"))
+        {
+            if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
+            if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});
+            ImGui::EndPopup();
+        }
         ImGui::PopID();
     }
     ImGui::PopStyleVar();

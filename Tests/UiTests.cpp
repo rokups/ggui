@@ -607,6 +607,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Remotes");
         IM_CHECK(context->ItemExists("**/origin"));
+        context->ItemClick("**/origin", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Pull"));
+        IM_CHECK(context->ItemExists("**/Fetch"));
+        context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/coverage-bookmark");
         context->Yield(2);
