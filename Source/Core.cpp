@@ -6,6 +6,7 @@
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -613,6 +614,39 @@ struct RepositoryEngine::Impl
         PublishSnapshot();
     }
 
+    void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish)
+    {
+        Sync();
+        transfer_phase = "push";
+        std::string remote_name = command.remote;
+        git_remote* raw_remote = nullptr;
+        Check(git_remote_lookup(&raw_remote, git.get(), remote_name.c_str()), "find remote");
+        std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
+        std::string destination = "refs/heads/" + command.bookmark;
+        std::string deletion = ":" + destination;
+        char* deletion_value = deletion.data();
+        git_strarray refspecs{&deletion_value, 1};
+        git_push_options push_options = GIT_PUSH_OPTIONS_INIT;
+        push_options.callbacks = RemoteCallbacks();
+        ssh_agent_attempted = false;
+        credential_attempts = 0;
+        Check(git_remote_push(remote.get(), &refspecs, &push_options), "delete remote bookmark");
+
+        std::string source;
+        gg_refspec refspec{remote_name.data(), source.data(), destination.data(), {}, false};
+        std::array<std::string, 2> deleted_refs{
+            "refs/gg/tracking/bookmarks/" + remote_name + "/" + command.bookmark,
+            "refs/remotes/" + remote_name + "/" + command.bookmark};
+        std::array<char*, 2> deleted_values{deleted_refs[0].data(), deleted_refs[1].data()};
+        gg_transport_plan plan{GG_OPTIONS_VERSION, true, &refspec, 1,
+            {deleted_values.data(), deleted_values.size()}, {nullptr, 0}};
+        Mutation mutation;
+        gg_operation_options operation = OperationOptions();
+        Check(gg_repository_complete_push(&mutation.value, gg, &plan, &operation), "complete bookmark deletion");
+        if (publish)
+            PublishSnapshot();
+    }
+
     void Sync()
     {
         if (gg == nullptr)
@@ -895,6 +929,8 @@ struct RepositoryEngine::Impl
                     });
                 },
                 [&](const Abandon& value) {
+                    for (const RemoteBookmarkDelete& bookmark : value.remote_bookmarks)
+                        RemoveRemoteBookmark(bookmark, false);
                     gg_abandon_options options = GG_ABANDON_OPTIONS_INIT;
                     const StringArray revisions(value.revisions);
                     options.revisions = revisions.Get();
@@ -904,6 +940,7 @@ struct RepositoryEngine::Impl
                         return gg_repository_abandon(out, gg, &options, operation);
                     });
                 },
+                [&](const RemoteBookmarkDelete& value) { RemoveRemoteBookmark(value, true); },
                 [&](const Restore& value) {
                     gg_restore_options options = GG_RESTORE_OPTIONS_INIT;
                     const StringArray filesets(value.filesets);
@@ -1024,7 +1061,9 @@ struct RepositoryEngine::Impl
                 [](const Commit&) { return "commit"; },
                 [](const Rebase&) { return "rebase"; }, [](const Reorder&) { return "reorder"; },
                 [](const Split&) { return "split"; }, [](const Squash&) { return "squash"; },
-                [](const Abandon&) { return "abandon"; }, [](const Restore&) { return "restore"; },
+                [](const Abandon&) { return "abandon"; },
+                [](const RemoteBookmarkDelete&) { return "delete remote bookmark"; },
+                [](const Restore&) { return "restore"; },
                 [](const MoveFiles&) { return "move files"; },
                 [](const SimplifyParents&) { return "simplify parents"; }, [](const Bookmark&) { return "bookmark"; },
                 [](const Tag&) { return "tag"; }, [](const Undo&) { return "undo"; }, [](const Redo&) { return "redo"; },

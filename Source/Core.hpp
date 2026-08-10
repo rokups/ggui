@@ -195,11 +195,17 @@ struct Squash
     std::string destination;
     std::string message;
 };
+struct RemoteBookmarkDelete
+{
+    std::string bookmark;
+    std::string remote;
+};
 struct Abandon
 {
     std::vector<std::string> revisions;
     bool retain_bookmarks = false;
     bool restore_descendants = false;
+    std::vector<RemoteBookmarkDelete> remote_bookmarks;
 };
 struct Restore
 {
@@ -272,7 +278,7 @@ struct ChmodPaths
 };
 
 using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, Fetch, Push, LoadDiff, NewChange, Describe,
-    Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, Restore, MoveFiles,
+    Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles,
     SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
     UntrackPaths, ChmodPaths>;
 

@@ -719,8 +719,19 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Apply"));
+        IM_CHECK(context->ItemExists("Also delete bookmark from remote"));
+        context->ItemCheck("Also delete bookmark from remote");
         context->ItemClick("Cancel");
 
+        application.SelectRevisionForTest("left");
+        FocusWindow(context, "History");
+        context->KeyPress(ImGuiKey_A);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(!context->ItemExists("Also delete bookmark from remote"));
+        context->ItemClick("Cancel");
+
+        application.SelectRevisionForTest("right");
         application.ShowDropConfirmationForTest("left", "right", 0);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");

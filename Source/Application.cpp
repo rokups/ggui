@@ -2353,6 +2353,7 @@ void Application::OpenDialog(Dialog dialog)
     _input_tertiary.clear();
     _input_filesets.clear();
     _input_flag = false;
+    _input_flag_secondary = false;
     _input_mode = 0;
     if (dialog == Dialog::Describe || dialog == Dialog::Metaedit)
     {
@@ -2455,6 +2456,7 @@ void Application::RenderDialogs()
         ImGui::TextDisabled("Leave empty to restore all files.");
         break;
     case Dialog::Abandon:
+    {
         TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
@@ -2462,7 +2464,16 @@ void Application::RenderDialogs()
         if (focus_first)
             ImGui::SetKeyboardFocusHere();
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
+        const std::vector<RemoteBookmarkDelete> remote_bookmarks = RemoteBookmarksAt(_selected_revision);
+        if (!remote_bookmarks.empty())
+        {
+            ImGui::Checkbox("Also delete bookmark from remote", &_input_flag_secondary);
+            if (_input_flag_secondary)
+                for (const RemoteBookmarkDelete& bookmark : remote_bookmarks)
+                    ImGui::TextDisabled("%s/%s", bookmark.remote.c_str(), bookmark.bookmark.c_str());
+        }
         break;
+    }
     case Dialog::Bookmark:
         ImGui::TextUnformatted("Create bookmark");
         DialogInput("Name", "bookmark name", &_input_primary, focus_first);
@@ -2594,7 +2605,11 @@ void Application::SubmitDialog()
     case Dialog::Rebase: _engine.Enqueue(Rebase{_selected_revision, _input_primary}); break;
     case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
     case Dialog::Split: _engine.Enqueue(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
-    case Dialog::Abandon: _engine.Enqueue(Abandon{{_selected_revision}, _input_flag, false}); break;
+    case Dialog::Abandon:
+        _engine.Enqueue(Abandon{{_selected_revision}, _input_flag, false,
+            _input_flag_secondary ? RemoteBookmarksAt(_selected_revision)
+                                  : std::vector<RemoteBookmarkDelete>{}});
+        break;
     case Dialog::Restore:
         _engine.Enqueue(Restore{_input_primary, _selected_revision, SplitLines(_input_filesets)});
         break;
@@ -2714,7 +2729,7 @@ void Application::CreateChange()
     if (selected != _snapshot->revisions.end() && selected->empty && !selected->parents.empty())
     {
         QueueCommands(
-            {NewChange{{}, SelectedParentRevisions(), {}, {}, false}, Abandon{{selected->oid}, true, false}},
+            {NewChange{{}, SelectedParentRevisions(), {}, {}, false}, Abandon{{selected->oid}, true, false, {}}},
             {selected->oid}, "Replacing this empty change will rewrite a locked commit.");
         return;
     }
@@ -2781,6 +2796,28 @@ void Application::QueueCommands(
     OpenDialog(Dialog::ConfirmLocked);
 }
 
+std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(const std::string& revision) const
+{
+    std::vector<RemoteBookmarkDelete> result;
+    for (const NamedRef& local : _snapshot->refs)
+    {
+        if (local.kind != GG_NAMED_REF_LOCAL_BOOKMARK || local.target != revision)
+            continue;
+        for (const NamedRef& remote : _snapshot->refs)
+        {
+            if (remote.kind != GG_NAMED_REF_REMOTE_BOOKMARK || remote.name != local.name
+                || remote.target != revision || remote.remote.empty())
+                continue;
+            const RemoteBookmarkDelete deletion{local.name, remote.remote};
+            if (std::ranges::none_of(result, [&](const RemoteBookmarkDelete& existing) {
+                    return existing.bookmark == deletion.bookmark && existing.remote == deletion.remote;
+                }))
+                result.push_back(deletion);
+        }
+    }
+    return result;
+}
+
 void Application::RequestAbandon(const std::string& revision)
 {
     if (!_active_operation.empty() || revision.empty())
@@ -2791,7 +2828,7 @@ void Application::RequestAbandon(const std::string& revision)
     const bool has_refs = std::ranges::any_of(
         _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
     if (selected != _snapshot->revisions.end() && selected->empty && !has_refs && !selected->pushed)
-        _engine.Enqueue(Abandon{{revision}, false, false});
+        _engine.Enqueue(Abandon{{revision}, false, false, {}});
     else
         OpenDialog(Dialog::Abandon);
 }

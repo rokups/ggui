@@ -338,7 +338,7 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
         return snapshot.generation > working->generation && snapshot.working_copy != working->working_copy;
     });
     ASSERT_NE(child, nullptr);
-    engine.Enqueue(Abandon{{working->working_copy}, true, false});
+    engine.Enqueue(Abandon{{working->working_copy}, true, false, {}});
     const auto replacement = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > child->generation
             && std::ranges::none_of(snapshot.revisions,
@@ -395,6 +395,13 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     EXPECT_TRUE(WaitForTerminal(engine, "fetch").finished);
     engine.Enqueue(Fetch{"origin", true});
     EXPECT_TRUE(WaitForTerminal(engine, "pull").finished);
+
+    engine.Enqueue(RemoteBookmarkDelete{"main", "origin"});
+    EXPECT_TRUE(WaitForTerminal(engine, "delete remote bookmark").finished);
+    CheckGit(git_repository_open_bare(&raw_remote, remote.path.string().c_str()));
+    bare.reset(raw_remote);
+    raw_main = nullptr;
+    EXPECT_EQ(git_reference_lookup(&raw_main, bare.get(), "refs/heads/main"), GIT_ENOTFOUND);
 }
 
 TEST(RepositoryEngine, OpensLinkedWorktree)
@@ -560,7 +567,8 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Reorder{"missing-source", "missing-target", GG_REORDER_AFTER}, "reorder"},
         {Split{"missing", "selected", {"tracked.txt"}}, "split"},
         {Squash{"missing-source", "missing-destination", "combined"}, "squash"},
-        {Abandon{{"missing"}, true, true}, "abandon"},
+        {Abandon{{"missing"}, true, true, {}}, "abandon"},
+        {RemoteBookmarkDelete{"missing", "missing"}, "delete remote bookmark"},
         {Restore{"missing-from", "missing-into", {"tracked.txt"}}, "restore"},
         {MoveFiles{"missing-source", "missing-destination", {"tracked.txt"}}, "move files"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
