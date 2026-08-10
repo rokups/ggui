@@ -1430,6 +1430,7 @@ void Application::RenderBookmarks()
     ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
     ImGui::EndDisabled();
+    ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
     std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
@@ -1520,6 +1521,7 @@ void Application::RenderTags()
     ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Create tag", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Tag);
     ImGui::EndDisabled();
+    ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
     for (const NamedRef& ref : _snapshot->refs)
     {

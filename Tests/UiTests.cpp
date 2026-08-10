@@ -944,6 +944,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
 
         FocusWindow(context, "Bookmarks");
+        IM_CHECK_GE(context->ItemInfo("##bookmark filter").RectFull.GetWidth(),
+            context->ItemInfo("**/Create bookmark").RectFull.GetWidth() - 1.0f);
         context->ItemInputValue("##bookmark filter", "FEATURE");
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/feature"));
@@ -951,6 +953,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemInputValue("##bookmark filter", "");
 
         FocusWindow(context, "Tags");
+        IM_CHECK_GE(context->ItemInfo("##tag filter").RectFull.GetWidth(),
+            context->ItemInfo("**/Create tag").RectFull.GetWidth() - 1.0f);
         context->ItemInputValue("##tag filter", "missing");
         context->Yield(2);
         IM_CHECK(!context->ItemExists("**/coverage-tag"));
