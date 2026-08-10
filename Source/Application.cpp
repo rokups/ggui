@@ -2148,7 +2148,7 @@ void Application::RenderChangeInformation()
     }
 
     ImGui::Text("%s%s", revision->author.empty() ? "Unknown author" : revision->author.c_str(),
-        revision->pushed ? "  -  locked" : "  -  not pushed");
+        revision->pushed ? "  -  locked" : "");
     TextLabelledId("Change ", revision->change_id, ChangePrefix(revision->change_id),
         ChangeIdColor(revision->working_copy));
     ImGui::SameLine();
