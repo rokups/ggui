@@ -1826,18 +1826,30 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield();
             context->SetRef("//$FOCUSED");
         };
-        const auto line_is_highlighted = [&] {
+        const auto diff_view = [&]() -> ImGuiWindow* {
             ImGuiWindow* window = ImGui::FindWindowByName("Diff");
             const auto child = std::ranges::find_if(window->DC.ChildWindows,
                 [&](const ImGuiWindow* candidate) { return candidate->ChildId == view.ID; });
+            return child == window->DC.ChildWindows.end() ? nullptr : *child;
+        };
+        const auto line_highlight = [&] {
+            ImRect bounds(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+            ImGuiWindow* child = diff_view();
             const ImU32 color = ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.28f);
-            return child != window->DC.ChildWindows.end()
-                && std::ranges::any_of((*child)->DrawList->VtxBuffer,
-                    [&](const ImDrawVert& vertex) { return vertex.col == color; });
+            if (child != nullptr)
+                for (const ImDrawVert& vertex : child->DrawList->VtxBuffer)
+                    if (vertex.col == color)
+                        bounds.Add(vertex.pos);
+            return bounds;
         };
 
         open_line(1);
-        IM_CHECK(line_is_highlighted());
+        ImRect highlight = line_highlight();
+        IM_CHECK(!highlight.IsInverted());
+        IM_CHECK_LE(std::fabs(highlight.GetHeight() - line_height), 0.01f);
+        IM_CHECK_LE(std::fabs(highlight.GetCenter().y
+                              - (diff_view()->DC.CursorStartPos.y + line_height + ImGui::GetTextLineHeight() * 0.5f)),
+            0.01f);
         for (const char* action : {"Move line to child", "Move line to parent", "Move hunk to child",
                  "Move hunk to parent"})
         {
@@ -1850,7 +1862,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
 
         open_line(0);
-        IM_CHECK(!line_is_highlighted());
+        IM_CHECK(line_highlight().IsInverted());
         IM_CHECK((context->ItemInfo("**/Move line to child").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Move line to parent").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Move hunk to child").ItemFlags & ImGuiItemFlags_Disabled) == 0);
@@ -1878,6 +1890,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         open_line(1);
         IM_CHECK(context->ItemExists("**/Move hunk to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        highlight = line_highlight();
+        const float split_x = diff_view()->DC.CursorStartPos.x + diff_view()->Size.x * 0.5f;
+        IM_CHECK_LE(std::fabs(highlight.Max.x - split_x), 0.01f);
+        IM_CHECK_LT(highlight.Min.x, split_x);
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        open_line(2);
+        highlight = line_highlight();
+        IM_CHECK_LE(std::fabs(highlight.Min.x - split_x), 0.01f);
+        IM_CHECK_GT(highlight.Max.x, split_x);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
     };

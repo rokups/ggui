@@ -2890,7 +2890,7 @@ void Application::RenderDiff()
     static std::vector<DiffLine> context_region;
     static std::string context_revision;
     static std::string context_path;
-    const auto render_move_context = [&](TextEditor& view, bool supports_selection) {
+    const auto render_move_context = [&](TextEditor& view, bool supports_selection, bool side_by_side) {
         ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
         IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -2961,11 +2961,21 @@ void Application::RenderDiff()
         if (!unsupported && !context_line.empty() && (linear_child || !parent.empty()))
         {
             const float line_height = std::max(view.GetLineHeight(), 1.0f);
-            const float line_y = view_window->DC.CursorStartPos.y + context_row * line_height;
+            const float line_spacing = std::max(line_height - ImGui::GetTextLineHeight(), 0.0f);
+            const float line_y = view_window->DC.CursorStartPos.y + context_row * line_height - line_spacing * 0.5f;
+            ImVec2 highlight_minimum(view_window->InnerClipRect.Min.x, line_y);
+            ImVec2 highlight_maximum(view_window->InnerClipRect.Max.x, line_y + line_height);
+            if (side_by_side)
+            {
+                const float split_x = view_window->DC.CursorStartPos.x + view_window->Size.x * 0.5f;
+                if (context_line.front().kind == DiffLineKind::Deletion)
+                    highlight_maximum.x = split_x;
+                else
+                    highlight_minimum.x = split_x;
+            }
             view_window->DrawList->PushClipRect(view_window->InnerClipRect.Min, view_window->InnerClipRect.Max, true);
-            view_window->DrawList->AddRectFilled(ImVec2(view_window->InnerClipRect.Min.x, line_y),
-                ImVec2(view_window->InnerClipRect.Max.x, line_y + line_height),
-                ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.28f));
+            view_window->DrawList->AddRectFilled(
+                highlight_minimum, highlight_maximum, ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.28f));
             view_window->DrawList->PopClipRect();
         }
         const auto move = [&](std::string_view icon, const char* label, const std::string& destination,
@@ -2991,13 +3001,13 @@ void Application::RenderDiff()
     if (plain)
     {
         editor.Render("##file view", available, true);
-        render_move_context(editor, true);
+        render_move_context(editor, true, false);
     }
     else
     {
         diff.SetSideBySideMode(_diff_side_by_side);
         diff.Render("##diff view", available, true);
-        render_move_context(diff, !_diff_side_by_side);
+        render_move_context(diff, !_diff_side_by_side, _diff_side_by_side);
     }
     ImGui::End();
 }
