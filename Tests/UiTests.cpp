@@ -1984,6 +1984,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                         bounds.Add(vertex.pos);
             return bounds;
         };
+        const ImU32 selection_color = ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
+        IM_CHECK_LT(selection_color >> IM_COL32_A_SHIFT, 128U);
+        const auto selection_highlight = [&] {
+            ImRect bounds(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+            ImGuiWindow* child = diff_view();
+            if (child != nullptr)
+                for (const ImDrawVert& vertex : child->DrawList->VtxBuffer)
+                    if (vertex.col == selection_color)
+                        bounds.Add(vertex.pos);
+            return bounds;
+        };
+        const auto check_selection_highlight = [&] {
+            const ImRect bounds = selection_highlight();
+            const float offset = (line_height - ImGui::GetTextLineHeight()) * 0.5f;
+            IM_CHECK(!bounds.IsInverted());
+            IM_CHECK_LE(std::fabs(bounds.Min.y
+                                  - (diff_view()->DC.CursorStartPos.y + line_height - offset)),
+                0.01f);
+            IM_CHECK_LE(std::fabs(bounds.Max.y
+                                  - (diff_view()->DC.CursorStartPos.y + 4.0f * line_height - offset)),
+                0.01f);
+        };
         const auto check_diff_highlight = [&](bool added, int row) {
             const ImRect bounds = diff_highlight(added);
             IM_CHECK(!bounds.IsInverted());
@@ -2036,6 +2058,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         context->MouseUp();
         context->Yield();
+        check_selection_highlight();
         open_line(2);
         IM_CHECK(context->ItemExists("**/Move selection to child"));
         IM_CHECK(context->ItemExists("**/Move selection to parent"));
@@ -2077,6 +2100,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         context->MouseUp();
         context->Yield();
+        check_selection_highlight();
         open_line(2);
         IM_CHECK(context->ItemExists("**/Move selection to child"));
         IM_CHECK(context->ItemExists("**/Move selection to parent"));

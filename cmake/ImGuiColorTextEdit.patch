@@ -1,5 +1,5 @@
 diff --git a/TextDiff.cpp b/TextDiff.cpp
-index d308483..4f23835 100644
+index d308483..51ce589 100644
 --- a/TextDiff.cpp
 +++ b/TextDiff.cpp
 @@ -11,0 +12 @@
@@ -119,7 +119,7 @@ index d308483..4f23835 100644
 +	renderSideBySideSelection();
 @@ -274,0 +343 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
 +	handleSideBySideSelection();
-@@ -281,0 +351,181 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+@@ -281,0 +351,182 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
 +//
 +//	TextDiff::renderSideBySideSelection
 +//
@@ -135,6 +135,7 @@ index d308483..4f23835 100644
 +	auto textEnd = selectionSide == Side::left ? rightLineNumberPos : rightTextEnd;
 +	auto drawList = ImGui::GetWindowDrawList();
 +	auto cursorScreenPos = ImGui::GetCursorScreenPos();
++	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
 +	drawList->PushClipRect(
 +		ImVec2(textPosition, drawList->GetClipRectMin().y),
 +		ImVec2(textEnd, drawList->GetClipRectMax().y),
@@ -148,7 +149,7 @@ index d308483..4f23835 100644
 +		auto sourceLine = selectionSide == Side::left ? lineInfo[row].leftLine : lineInfo[row].rightLine;
 +		auto left = row == start.row ? start.column : 0;
 +		auto right = row == end.row ? end.column : source[sourceLine].maxColumn;
-+		auto y = cursorScreenPos.y + row * glyphSize.y;
++		auto y = cursorScreenPos.y + row * glyphSize.y - backgroundOffset;
 +		drawList->AddRectFilled(
 +			ImVec2(textPosition + left * glyphSize.x - textScroll, y),
 +			ImVec2(textPosition + right * glyphSize.x - textScroll, y + glyphSize.y),
@@ -301,32 +302,32 @@ index d308483..4f23835 100644
 +}
 +
 +
-@@ -289,0 +540 @@ void TextDiff::renderSideBySideBackground() {
+@@ -289,0 +541 @@ void TextDiff::renderSideBySideBackground() {
 +	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
-@@ -294,2 +545,3 @@ void TextDiff::renderSideBySideBackground() {
+@@ -294,2 +546,3 @@ void TextDiff::renderSideBySideBackground() {
 -		auto lineLeft = static_cast<int>(line.leftLine + 1);
 -		auto lineRight = static_cast<int>(line.rightLine + 1);
 +		auto [lineLeft, lineRight] = getLineNumbers(static_cast<size_t>(i));
 +		auto left = lineLeft > 0 ? std::to_string(lineLeft) : "";
 +		auto right = lineRight > 0 ? std::to_string(lineRight) : "";
-@@ -299 +551 @@ void TextDiff::renderSideBySideBackground() {
+@@ -299 +552 @@ void TextDiff::renderSideBySideBackground() {
 -				snprintf(buffer, sizeof(buffer), " %*d", leftLineNumberDigits, lineLeft);
 +				snprintf(buffer, sizeof(buffer), " %*s", leftLineNumberDigits, left.c_str());
-@@ -301 +553 @@ void TextDiff::renderSideBySideBackground() {
+@@ -301 +554 @@ void TextDiff::renderSideBySideBackground() {
 -				snprintf(buffer, sizeof(buffer), " %*d", rightLineNumberDigits, lineRight);
 +				snprintf(buffer, sizeof(buffer), " %*s", rightLineNumberDigits, right.c_str());
-@@ -306 +558 @@ void TextDiff::renderSideBySideBackground() {
+@@ -306 +559 @@ void TextDiff::renderSideBySideBackground() {
 -				snprintf(buffer, sizeof(buffer), " %*d +", rightLineNumberDigits, lineRight);
 +				snprintf(buffer, sizeof(buffer), " %*s +", rightLineNumberDigits, right.c_str());
-@@ -310,2 +562,2 @@ void TextDiff::renderSideBySideBackground() {
+@@ -310,2 +563,2 @@ void TextDiff::renderSideBySideBackground() {
 -					ImVec2(rightTextPos, y),
 -					ImVec2(rightTextEnd, y + glyphSize.y),
 +					ImVec2(rightTextPos, y - backgroundOffset),
 +					ImVec2(rightTextEnd, y + glyphSize.y - backgroundOffset),
-@@ -317 +569 @@ void TextDiff::renderSideBySideBackground() {
+@@ -317 +570 @@ void TextDiff::renderSideBySideBackground() {
 -				snprintf(buffer, sizeof(buffer), " %*d -", leftLineNumberDigits, lineLeft);
 +				snprintf(buffer, sizeof(buffer), " %*s -", leftLineNumberDigits, left.c_str());
-@@ -321,2 +573,2 @@ void TextDiff::renderSideBySideBackground() {
+@@ -321,2 +574,2 @@ void TextDiff::renderSideBySideBackground() {
 -					ImVec2(leftTextPos, y),
 -					ImVec2(rightLineNumberPos, y + glyphSize.y),
 +					ImVec2(leftTextPos, y - backgroundOffset),
@@ -380,11 +381,16 @@ index 454714e..01f6abb 100644
 +	std::pair<SidePosition, SidePosition> sideSelectionBounds() const;
 +	void copySideSelection() const;
 diff --git a/TextEditor.cpp b/TextEditor.cpp
-index 2c4d059..0b24e6d 100644
+index 2c4d059..8ffd58e 100644
 --- a/TextEditor.cpp
 +++ b/TextEditor.cpp
-@@ -307,0 +308 @@ void TextEditor::renderMarkers() {
+@@ -275,0 +276 @@ void TextEditor::renderSelections() {
++	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
+@@ -291 +292 @@ void TextEditor::renderSelections() {
+-					auto y = cursorScreenPos.y + line * glyphSize.y;
++					auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;
+@@ -307,0 +309 @@ void TextEditor::renderMarkers() {
 +		auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
-@@ -312 +313 @@ void TextEditor::renderMarkers() {
+@@ -312 +314 @@ void TextEditor::renderMarkers() {
 -				auto y = cursorScreenPos.y + line * glyphSize.y;
 +				auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;

@@ -3091,7 +3091,9 @@ void Application::RenderDiff()
     if (dark_palette != _dark_theme)
     {
         dark_palette = _dark_theme;
-        const TextEditor::Palette& palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
+        TextEditor::Palette palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
+        palette[static_cast<std::size_t>(TextEditor::Color::selection)] =
+            ImGui::GetColorU32(ImGuiCol_TextSelectedBg);
         diff.SetPalette(palette);
         editor.SetPalette(palette);
         diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
