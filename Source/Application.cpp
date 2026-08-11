@@ -2172,12 +2172,21 @@ void Application::RenderHistory()
         _reveal_revision.clear();
     }
     const ImGuiIO& io = ImGui::GetIO();
-    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
-        && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
-        && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow))
-        && !_visible_revisions.empty())
+    const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
+        && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const ImGuiID navigation_owner = ImGui::GetID("history arrow navigation");
+    if (keyboard_navigation)
     {
-        const int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+        ImGui::SetKeyOwner(ImGuiKey_UpArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
+        ImGui::SetKeyOwner(ImGuiKey_DownArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
+    }
+    const bool navigate_up = keyboard_navigation
+        && ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat, navigation_owner);
+    const bool navigate_down = keyboard_navigation
+        && ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat, navigation_owner);
+    if ((navigate_up || navigate_down) && !_visible_revisions.empty())
+    {
+        const int direction = navigate_down ? 1 : -1;
         const auto selected = std::ranges::find_if(_visible_revisions, [&](int index) {
             return _snapshot->revisions[index].oid == _selected_revision;
         });
@@ -3049,9 +3058,6 @@ void Application::RenderDiff()
     static int loaded_context_lines = 3;
     static bool loaded_plain = false;
     static bool dark_palette = !_dark_theme;
-    static int side_selection_anchor = -1;
-    static int side_selection_end = -1;
-    static bool side_selecting = false;
     if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
         || loaded_revision != _diff.revision || loaded_compare_to != _diff.compare_to
         || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
@@ -3065,9 +3071,6 @@ void Application::RenderDiff()
         loaded_whitespace = _diff_whitespace_mode;
         loaded_context_lines = _diff_context_lines;
         loaded_plain = plain;
-        side_selection_anchor = -1;
-        side_selection_end = -1;
-        side_selecting = false;
         if (plain)
         {
             editor.SetLanguage(DiffLanguage(_diff.path));
@@ -3102,9 +3105,14 @@ void Application::RenderDiff()
     static std::vector<DiffLine> context_hunk;
     static std::string context_revision;
     static std::string context_path;
-    const auto render_move_context = [&](TextEditor& view, bool supports_selection, bool side_by_side) {
+    const auto render_move_context = [&](auto& view, bool side_by_side) {
         ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
         IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
+        const ImGuiIO& io = ImGui::GetIO();
+        if (side_by_side && view.AnyCursorHasSelection()
+            && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+            && io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_C))
+            view.Copy();
         const float line_height = std::max(view.GetLineHeight(), 1.0f);
         const float content_y = ImGui::GetItemRectMin().y + ImGui::GetStyle().WindowPadding.y;
         const auto mouse_row = [&] {
@@ -3112,36 +3120,6 @@ void Application::RenderDiff()
                     + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height),
                 0, std::max(0, static_cast<int>(_diff.lines.size()) - 1));
         };
-        if (side_by_side)
-        {
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            {
-                if (!ImGui::GetIO().KeyShift || side_selection_anchor < 0)
-                    side_selection_anchor = mouse_row();
-                side_selection_end = mouse_row();
-                side_selecting = true;
-            }
-            if (side_selecting && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-                side_selection_end = mouse_row();
-            else
-                side_selecting = false;
-            if (side_selection_anchor >= 0 && side_selection_end >= 0
-                && side_selection_anchor != side_selection_end)
-            {
-                const int first = std::min(side_selection_anchor, side_selection_end);
-                const int last = std::max(side_selection_anchor, side_selection_end);
-                const float line_spacing = std::max(line_height - ImGui::GetTextLineHeight(), 0.0f);
-                const float top = view_window->DC.CursorStartPos.y + first * line_height - line_spacing * 0.5f;
-                const float bottom = view_window->DC.CursorStartPos.y + (last + 1) * line_height
-                    - line_spacing * 0.5f;
-                view_window->DrawList->PushClipRect(
-                    view_window->InnerClipRect.Min, view_window->InnerClipRect.Max, true);
-                view_window->DrawList->AddRectFilled(ImVec2(view_window->InnerClipRect.Min.x, top),
-                    ImVec2(view_window->InnerClipRect.Max.x, bottom),
-                    ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.18f));
-                view_window->DrawList->PopClipRect();
-            }
-        }
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
             context_row = mouse_row();
@@ -3159,20 +3137,13 @@ void Application::RenderDiff()
 
                 int first = context_row;
                 int last = context_row;
-                if (supports_selection && view.AnyCursorHasSelection())
+                if (view.AnyCursorHasSelection())
                 {
                     const TextEditor::CursorSelection selection = view.GetMainCursorSelection();
                     first = selection.start.line;
                     last = selection.end.line;
                     if (last > first && selection.end.column == 0)
                         --last;
-                    context_has_selection = context_row >= first && context_row <= last;
-                }
-                else if (side_by_side && side_selection_anchor >= 0 && side_selection_end >= 0
-                    && side_selection_anchor != side_selection_end)
-                {
-                    first = std::min(side_selection_anchor, side_selection_end);
-                    last = std::max(side_selection_anchor, side_selection_end);
                     context_has_selection = context_row >= first && context_row <= last;
                 }
                 if (!context_has_selection)
@@ -3199,6 +3170,11 @@ void Application::RenderDiff()
 
         if (!ImGui::BeginPopup("Diff line context"))
             return;
+        ImGui::BeginDisabled(!view.AnyCursorHasSelection());
+        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy", "Ctrl+C"))
+            view.Copy();
+        ImGui::EndDisabled();
+        ImGui::Separator();
         const auto [parent, child] = AdjacentRevisions(_diff.revision);
         const auto source_revision = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
         const auto child_revision = std::ranges::find(_snapshot->revisions, child, &Revision::oid);
@@ -3277,13 +3253,13 @@ void Application::RenderDiff()
     if (plain)
     {
         editor.Render("##file view", available, true);
-        render_move_context(editor, true, false);
+        render_move_context(editor, false);
     }
     else
     {
         diff.SetSideBySideMode(_diff_side_by_side);
         diff.Render("##diff view", available, true);
-        render_move_context(diff, !_diff_side_by_side, _diff_side_by_side);
+        render_move_context(diff, _diff_side_by_side);
     }
     ImGui::End();
 }

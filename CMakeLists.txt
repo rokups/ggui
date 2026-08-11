@@ -128,8 +128,7 @@ CPMAddPackage(
 # CPM patch steps are not safe to rerun over an already-patched FetchContent checkout.
 # Include exact source hashes in the stamp so stale and partially applied caches self-repair.
 set(imgui_color_text_edit_patches
-  ImGuiColorTextEdit-line-numbers.patch
-  ImGuiColorTextEdit-centered-highlights.patch)
+  ImGuiColorTextEdit.patch)
 set(imgui_color_text_edit_sources TextDiff.cpp TextDiff.h TextEditor.cpp)
 set(imgui_color_text_edit_patch_state ${imgui_color_text_edit_revision})
 foreach(patch_file IN LISTS imgui_color_text_edit_patches)

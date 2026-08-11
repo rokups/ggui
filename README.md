@@ -58,7 +58,8 @@ applies. Working-copy file menus can also delete the file from disk.
 Right-click a text diff to move the clicked line, the active selection, or
 the containing hunk to an adjacent parent or child change; unavailable targets
 and unsupported diff contexts remain disabled. Unified and side-by-side views
-both support multi-line selection. A hunk can be reverted from any selected
+both support character-level text selection and expose **Copy** in the diff
+context menu. A hunk can be reverted from any selected
 change onto `@`; files in the working-copy change additionally offer line-level
 revert.
 

@@ -1998,6 +1998,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         check_diff_highlight(true, 2);
 
         open_line(1);
+        IM_CHECK(context->ItemExists("**/Copy"));
+        IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         ImRect highlight = line_highlight();
         IM_CHECK(!highlight.IsInverted());
         IM_CHECK_LE(std::fabs(highlight.GetHeight() - line_height), 0.01f);
@@ -2038,8 +2040,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Move selection to child"));
         IM_CHECK(context->ItemExists("**/Move selection to parent"));
         IM_CHECK(!context->ItemExists("**/Move hunk to child"));
-        ImGui::ClosePopupToLevel(0, true);
+        IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ImGui::SetClipboardText("unchanged");
+        context->ItemClick("**/Copy");
         context->Yield();
+        IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
+        IM_CHECK(std::string_view(ImGui::GetClipboardText()).find("new") != std::string_view::npos);
 
         context->SetRef("Diff");
         context->ComboClick("View/Side by Side");
@@ -2047,6 +2053,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         check_diff_highlight(false, 1);
         check_diff_highlight(true, 2);
         open_line(1);
+        IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK(context->ItemExists("**/Move hunk to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         highlight = line_highlight();
@@ -2074,8 +2081,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Move selection to child"));
         IM_CHECK(context->ItemExists("**/Move selection to parent"));
         IM_CHECK(!context->ItemExists("**/Move hunk to child"));
-        ImGui::ClosePopupToLevel(0, true);
+        IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ImGui::SetClipboardText("unchanged");
+        context->ItemClick("**/Copy");
         context->Yield();
+        IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
+        IM_CHECK(std::string_view(ImGui::GetClipboardText()).find("same") != std::string_view::npos);
+        FocusWindow(context, "Diff");
+        ImGui::SetClipboardText("unchanged");
+        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_C);
+        context->Yield();
+        IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
 
         application.SelectRevisionForTest("child");
         DiffResult working_result{1000, "child", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
@@ -2115,24 +2131,45 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
-        application.SetSnapshotForTest(RichSnapshot());
+        RepoSnapshot snapshot = RichSnapshot();
+        for (int index = 0; index < 40; ++index)
+        {
+            Revision revision;
+            revision.oid = "extra-" + std::to_string(index);
+            revision.change_id = "extra-change-" + std::to_string(index);
+            revision.description = "Extra revision " + std::to_string(index);
+            snapshot.revisions.push_back(std::move(revision));
+        }
+        application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(2);
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/feature");
         FocusWindow(context, "History");
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+        IM_CHECK_GT((*graph)->ScrollMax.y, 0.0f);
+        const float initial_scroll = (*graph)->Scroll.y;
 
         context->KeyPress(ImGuiKey_DownArrow);
         context->Yield();
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"right"});
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - initial_scroll), 0.01f);
         context->KeyPress(ImGuiKey_UpArrow);
         context->Yield();
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - initial_scroll), 0.01f);
         context->KeyPress(ImGuiKey_UpArrow);
         context->Yield();
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - initial_scroll), 0.01f);
         context->KeyPress(ImGuiKey_UpArrow);
         context->Yield();
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - initial_scroll), 0.01f);
 
         application.SelectRevisionForTest("left");
         IM_CHECK_EQ(application.SelectedParentsForTest(), std::vector<std::string>{"change-left"});
