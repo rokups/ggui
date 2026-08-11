@@ -1533,6 +1533,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                      "Delete bookmark", "Copy"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
             IM_CHECK(!context->ItemExists("**/Describe..."));
+            constexpr std::array change_actions{"Metaedit...", "Edit", "Rebase...", "Squash...", "Split...",
+                "Restore...", "Abandon...", "Simplify parents"};
+            float previous_y = -FLT_MAX;
+            for (const char* action : change_actions)
+            {
+                const ImGuiTestItemInfo item = context->ItemInfo((std::string("**/") + action).c_str());
+                IM_CHECK(item.ID != 0);
+                IM_CHECK_GT(item.RectFull.Min.y, previous_y);
+                previous_y = item.RectFull.Min.y;
+            }
             context->ItemClick("**/Copy");
             context->Yield();
             for (const char* action : {"Short change ID", "Full change ID", "Short commit ID", "Full commit ID"})
@@ -1550,7 +1560,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Edit", "Split...", "Abandon..."})
+            for (const char* action : {"Metaedit...", "Edit", "Rebase...", "Squash...", "Split...", "Restore...",
+                     "Abandon..."})
             {
                 context->SetRef("History");
                 context->ItemClick(rows[0], ImGuiMouseButton_Right);

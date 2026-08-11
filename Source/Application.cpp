@@ -1390,21 +1390,11 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
         if (ActionMenuItem(ICON_MS_COMMIT, "Commit...", nullptr, _compare_to.empty())) OpenDialog(Dialog::Commit);
-        if (ActionMenuItem(ICON_MS_INFO, "Metaedit...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
-        if (ActionMenuItem(ICON_MS_EDIT, "Edit", nullptr, !_selected_revision.empty()))
-            _engine.Enqueue(Edit{_selected_revision});
+        ImGui::Separator();
         if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
         if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
-        if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Rebase);
-        if (ActionMenuItem(ICON_MS_MERGE, "Squash...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
-        if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Split);
-        if (ActionMenuItem(ICON_MS_RESTORE, "Restore...", nullptr,
-                !_selected_revision.empty() && _compare_to.empty()))
-            OpenDialog(Dialog::Restore);
-        if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", nullptr, !_selected_revision.empty())) RequestAbandon(_selected_revision);
-        if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, !_selected_revision.empty()))
-            QueueCommands({SimplifyParents{{_selected_revision}}}, {_selected_revision},
-                "Simplifying the parents will rewrite a locked commit.");
+        ImGui::Separator();
+        RenderSelectedChangeActions(_selected_revision, false);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr && !actions_locked))
@@ -1451,6 +1441,45 @@ void Application::RenderMenuBar()
         ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
+}
+
+void Application::RenderSelectedChangeActions(const std::string& revision, bool select_revision)
+{
+    const bool enabled = !revision.empty();
+    const auto select = [&] {
+        if (select_revision)
+            SelectRevision(revision);
+    };
+    const auto dialog = [&](std::string_view icon, const char* label, const char* shortcut, Dialog action,
+                            bool action_enabled = true) {
+        if (ActionMenuItem(icon, label, shortcut, enabled && action_enabled))
+        {
+            select();
+            OpenDialog(action);
+        }
+    };
+
+    dialog(ICON_MS_INFO, "Metaedit...", nullptr, Dialog::Metaedit);
+    if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E", enabled))
+    {
+        select();
+        _engine.Enqueue(Edit{revision});
+    }
+    dialog(ICON_MS_REBASE, "Rebase...", nullptr, Dialog::Rebase);
+    dialog(ICON_MS_MERGE, "Squash...", nullptr, Dialog::Squash);
+    dialog(ICON_MS_DIFFERENCE, "Split...", "S", Dialog::Split);
+    dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
+    if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A", enabled))
+    {
+        select();
+        RequestAbandon(revision);
+    }
+    if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, enabled))
+    {
+        select();
+        QueueCommands({SimplifyParents{{revision}}}, {revision},
+            "Simplifying the parents will rewrite a locked commit.");
+    }
 }
 
 void Application::RenderToolbar()
@@ -2144,13 +2173,7 @@ void Application::RenderHistory()
                     ImGui::EndMenu();
                 }
                 ImGui::Separator();
-                if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E")) _engine.Enqueue(Edit{revision.oid});
-                if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", "S"))
-                {
-                    SelectRevision(revision.oid);
-                    OpenDialog(Dialog::Split);
-                }
-                if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A")) RequestAbandon(revision.oid);
+                RenderSelectedChangeActions(revision.oid, true);
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }

@@ -131,6 +131,7 @@ private:
     void ProcessEvent(SDL_Event& event);
     void RenderFrame();
     void RenderMenuBar();
+    void RenderSelectedChangeActions(const std::string& revision, bool select_revision);
     void RenderToolbar();
     void RenderWelcome();
     void RenderBookmarks();
