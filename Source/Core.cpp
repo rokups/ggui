@@ -15,6 +15,7 @@
 #include <fstream>
 #include <functional>
 #include <iterator>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -75,6 +76,34 @@ std::string BlobText(git_repository* repository, git_tree* tree, const char* pat
     }
     const auto* contents = static_cast<const char*>(git_blob_rawcontent(blob.get()));
     return contents == nullptr ? std::string{} : std::string(contents, git_blob_rawsize(blob.get()));
+}
+
+DiffLine DiffLineFromRaw(const git_diff_line& line, int hunk)
+{
+    const DiffLineKind kind = line.origin == GIT_DIFF_LINE_ADDITION ? DiffLineKind::Addition
+        : line.origin == GIT_DIFF_LINE_DELETION                     ? DiffLineKind::Deletion
+                                                                    : DiffLineKind::Context;
+    return {kind, line.old_lineno > 0 ? line.old_lineno - 1 : -1,
+        line.new_lineno > 0 ? line.new_lineno - 1 : -1, hunk};
+}
+
+bool SameChangedLine(const DiffLine& first, const DiffLine& second)
+{
+    return first.kind == second.kind && first.kind != DiffLineKind::Context
+        && first.old_line == second.old_line && first.new_line == second.new_line;
+}
+
+std::vector<std::string_view> TextLines(std::string_view text)
+{
+    std::vector<std::string_view> result;
+    for (std::size_t begin = 0; begin < text.size();)
+    {
+        const std::size_t newline = text.find('\n', begin);
+        const std::size_t end = newline == std::string_view::npos ? text.size() : newline + 1;
+        result.push_back(text.substr(begin, end - begin));
+        begin = end;
+    }
+    return result;
 }
 
 struct RepositoryDeleter
@@ -886,11 +915,13 @@ struct RepositoryEngine::Impl
 
             git_diff* display_diff = diff.get();
             std::unique_ptr<git_diff, decltype(&git_diff_free)> filtered_diff(nullptr, git_diff_free);
-            if (command.options.context_lines >= 0
-                && (command.options.whitespace_mode != DiffWhitespaceMode::Normal || command.options.context_lines != 3))
+            if (command.options.context_lines < 0 || command.options.whitespace_mode != DiffWhitespaceMode::Normal
+                || command.options.context_lines != 3)
             {
                 git_diff_options options = GIT_DIFF_OPTIONS_INIT;
-                options.context_lines = static_cast<uint32_t>(std::max(command.options.context_lines, 0));
+                options.context_lines = command.options.context_lines < 0
+                    ? std::numeric_limits<uint32_t>::max()
+                    : static_cast<uint32_t>(command.options.context_lines);
                 if (command.options.whitespace_mode == DiffWhitespaceMode::IgnoreWhitespace)
                     options.flags |= GIT_DIFF_IGNORE_WHITESPACE_CHANGE;
                 else if (command.options.whitespace_mode == DiffWhitespaceMode::IgnoreAllWhitespace)
@@ -904,7 +935,7 @@ struct RepositoryEngine::Impl
             }
 
             const bool submodule = (result.old_mode & 0170000U) == 0160000U || (result.new_mode & 0170000U) == 0160000U;
-            if (!result.binary && !submodule && command.options.context_lines >= 0)
+            if (!result.binary && !submodule)
             {
                 size_t display_index = git_diff_num_deltas(display_diff);
                 for (size_t index = 0; index < git_diff_num_deltas(display_diff); ++index)
@@ -944,6 +975,7 @@ struct RepositoryEngine::Impl
                                     && raw_line->origin != GIT_DIFF_LINE_ADDITION
                                     && raw_line->origin != GIT_DIFF_LINE_DELETION)
                                     continue;
+                                result.lines.push_back(DiffLineFromRaw(*raw_line, static_cast<int>(hunk)));
                                 if (raw_line->origin != GIT_DIFF_LINE_ADDITION)
                                     display_before.append(raw_line->content, raw_line->content_len);
                                 if (raw_line->origin != GIT_DIFF_LINE_DELETION)
@@ -952,10 +984,15 @@ struct RepositoryEngine::Impl
                         }
                     }
                 }
-                if (display_before.empty() && display_after.empty())
-                    display_before = display_after = result.after.empty() ? result.before : result.after;
-                result.before = std::move(display_before);
-                result.after = std::move(display_after);
+                if (display_before.ends_with('\n') && display_after.ends_with('\n'))
+                    result.lines.push_back({});
+                if (command.options.context_lines >= 0)
+                {
+                    if (display_before.empty() && display_after.empty())
+                        display_before = display_after = result.after.empty() ? result.before : result.after;
+                    result.before = std::move(display_before);
+                    result.after = std::move(display_after);
+                }
             }
         }
         Post(DiffReady{std::move(result)});
@@ -981,6 +1018,209 @@ struct RepositoryEngine::Impl
         Check(git_apply(git.get(), patch.get(), GIT_APPLY_LOCATION_WORKDIR, nullptr), "apply patch");
         Sync();
         PublishSnapshot();
+    }
+
+    void MoveDiffSelection(const MoveDiffLines& command)
+    {
+        Sync();
+        if (command.path.empty() || command.lines.empty())
+            throw std::runtime_error("no changed lines selected");
+
+        git_oid source_oid{};
+        git_oid destination_oid{};
+        Check(gg_repository_resolve(&source_oid, gg, command.source.c_str()), "resolve line move source");
+        Check(gg_repository_resolve(&destination_oid, gg, command.destination.c_str()),
+            "resolve line move destination");
+
+        git_commit* raw_source = nullptr;
+        git_commit* raw_destination = nullptr;
+        Check(git_commit_lookup(&raw_source, git.get(), &source_oid), "load line move source");
+        Check(git_commit_lookup(&raw_destination, git.get(), &destination_oid), "load line move destination");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> source(raw_source, git_commit_free);
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> destination(raw_destination, git_commit_free);
+        if (git_commit_parentcount(source.get()) != 1)
+            throw std::runtime_error("line move source must have exactly one parent");
+
+        const git_oid* source_parent_oid = git_commit_parent_id(source.get(), 0);
+        const bool move_to_parent = git_oid_equal(source_parent_oid, &destination_oid) != 0;
+        const bool move_to_child = git_commit_parentcount(destination.get()) == 1
+            && git_oid_equal(git_commit_parent_id(destination.get(), 0), &source_oid) != 0;
+        if (!move_to_parent && !move_to_child)
+            throw std::runtime_error("line moves require an adjacent parent or child");
+
+        git_commit* raw_source_parent = nullptr;
+        Check(git_commit_parent(&raw_source_parent, source.get(), 0), "load line move parent");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> source_parent(raw_source_parent, git_commit_free);
+        git_tree* raw_before_tree = nullptr;
+        git_tree* raw_after_tree = nullptr;
+        Check(git_commit_tree(&raw_before_tree, source_parent.get()), "load line move parent tree");
+        Check(git_commit_tree(&raw_after_tree, source.get()), "load line move source tree");
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> before_tree(raw_before_tree, git_tree_free);
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> after_tree(raw_after_tree, git_tree_free);
+
+        git_diff_options diff_options{};
+        Check(git_diff_options_init(&diff_options, GIT_DIFF_OPTIONS_VERSION), "initialize line move diff");
+        diff_options.context_lines = 0;
+        git_diff* raw_diff = nullptr;
+        Check(git_diff_tree_to_tree(
+                  &raw_diff, git.get(), before_tree.get(), after_tree.get(), &diff_options),
+            "create line move diff");
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
+        std::size_t delta_index = git_diff_num_deltas(diff.get());
+        const git_diff_delta* delta = nullptr;
+        for (std::size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
+        {
+            const git_diff_delta* candidate = git_diff_get_delta(diff.get(), index);
+            const std::string_view old_path = candidate->old_file.path == nullptr ? "" : candidate->old_file.path;
+            const std::string_view new_path = candidate->new_file.path == nullptr ? old_path : candidate->new_file.path;
+            if (old_path == command.path || new_path == command.path)
+            {
+                delta = candidate;
+                delta_index = index;
+                break;
+            }
+        }
+        if (delta == nullptr || delta->status == GIT_DELTA_RENAMED
+            || (delta->old_file.path != nullptr && delta->new_file.path != nullptr
+                && std::string_view(delta->old_file.path) != delta->new_file.path))
+            throw std::runtime_error("line moves require an unrenamed text file");
+
+        bool binary = false;
+        const std::string before = BlobText(git.get(), before_tree.get(), command.path.c_str(), binary);
+        const std::string after = BlobText(git.get(), after_tree.get(), command.path.c_str(), binary);
+        if (binary)
+            throw std::runtime_error("binary files cannot be moved by line");
+
+        git_patch* raw_patch = nullptr;
+        Check(git_patch_from_diff(&raw_patch, diff.get(), delta_index), "load line move patch");
+        std::unique_ptr<git_patch, decltype(&git_patch_free)> patch(raw_patch, git_patch_free);
+        std::vector<DiffLine> changed_lines;
+        for (std::size_t hunk = 0; hunk < git_patch_num_hunks(patch.get()); ++hunk)
+        {
+            const git_diff_hunk* raw_hunk = nullptr;
+            std::size_t count = 0;
+            Check(git_patch_get_hunk(&raw_hunk, &count, patch.get(), hunk), "load line move hunk");
+            for (std::size_t line = 0; line < count; ++line)
+            {
+                const git_diff_line* raw_line = nullptr;
+                Check(git_patch_get_line_in_hunk(&raw_line, patch.get(), hunk, line), "load line move line");
+                if (raw_line->origin == GIT_DIFF_LINE_ADDITION || raw_line->origin == GIT_DIFF_LINE_DELETION)
+                    changed_lines.push_back(DiffLineFromRaw(*raw_line, static_cast<int>(hunk)));
+            }
+        }
+        if (changed_lines.empty()
+            || std::ranges::any_of(command.lines, [&](const DiffLine& requested) {
+                   return std::ranges::none_of(changed_lines,
+                       [&](const DiffLine& actual) { return SameChangedLine(requested, actual); });
+               }))
+            throw std::runtime_error("selected lines no longer match the source change");
+
+        const auto selected = [&](const git_diff_line& line) {
+            const DiffLine actual = DiffLineFromRaw(line, 0);
+            return std::ranges::any_of(
+                command.lines, [&](const DiffLine& requested) { return SameChangedLine(requested, actual); });
+        };
+        const std::vector<std::string_view> before_lines = TextLines(before);
+        std::size_t before_index = 0;
+        std::size_t applied = 0;
+        std::string partial;
+        for (std::size_t hunk = 0; hunk < git_patch_num_hunks(patch.get()); ++hunk)
+        {
+            const git_diff_hunk* raw_hunk = nullptr;
+            std::size_t count = 0;
+            Check(git_patch_get_hunk(&raw_hunk, &count, patch.get(), hunk), "load line move hunk");
+            const std::size_t hunk_start = raw_hunk->old_start > 0
+                ? static_cast<std::size_t>(raw_hunk->old_start - 1)
+                : 0;
+            while (before_index < hunk_start && before_index < before_lines.size())
+                partial.append(before_lines[before_index++]);
+            for (std::size_t line = 0; line < count; ++line)
+            {
+                const git_diff_line* raw_line = nullptr;
+                Check(git_patch_get_line_in_hunk(&raw_line, patch.get(), hunk, line), "load line move line");
+                if (raw_line->origin == GIT_DIFF_LINE_CONTEXT)
+                {
+                    partial.append(raw_line->content, raw_line->content_len);
+                    ++before_index;
+                    continue;
+                }
+                if (raw_line->origin != GIT_DIFF_LINE_ADDITION && raw_line->origin != GIT_DIFF_LINE_DELETION)
+                    continue;
+                const bool apply = move_to_parent ? selected(*raw_line) : !selected(*raw_line);
+                applied += apply ? 1 : 0;
+                if (raw_line->origin == GIT_DIFF_LINE_DELETION)
+                {
+                    if (!apply)
+                        partial.append(raw_line->content, raw_line->content_len);
+                    ++before_index;
+                }
+                else if (apply)
+                    partial.append(raw_line->content, raw_line->content_len);
+            }
+        }
+        while (before_index < before_lines.size())
+            partial.append(before_lines[before_index++]);
+
+        const bool old_exists = delta->old_file.mode != 0;
+        const bool new_exists = delta->new_file.mode != 0;
+        const bool partial_exists = applied == 0 ? old_exists
+            : applied == changed_lines.size()       ? new_exists
+                                                    : true;
+        const auto partial_mode = static_cast<git_filemode_t>(applied == changed_lines.size() ? delta->new_file.mode
+            : old_exists ? delta->old_file.mode
+                         : delta->new_file.mode);
+
+        git_commit* target_commit = move_to_parent ? destination.get() : source.get();
+        git_tree* raw_target_tree = nullptr;
+        Check(git_commit_tree(&raw_target_tree, target_commit), "load line move target tree");
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> target_tree(raw_target_tree, git_tree_free);
+        git_index* raw_index = nullptr;
+        git_index_options index_options = GIT_INDEX_OPTIONS_INIT;
+        index_options.oid_type = git_repository_oid_type(git.get());
+        Check(git_index_new(&raw_index, &index_options), "create line move index");
+        std::unique_ptr<git_index, decltype(&git_index_free)> index(raw_index, git_index_free);
+        Check(git_index_read_tree(index.get(), target_tree.get()), "prepare line move tree");
+        if (partial_exists)
+        {
+            git_oid blob{};
+            Check(git_blob_create_from_buffer(&blob, git.get(), partial.data(), partial.size()),
+                "write line move contents");
+            git_index_entry entry{};
+            entry.mode = partial_mode;
+            entry.id = blob;
+            entry.path = command.path.c_str();
+            Check(git_index_add(index.get(), &entry), "update line move path");
+        }
+        else
+        {
+            const int removed = git_index_remove_bypath(index.get(), command.path.c_str());
+            if (removed != GIT_ENOTFOUND)
+                Check(removed, "remove line move path");
+        }
+        git_oid tree_oid{};
+        Check(git_index_write_tree_to(&tree_oid, index.get(), git.get()), "write line move tree");
+        git_tree* raw_partial_tree = nullptr;
+        Check(git_tree_lookup(&raw_partial_tree, git.get(), &tree_oid), "load line move tree");
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> partial_tree(raw_partial_tree, git_tree_free);
+        git_oid synthetic_oid{};
+        // gg restore accepts revisions, so use an unreachable carrier commit that normal Git GC can prune.
+        Check(git_commit_create(&synthetic_oid, git.get(), nullptr, git_commit_author(target_commit),
+                  git_commit_committer(target_commit), nullptr, "ggui partial line move", partial_tree.get(), 0,
+                  nullptr),
+            "create line move source");
+
+        const std::string synthetic = OidString(synthetic_oid);
+        const std::string into = move_to_parent ? command.destination : command.source;
+        const std::vector<std::string> paths{command.path};
+        const StringArray path(paths);
+        gg_restore_options options = GG_RESTORE_OPTIONS_INIT;
+        options.filesets = path.Get();
+        options.from = synthetic.c_str();
+        options.into = into.c_str();
+        options.restore_descendants = move_to_child ? 1 : 0;
+        Mutate("move diff lines", [&](auto* out, auto* operation) {
+            return gg_repository_restore(out, gg, &options, operation);
+        });
     }
 
     template <class Function> void Mutate(std::string_view action, Function function)
@@ -1136,6 +1376,7 @@ struct RepositoryEngine::Impl
                         return gg_repository_move_files(out, gg, &options, operation);
                     });
                 },
+                [&](const MoveDiffLines& value) { MoveDiffSelection(value); },
                 [&](const SimplifyParents& value) {
                     gg_simplify_parents_options options = GG_SIMPLIFY_PARENTS_OPTIONS_INIT;
                     const StringArray revisions(value.revisions);
@@ -1244,6 +1485,7 @@ struct RepositoryEngine::Impl
                 [](const RemoteBookmarkDelete&) { return "delete remote bookmark"; },
                 [](const Restore&) { return "restore"; },
                 [](const MoveFiles&) { return "move files"; },
+                [](const MoveDiffLines&) { return "move diff lines"; },
                 [](const SimplifyParents&) { return "simplify parents"; }, [](const Bookmark&) { return "bookmark"; },
                 [](const Tag&) { return "tag"; }, [](const Undo&) { return "undo"; }, [](const Redo&) { return "redo"; },
                 [](const RestoreOperation&) { return "restore operation"; },

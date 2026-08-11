@@ -101,6 +101,21 @@ enum class DiffWhitespaceMode
     IgnoreAllWhitespace,
 };
 
+enum class DiffLineKind
+{
+    Context,
+    Addition,
+    Deletion,
+};
+
+struct DiffLine
+{
+    DiffLineKind kind = DiffLineKind::Context;
+    int old_line = -1;
+    int new_line = -1;
+    int hunk = -1;
+};
+
 struct DiffOptions
 {
     DiffWhitespaceMode whitespace_mode = DiffWhitespaceMode::Normal;
@@ -140,6 +155,7 @@ struct DiffResult
     bool binary = false;
     git_delta_t selected_status = GIT_DELTA_UNMODIFIED;
     std::vector<StatusEntry> files;
+    std::vector<DiffLine> lines;
     std::string patch;
     std::string old_oid;
     std::string new_oid;
@@ -295,6 +311,13 @@ struct MoveFiles
     std::string destination;
     std::vector<std::string> filesets;
 };
+struct MoveDiffLines
+{
+    std::string source;
+    std::string destination;
+    std::string path;
+    std::vector<DiffLine> lines;
+};
 struct SimplifyParents
 {
     std::vector<std::string> revisions;
@@ -355,8 +378,9 @@ struct ChmodPaths
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, ApplyPatch, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase,
-    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, SimplifyParents, Bookmark, Tag, Undo,
-    Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
+    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, SimplifyParents,
+    Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
+    UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {

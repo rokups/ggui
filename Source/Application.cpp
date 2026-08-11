@@ -2433,24 +2433,7 @@ void Application::RenderChanges()
         ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
     }
     ImGui::SameLine();
-    std::string parent;
-    std::string child;
-    const auto source = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
-    if (source != _snapshot->revisions.end())
-    {
-        if (source->parents.size() == 1)
-            parent = source->parents.front();
-        int children = 0;
-        for (const Revision& revision : _snapshot->revisions)
-        {
-            if (std::ranges::find(revision.parents, source->oid) == revision.parents.end())
-                continue;
-            child = revision.oid;
-            ++children;
-        }
-        if (children != 1)
-            child.clear();
-    }
+    const auto [parent, child] = AdjacentRevisions(_diff.revision);
     if (_diff_loading && !_pending_revision.empty())
         ImGui::TextDisabled("Loading selected change...");
     else if (_diff.files.empty())
@@ -2901,16 +2884,109 @@ void Application::RenderDiff()
             _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
     }
 
+    static int context_row = -1;
+    static bool context_has_selection = false;
+    static std::vector<DiffLine> context_line;
+    static std::vector<DiffLine> context_region;
+    static std::string context_revision;
+    static std::string context_path;
+    const auto render_move_context = [&](TextEditor& view, bool supports_selection) {
+        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+        {
+            const float line_height = std::max(view.GetLineHeight(), 1.0f);
+            const float content_y = ImGui::GetItemRectMin().y + ImGui::GetStyle().WindowPadding.y;
+            context_row = view.GetFirstVisibleLine()
+                + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height);
+            context_revision = _diff.revision;
+            context_path = _diff.path;
+            context_line.clear();
+            context_region.clear();
+            context_has_selection = false;
+            if (context_row >= 0 && context_row < static_cast<int>(_diff.lines.size()))
+            {
+                const DiffLine& clicked = _diff.lines[static_cast<std::size_t>(context_row)];
+                if (clicked.kind != DiffLineKind::Context)
+                    context_line.push_back(clicked);
+
+                int first = context_row;
+                int last = context_row;
+                if (supports_selection && view.AnyCursorHasSelection())
+                {
+                    const TextEditor::CursorSelection selection = view.GetMainCursorSelection();
+                    first = selection.start.line;
+                    last = selection.end.line;
+                    if (last > first && selection.end.column == 0)
+                        --last;
+                    context_has_selection = context_row >= first && context_row <= last;
+                }
+                if (!context_has_selection)
+                {
+                    first = 0;
+                    last = static_cast<int>(_diff.lines.size()) - 1;
+                }
+                const int hunk = clicked.hunk;
+                for (int row = std::max(first, 0);
+                     row <= last && row < static_cast<int>(_diff.lines.size()); ++row)
+                {
+                    const DiffLine& line = _diff.lines[static_cast<std::size_t>(row)];
+                    if (line.kind != DiffLineKind::Context
+                        && (context_has_selection || (hunk >= 0 && line.hunk == hunk)))
+                        context_region.push_back(line);
+                }
+            }
+            ImGui::OpenPopup("Diff line context");
+        }
+
+        if (!ImGui::BeginPopup("Diff line context"))
+            return;
+        const auto [parent, child] = AdjacentRevisions(_diff.revision);
+        const auto source_revision = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
+        const auto child_revision = std::ranges::find(_snapshot->revisions, child, &Revision::oid);
+        const bool linear_source = source_revision != _snapshot->revisions.end()
+            && source_revision->parents.size() == 1;
+        const bool linear_child = child_revision != _snapshot->revisions.end()
+            && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision;
+        const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
+            return file.path == _diff.path && file.conflicted;
+        });
+        const bool stale = context_revision != _diff.revision || context_path != _diff.path;
+        const bool unsupported = stale || !linear_source || !_compare_to.empty() || !_active_operation.empty()
+            || conflicted || _diff.selected_status == GIT_DELTA_RENAMED
+            || _diff.selected_status == GIT_DELTA_COPIED || _diff.selected_status == GIT_DELTA_TYPECHANGE
+            || IsSymlinkMode(_diff.old_mode)
+            || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
+            || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
+        const auto move = [&](std::string_view icon, const char* label, const std::string& destination,
+                              const std::vector<DiffLine>& lines, bool target_valid) {
+            ImGui::BeginDisabled(unsupported || !target_valid || lines.empty());
+            if (ActionMenuItem(icon, label))
+                QueueCommands({MoveDiffLines{_diff.revision, destination, _diff.path, lines}},
+                    {_diff.revision, destination},
+                    "Moving these lines will rewrite a locked source or destination commit.");
+            ImGui::EndDisabled();
+        };
+        move(ICON_MS_ARROW_UPWARD, "Move line to child", child, context_line, linear_child);
+        move(ICON_MS_ARROW_DOWNWARD, "Move line to parent", parent, context_line, !parent.empty());
+        ImGui::Separator();
+        move(ICON_MS_ARROW_UPWARD, context_has_selection ? "Move selection to child" : "Move hunk to child",
+            child, context_region, linear_child);
+        move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move selection to parent" : "Move hunk to parent",
+            parent, context_region, !parent.empty());
+        ImGui::EndPopup();
+    };
+
     const ImVec2 available = ImGui::GetContentRegionAvail();
     if (plain)
     {
         editor.Render("##file view", available, true);
-        ImGui::End();
-        return;
+        render_move_context(editor, true);
     }
-
-    diff.SetSideBySideMode(_diff_side_by_side);
-    diff.Render("##diff view", available, true);
+    else
+    {
+        diff.SetSideBySideMode(_diff_side_by_side);
+        diff.Render("##diff view", available, true);
+        render_move_context(diff, !_diff_side_by_side);
+    }
     ImGui::End();
 }
 
@@ -3676,6 +3752,30 @@ void Application::SelectFile(const std::string& path)
     {
         RequestDiff(false);
     }
+}
+
+std::pair<std::string, std::string> Application::AdjacentRevisions(const std::string& oid) const
+{
+    std::string parent;
+    std::string child;
+    if (_snapshot == nullptr)
+        return {parent, child};
+    const auto source = std::ranges::find(_snapshot->revisions, oid, &Revision::oid);
+    if (source == _snapshot->revisions.end())
+        return {parent, child};
+    if (source->parents.size() == 1)
+        parent = source->parents.front();
+    int children = 0;
+    for (const Revision& revision : _snapshot->revisions)
+    {
+        if (std::ranges::find(revision.parents, source->oid) == revision.parents.end())
+            continue;
+        child = revision.oid;
+        ++children;
+    }
+    if (children != 1)
+        child.clear();
+    return {parent, child};
 }
 
 void Application::ResetRepositoryState()

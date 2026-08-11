@@ -1783,6 +1783,94 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(application.DiffSideBySideForTest());
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DiffLineMoveContextMenu");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.working_copy = "child";
+        snapshot.revisions = {
+            {"child", {"source"}, "change-child", "Child", {}, 3, true, false, true},
+            {"source", {"base"}, "change-source", "Source", {}, 2, false, false, false},
+            {"base", {}, "change-base", "Base", {}, 1, false, false, false},
+        };
+        snapshot.status = {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}};
+        application.SetSnapshotForTest(std::move(snapshot));
+        application.SelectRevisionForTest("source");
+        DiffResult result{1000, "source", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
+            {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}}};
+        result.old_mode = result.new_mode = GIT_FILEMODE_BLOB;
+        result.lines = {
+            {DiffLineKind::Context, 0, 0, 0},
+            {DiffLineKind::Deletion, 1, -1, 0},
+            {DiffLineKind::Addition, -1, 1, 0},
+            {DiffLineKind::Context, 2, 2, 0},
+            {},
+        };
+        application.ApplyEventForTest(DiffReady{std::move(result)});
+        context->Yield(3);
+        FocusWindow(context, "Diff");
+        if (application.DiffSideBySideForTest())
+        {
+            context->ComboClick("View/Unified");
+            context->Yield();
+        }
+        const ImGuiTestItemInfo view = context->ItemInfo("##diff view");
+        const float line_height = ImGui::GetTextLineHeightWithSpacing();
+        const auto line_position = [&](int line) {
+            return ImVec2(view.RectFull.Min.x + 150.0f,
+                view.RectFull.Min.y + ImGui::GetStyle().WindowPadding.y + (line + 0.5f) * line_height);
+        };
+        const auto open_line = [&](int line) {
+            context->MouseMoveToPos(line_position(line));
+            context->MouseClick(ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+        };
+
+        open_line(1);
+        for (const char* action : {"Move line to child", "Move line to parent", "Move hunk to child",
+                 "Move hunk to parent"})
+        {
+            const std::string path = std::string("**/") + action;
+            IM_CHECK(context->ItemExists(path.c_str()));
+            IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        }
+        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        open_line(0);
+        IM_CHECK((context->ItemInfo("**/Move line to child").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Move line to parent").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Move hunk to child").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Move hunk to parent").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        context->MouseMoveToPos(line_position(1));
+        context->MouseDown();
+        context->Yield();
+        context->MouseMoveToPos(line_position(3));
+        context->Yield();
+        context->MouseUp();
+        context->Yield();
+        open_line(2);
+        IM_CHECK(context->ItemExists("**/Move selection to child"));
+        IM_CHECK(context->ItemExists("**/Move selection to parent"));
+        IM_CHECK(!context->ItemExists("**/Move hunk to child"));
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        context->SetRef("Diff");
+        context->ComboClick("View/Side by Side");
+        context->Yield();
+        open_line(1);
+        IM_CHECK(context->ItemExists("**/Move hunk to child"));
+        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

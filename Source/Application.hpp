@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef IMGUI_BUILD_TESTING
@@ -154,6 +155,7 @@ private:
     void RequestDiff(bool fallback_to_first);
     void ToggleComparison(bool file_comparison);
     void ResetRepositoryState();
+    std::pair<std::string, std::string> AdjacentRevisions(const std::string& revision) const;
     bool FileMatchesFilter(const StatusEntry& file) const;
     bool CanNavigateChangedFile(int direction) const;
     void NavigateChangedFile(int direction);
