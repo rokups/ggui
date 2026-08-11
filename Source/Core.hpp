@@ -229,6 +229,12 @@ struct ApplyPatch
     std::string text;
     std::string path;
 };
+struct RevertFile
+{
+    std::string source;
+    std::string old_path;
+    std::string path;
+};
 struct NewChange
 {
     std::string message;
@@ -384,10 +390,10 @@ struct ChmodPaths
 };
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase,
-    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, RevertDiffLines,
-    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename,
-    TrackPaths, UntrackPaths, ChmodPaths>;
+    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, RevertFile, NewChange, Describe, Metaedit, Edit, MoveChange, Commit,
+    Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, RevertDiffLines,
+    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
+    UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {

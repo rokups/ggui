@@ -419,7 +419,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
         for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
-                 "Restore this file", "Track", "Untrack"})
+                 "Revert", "Track", "Untrack"})
         {
             const std::string item = std::string("**/") + action;
             IM_CHECK(!context->ItemExists(item.c_str())
@@ -1251,7 +1251,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
         for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
-                 "Restore this file", "Track", "Untrack"})
+                 "Revert", "Track", "Untrack"})
         {
             const std::string item = std::string("**/") + action;
             IM_CHECK(!context->ItemExists(item.c_str())
@@ -1654,7 +1654,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("**/Copy patch").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Save patch...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(context->ItemExists("**/External diff"));
-        for (const char* action : {"Move to parent", "Move to child"})
+        for (const char* action : {"Revert", "Move to parent", "Move to child"})
             IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
                 & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("**/Copy patch");
@@ -1669,9 +1669,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
 
         application.SetSnapshotForTest(RichSnapshot());
+        application.ApplyEventForTest(
+            DiffReady{{1000, "merge", "modified.txt", "old\n", "new\n", false, RichSnapshot().status}});
         context->Yield(2);
         context->SetRef("Changes");
-        for (const char* action : {"Restore this file", "Track", "Untrack"})
+        for (const char* action : {"Revert", "Track", "Untrack"})
         {
             context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
             context->Yield();
@@ -1814,6 +1816,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         application.SelectRevisionForTest("right");
         context->Yield(2);
+        FocusWindow(context, "Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Revert").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Diff");
         IM_CHECK(context->ItemExists("##diff view"));
 

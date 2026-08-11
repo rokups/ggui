@@ -2656,6 +2656,13 @@ void Application::RenderChanges()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            ImGui::BeginDisabled(
+                actions_locked || comparison_active || _diff_loading || _snapshot->working_copy.empty());
+            if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
+                QueueCommands({RevertFile{_diff.revision, file.old_path, file.path}}, {"@"},
+                    "Reverting this file will rewrite the locked working-copy commit.");
+            ImGui::EndDisabled();
+            ImGui::Separator();
             ImGui::BeginDisabled(actions_locked || comparison_active || child.empty());
             if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to child"))
                 QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
@@ -2676,9 +2683,6 @@ void Application::RenderChanges()
                     OpenDialog(Dialog::Commit);
                     _input_filesets = file.path;
                 }
-                if (ActionMenuItem(ICON_MS_RESTORE, "Restore this file"))
-                    QueueCommands({Restore{"@-", "@", {file.path}}}, {"@"},
-                        "Restoring this file will rewrite the locked working-copy commit.");
                 if (ActionMenuItem(ICON_MS_ADD, "Track"))
                     QueueCommands({TrackPaths{{file.path}}}, {"@"},
                         "Tracking this file will rewrite the locked working-copy commit.");

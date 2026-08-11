@@ -52,6 +52,9 @@ preferred file selected when possible, and support the same patch export and
 external-diff actions as a normal change diff. File mutations and patch
 application stay disabled until comparison mode is exited. The Diff context
 selector includes **Full** for displaying both complete file versions.
+Right-clicking a changed file can apply that change's inverse for the file to
+the current working-copy change while preserving later edits where the patch
+applies.
 Right-click a text diff to move the clicked line, the active selection, or
 the containing hunk to an adjacent parent or child change; unavailable targets
 and unsupported diff contexts remain disabled. Files in the working-copy

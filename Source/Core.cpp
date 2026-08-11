@@ -1020,6 +1020,51 @@ struct RepositoryEngine::Impl
         PublishSnapshot();
     }
 
+    void RevertFileChange(const RevertFile& command)
+    {
+        Sync();
+        if (command.source.empty() || command.path.empty())
+            throw std::runtime_error("revert file requires a source change and path");
+
+        git_oid source_oid{};
+        Check(gg_repository_resolve(&source_oid, gg, command.source.c_str()), "resolve file revert source");
+        git_commit* raw_source = nullptr;
+        Check(git_commit_lookup(&raw_source, git.get(), &source_oid), "load file revert source");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> source(raw_source, git_commit_free);
+        git_tree* raw_source_tree = nullptr;
+        Check(git_commit_tree(&raw_source_tree, source.get()), "load file revert source tree");
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> source_tree(raw_source_tree, git_tree_free);
+        git_tree* raw_parent_tree = nullptr;
+        if (git_commit_parentcount(source.get()) != 0)
+        {
+            git_commit* raw_parent = nullptr;
+            Check(git_commit_parent(&raw_parent, source.get(), 0), "load file revert parent");
+            std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+            Check(git_commit_tree(&raw_parent_tree, parent.get()), "load file revert parent tree");
+        }
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> parent_tree(raw_parent_tree, git_tree_free);
+
+        std::vector<std::string> paths{command.path};
+        if (!command.old_path.empty() && command.old_path != command.path)
+            paths.push_back(command.old_path);
+        std::vector<char*> pathspec;
+        for (std::string& path : paths)
+            pathspec.push_back(path.data());
+        git_diff_options options = GIT_DIFF_OPTIONS_INIT;
+        options.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+        options.pathspec = {pathspec.data(), pathspec.size()};
+        git_diff* raw_diff = nullptr;
+        Check(git_diff_tree_to_tree(
+                  &raw_diff, git.get(), source_tree.get(), parent_tree.get(), &options),
+            "create inverse file diff");
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
+        if (git_diff_num_deltas(diff.get()) == 0)
+            throw std::runtime_error("selected file has no changes in the source change");
+        Check(git_apply(git.get(), diff.get(), GIT_APPLY_LOCATION_WORKDIR, nullptr), "apply inverse file diff");
+        Sync();
+        PublishSnapshot();
+    }
+
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false)
     {
         Sync();
@@ -1505,6 +1550,7 @@ struct RepositoryEngine::Impl
                 [](const AddRemote&) { return "add remote"; },
                 [](const DeleteRemote&) { return "delete remote"; },
                 [](const LoadDiff&) { return "diff"; }, [](const ApplyPatch&) { return "apply patch"; },
+                [](const RevertFile&) { return "revert file"; },
                 [](const NewChange&) { return "new"; },
                 [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
                 [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },
@@ -1576,6 +1622,8 @@ struct RepositoryEngine::Impl
                 LoadPatch(*value);
             else if (const auto* value = std::get_if<ApplyPatch>(&command))
                 ApplyPatchText(*value);
+            else if (const auto* value = std::get_if<RevertFile>(&command))
+                RevertFileChange(*value);
             else
                 DispatchMutation(command);
             if (!quiet)
