@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <fstream>
 #include <functional>
 #include <future>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -284,8 +286,7 @@ TEST(TextHelpers, ShortensAndSelectsFirstLine)
 {
     EXPECT_EQ(ShortId("abcdefghijkl", 8), "abcdefgh");
     EXPECT_EQ(UniquePrefixLengths({"alpha", "beta"}), (std::vector<std::size_t>{1, 1}));
-    EXPECT_EQ(UniquePrefixLengths({"abcdef00", "abcdef11", "xyz00000"}, 2),
-        (std::vector<std::size_t>{7, 7, 2}));
+    EXPECT_EQ(UniquePrefixLengths({"abcdef00", "abcdef11", "xyz00000"}, 2), (std::vector<std::size_t>{7, 7, 2}));
     EXPECT_EQ(FirstLine("subject\nbody"), "subject");
 }
 
@@ -303,6 +304,36 @@ TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
     EXPECT_TRUE(revisions[0].pushed);
     EXPECT_FALSE(revisions[1].pushed);
     EXPECT_TRUE(revisions[2].pushed);
+}
+
+TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt") << "child\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add tracked.txt && git -C "
+        + Quote(repository.path) + " commit -m child >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+
+    git_repository* raw_repository = nullptr;
+    CheckGit(git_repository_open(&raw_repository, repository.path.string().c_str()));
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> git(raw_repository, git_repository_free);
+    git_object* raw_tip = nullptr;
+    git_object* raw_root = nullptr;
+    CheckGit(git_revparse_single(&raw_tip, git.get(), "HEAD"));
+    CheckGit(git_revparse_single(&raw_root, git.get(), "HEAD^"));
+    std::unique_ptr<git_object, decltype(&git_object_free)> tip(raw_tip, git_object_free);
+    std::unique_ptr<git_object, decltype(&git_object_free)> root(raw_root, git_object_free);
+    const auto oid = [](const git_object* object)
+    {
+        std::array<char, GIT_OID_MAX_HEXSIZE + 1> value{};
+        git_oid_tostr(value.data(), value.size(), git_object_id(object));
+        return std::string(value.data());
+    };
+
+    std::vector<Revision> revisions{{oid(root.get()), {}, {}, {}, {}, 0, false, false, false}};
+    MarkPushedRevisions(
+        revisions, {{"main", "origin", oid(tip.get()), GG_NAMED_REF_REMOTE_BOOKMARK, true, false}}, git.get());
+    EXPECT_TRUE(revisions.front().pushed);
 }
 
 TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
@@ -363,6 +394,49 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_FALSE(nonempty_change->empty);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+}
+
+TEST(RepositoryEngine, SnapshotsPendingFilesBeforeCreatingAChange)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+
+    engine.Enqueue(NewChange{});
+    const auto first = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.working_copy.empty();
+    });
+    ASSERT_NE(first, nullptr);
+    const auto first_revision = std::ranges::find(first->revisions, first->working_copy, &Revision::oid);
+    ASSERT_NE(first_revision, first->revisions.end());
+    ASSERT_TRUE(first_revision->empty);
+
+    std::ofstream(repository.path / "tracked.txt") << "changed\n";
+    engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
+    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        const auto working = std::ranges::find(snapshot.revisions, snapshot.working_copy, &Revision::oid);
+        if (snapshot.generation <= first->generation || snapshot.working_copy == first->working_copy
+            || working == snapshot.revisions.end() || !working->empty || working->parents.size() != 1)
+            return false;
+        const auto parent = std::ranges::find(snapshot.revisions, working->parents.front(), &Revision::oid);
+        return parent != snapshot.revisions.end() && !parent->empty;
+    });
+    ASSERT_NE(child, nullptr);
+    const auto child_revision = std::ranges::find(child->revisions, child->working_copy, &Revision::oid);
+    ASSERT_NE(child_revision, child->revisions.end());
+    ASSERT_TRUE(child_revision->empty);
+    ASSERT_EQ(child_revision->parents.size(), 1U);
+
+    const auto parent = std::ranges::find(child->revisions, child_revision->parents.front(), &Revision::oid);
+    ASSERT_NE(parent, child->revisions.end());
+    EXPECT_FALSE(parent->empty);
+
+    engine.Enqueue(LoadDiff{parent->oid, "tracked.txt"});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    EXPECT_EQ(diff->before, "base\n");
+    EXPECT_EQ(diff->after, "changed\n");
 }
 
 TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
@@ -521,6 +595,12 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     ASSERT_NE(tracked, diff->files.end());
     EXPECT_EQ(tracked->status, GIT_DELTA_ADDED);
     EXPECT_FALSE(diff->binary);
+    EXPECT_FALSE(diff->patch.empty());
+    EXPECT_EQ(diff->patch.find("binary.dat"), std::string::npos);
+    EXPECT_TRUE(diff->old_oid.empty());
+    EXPECT_FALSE(diff->new_oid.empty());
+    EXPECT_EQ(diff->old_mode, 0U);
+    EXPECT_EQ(diff->new_mode, GIT_FILEMODE_BLOB);
 
     engine.Enqueue(LoadDiff{root.oid, {}, true});
     const auto fallback = WaitForDiff(engine);
@@ -558,6 +638,182 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     ASSERT_TRUE(binary.has_value());
     EXPECT_TRUE(binary->after.empty());
     EXPECT_TRUE(binary->binary);
+}
+
+TEST(RepositoryEngine, ComparesTwoRevisionTrees)
+{
+    TemporaryRepository repository;
+    std::filesystem::rename(repository.path / "tracked.txt", repository.path / "renamed.txt");
+    std::ofstream(repository.path / "added.txt") << "after\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add -A && git -C "
+        + Quote(repository.path) + " commit -m comparison >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return value.revisions.size() >= 2; });
+    ASSERT_NE(snapshot, nullptr);
+    const auto comparison = std::ranges::find_if(snapshot->revisions,
+        [](const Revision& revision) { return !revision.parents.empty(); });
+    ASSERT_NE(comparison, snapshot->revisions.end());
+    const auto base = std::ranges::find(snapshot->revisions, comparison->parents.front(), &Revision::oid);
+    ASSERT_NE(base, snapshot->revisions.end());
+
+    const DiffOptions options{DiffWhitespaceMode::IgnoreAllWhitespace, 0};
+    engine.Enqueue(LoadDiff{base->oid, "renamed.txt", false, options, comparison->oid});
+    const auto renamed = WaitForDiff(engine);
+    ASSERT_TRUE(renamed.has_value());
+    EXPECT_EQ(renamed->revision, base->oid);
+    EXPECT_EQ(renamed->compare_to, comparison->oid);
+    EXPECT_EQ(renamed->options.whitespace_mode, DiffWhitespaceMode::IgnoreAllWhitespace);
+    EXPECT_EQ(renamed->options.context_lines, 0);
+    const auto renamed_file = std::ranges::find(renamed->files, "renamed.txt", &StatusEntry::path);
+    ASSERT_NE(renamed_file, renamed->files.end());
+    EXPECT_EQ(renamed_file->status, GIT_DELTA_RENAMED);
+    EXPECT_EQ(renamed_file->old_path, "tracked.txt");
+    EXPECT_EQ(renamed->before, "base\n");
+    EXPECT_EQ(renamed->after, "base\n");
+    EXPECT_FALSE(renamed->patch.empty());
+    EXPECT_FALSE(renamed->old_oid.empty());
+    EXPECT_EQ(renamed->old_oid, renamed->new_oid);
+    EXPECT_EQ(renamed->old_mode, GIT_FILEMODE_BLOB);
+    EXPECT_EQ(renamed->new_mode, GIT_FILEMODE_BLOB);
+
+    engine.Enqueue(LoadDiff{base->oid, "added.txt", false, options, comparison->oid});
+    const auto added = WaitForDiff(engine);
+    ASSERT_TRUE(added.has_value());
+    EXPECT_TRUE(added->before.empty());
+    EXPECT_EQ(added->after, "after\n");
+    const auto added_file = std::ranges::find(added->files, "added.txt", &StatusEntry::path);
+    ASSERT_NE(added_file, added->files.end());
+    EXPECT_EQ(added_file->status, GIT_DELTA_ADDED);
+    EXPECT_NE(added->patch.find("+after"), std::string::npos);
+}
+
+TEST(RepositoryEngine, ClosesAndReopensWithoutWatcherEvents)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    engine.Enqueue(LoadDiff{opened->revisions.back().oid, "tracked.txt"});
+    engine.Enqueue(CloseRepository{});
+    EXPECT_TRUE(WaitForTerminal(engine, "close").finished);
+
+    std::ofstream(repository.path / "tracked.txt") << "changed while closed\n";
+    std::this_thread::sleep_for(200ms);
+    const std::vector<Event> detached_events = engine.PollEvents();
+    EXPECT_TRUE(std::ranges::none_of(detached_events, [](const Event& event) {
+        return std::holds_alternative<SnapshotReady>(event) || std::holds_alternative<DiffReady>(event);
+    }));
+
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto reopened = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return !value.working_copy.empty() && !value.status.empty();
+    });
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_EQ(std::filesystem::weakly_canonical(reopened->root), std::filesystem::weakly_canonical(repository.path));
+}
+
+TEST(RepositoryEngine, RenamesBookmarksWithoutOverwriting)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    const std::string revision = opened->revisions.back().oid;
+
+    engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {"taken"}, revision, {}});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return std::ranges::any_of(value.refs, [](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "taken";
+        });
+    }), nullptr);
+    engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {"main"}, {}, "renamed"});
+    const auto renamed = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return std::ranges::any_of(value.refs, [](const NamedRef& ref) {
+                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "renamed";
+               })
+            && std::ranges::none_of(value.refs, [](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+            });
+    });
+    ASSERT_NE(renamed, nullptr);
+
+    engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {"renamed"}, {}, "taken"});
+    const TerminalEvent conflict = WaitForTerminal(engine, "bookmark");
+    EXPECT_FALSE(conflict.finished);
+    EXPECT_NE(conflict.message.find("already exists"), std::string::npos);
+}
+
+TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt")
+        << "line01\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add tracked.txt && git -C "
+        + Quote(repository.path) + " commit -m context >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+    std::ofstream(repository.path / "tracked.txt")
+        << "line01\nline02\nchanged\nline04\nline05\nline06\nline07\nline 08\nline09\nline10\n";
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine,
+        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty() && !snapshot.status.empty(); });
+    ASSERT_NE(opened, nullptr);
+
+    engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}});
+    const auto normal = WaitForDiff(engine);
+    ASSERT_TRUE(normal.has_value());
+    EXPECT_EQ(normal->before, "line03\nline08\n");
+    EXPECT_EQ(normal->after, "changed\nline 08\n");
+    EXPECT_FALSE(normal->patch.empty());
+
+    engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::IgnoreAllWhitespace, .context_lines = 0}});
+    const auto filtered = WaitForDiff(engine);
+    ASSERT_TRUE(filtered.has_value());
+    EXPECT_EQ(filtered->before, "line03\n");
+    EXPECT_EQ(filtered->after, "changed\n");
+}
+
+TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "untracked.txt") << "new\n";
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(
+        WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); }), nullptr);
+
+    const std::string first_patch =
+        "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+patched\n";
+    engine.Enqueue(ApplyPatch{first_patch, {}});
+    EXPECT_TRUE(WaitForTerminal(engine, "apply patch").finished);
+    std::ifstream first_result(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(first_result), std::istreambuf_iterator<char>()), "patched\n");
+
+    const std::filesystem::path patch_path = repository.path / "second.diff";
+    std::ofstream(patch_path) << "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 "
+                                 "+1 @@\n-patched\n+twice\n";
+    engine.Enqueue(ApplyPatch{{}, patch_path.string()});
+    EXPECT_TRUE(WaitForTerminal(engine, "apply patch").finished);
+    std::ifstream second_result(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(second_result), std::istreambuf_iterator<char>()), "twice\n");
+
+    engine.Enqueue(ApplyPatch{});
+    const TerminalEvent empty = WaitForTerminal(engine, "apply patch");
+    EXPECT_FALSE(empty.finished);
+    EXPECT_NE(empty.message.find("patch is empty"), std::string::npos);
+
+    engine.Enqueue(ApplyPatch{{}, (repository.path / "missing.diff").string()});
+    const TerminalEvent missing = WaitForTerminal(engine, "apply patch");
+    EXPECT_FALSE(missing.finished);
+    EXPECT_NE(missing.message.find("could not open patch file"), std::string::npos);
 }
 
 TEST(RepositoryEngine, InitializesAndReportsFilesystemErrors)

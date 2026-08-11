@@ -10,7 +10,9 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -36,12 +38,18 @@ public:
     std::shared_ptr<const RepoSnapshot> SnapshotForTest() const;
     const std::string& SelectedFileForTest() const;
     const std::vector<std::string>& SelectedRevisionsForTest() const;
+    bool DiffSideBySideForTest() const;
+    const std::string& CompareToForTest() const;
+    bool CanNavigateChangedFileForTest(int direction) const;
+    void NavigateChangedFileForTest(int direction);
+    void ToggleComparisonForTest();
     void SelectRevisionForTest(const std::string& oid, bool additive = false);
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
     void ShowWorkspaceRenameForTest();
+    void ShowBookmarkRenameForTest(const std::string& name);
     void SetSnapshotForTest(RepoSnapshot snapshot);
     void ClearSnapshotForTest();
     void AddRecentForTest(const std::string& path);
@@ -53,8 +61,12 @@ public:
     static unsigned int IdColorForTest(bool change_id, bool working_copy);
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
+    static std::optional<std::filesystem::path> WorkingCopyPathForTest(
+        const std::string& root, const std::string& relative);
     static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
     static std::string ReferenceLabelForTest(const NamedRef& ref);
+    static std::pair<std::string, std::size_t> ReferenceBadgeLabelForTest(
+        const NamedRef& ref, const std::vector<NamedRef>& refs);
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
@@ -75,6 +87,7 @@ private:
         Abandon,
         Restore,
         Bookmark,
+        BookmarkRename,
         Tag,
         RemoteAdd,
         WorkspaceAdd,
@@ -136,6 +149,15 @@ private:
     void RevealRevision(const std::string& oid);
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
+    void RequestDiff(bool fallback_to_first);
+    void ToggleComparison();
+    void ResetRepositoryState();
+    bool FileMatchesFilter(const StatusEntry& file) const;
+    bool CanNavigateChangedFile(int direction) const;
+    void NavigateChangedFile(int direction);
+    static std::optional<std::filesystem::path> WorkingCopyPath(
+        const std::string& root, const std::string& relative);
+    void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
     std::vector<std::string> SelectedParentRevisions() const;
     std::vector<std::string> AbandonRevisions(
         const std::string& revision, bool include_descendants) const;
@@ -180,6 +202,7 @@ private:
     std::string _selected_file;
     std::string _preferred_file;
     std::string _pending_revision;
+    std::string _compare_to;
     std::vector<std::string> _recent_repositories;
     std::filesystem::path _settings_path;
     std::string _imgui_ini_path;
@@ -231,6 +254,9 @@ private:
     bool _show_diff = true;
     bool _show_operations = false;
     bool _diff_side_by_side = false;
+    DiffWhitespaceMode _diff_whitespace_mode = DiffWhitespaceMode::Normal;
+    int _diff_context_lines = 3;
+    bool _diff_loading = false;
 #ifdef IMGUI_BUILD_TESTING
     ImGuiTestEngine* _test_engine = nullptr;
     bool _test_mode = false;

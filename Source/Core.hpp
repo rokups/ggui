@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -93,20 +94,57 @@ struct RepoSnapshot
     bool can_redo = false;
 };
 
+enum class DiffWhitespaceMode
+{
+    Normal,
+    IgnoreWhitespace,
+    IgnoreAllWhitespace,
+};
+
+struct DiffOptions
+{
+    DiffWhitespaceMode whitespace_mode = DiffWhitespaceMode::Normal;
+    int context_lines = 3;
+};
+
 struct DiffResult
 {
+    DiffResult() = default;
+    DiffResult(std::uint64_t generation, std::string revision, std::string path, std::string before, std::string after,
+        bool binary, std::vector<StatusEntry> files, std::string compare_to = {})
+        : generation(generation)
+        , revision(std::move(revision))
+        , compare_to(std::move(compare_to))
+        , path(std::move(path))
+        , before(std::move(before))
+        , after(std::move(after))
+        , binary(binary)
+        , files(std::move(files))
+    {
+    }
+
     std::uint64_t generation = 0;
     std::string revision;
+    std::string compare_to;
     std::string path;
     std::string before;
     std::string after;
     bool binary = false;
     std::vector<StatusEntry> files;
+    std::string patch;
+    std::string old_oid;
+    std::string new_oid;
+    unsigned int old_mode = 0;
+    unsigned int new_mode = 0;
+    DiffOptions options;
 };
 
 struct OpenRepository
 {
     std::string path;
+};
+struct CloseRepository
+{
 };
 struct InitRepository
 {
@@ -142,9 +180,27 @@ struct DeleteRemote
 };
 struct LoadDiff
 {
+    LoadDiff() = default;
+    LoadDiff(std::string revision, std::string path, bool fallback_to_first = false, DiffOptions options = {},
+        std::string compare_to = {})
+        : revision(std::move(revision))
+        , path(std::move(path))
+        , fallback_to_first(fallback_to_first)
+        , options(options)
+        , compare_to(std::move(compare_to))
+    {
+    }
+
     std::string revision;
     std::string path;
     bool fallback_to_first = false;
+    DiffOptions options;
+    std::string compare_to;
+};
+struct ApplyPatch
+{
+    std::string text;
+    std::string path;
 };
 struct NewChange
 {
@@ -286,10 +342,10 @@ struct ChmodPaths
     bool executable = false;
 };
 
-using Command = std::variant<OpenRepository, InitRepository, CloneRepository, Refresh, Fetch, Push, AddRemote, DeleteRemote,
-    LoadDiff, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Reorder, Split, Squash, Abandon,
-    RemoteBookmarkDelete, Restore, MoveFiles, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd,
-    WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
+using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
+    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase,
+    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, SimplifyParents, Bookmark, Tag, Undo,
+    Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {
@@ -373,7 +429,8 @@ private:
 
 std::string ShortId(const std::string& value, std::size_t length = 8);
 std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& values, std::size_t minimum = 1);
-void MarkPushedRevisions(std::vector<Revision>& revisions, const std::vector<NamedRef>& refs);
+void MarkPushedRevisions(
+    std::vector<Revision>& revisions, const std::vector<NamedRef>& refs, git_repository* repository = nullptr);
 std::string FirstLine(const std::string& value);
 
 } // namespace Ggui

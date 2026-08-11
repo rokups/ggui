@@ -27,6 +27,7 @@
 #include <cstring>
 #include <ctime>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <ranges>
 #include <sstream>
@@ -47,6 +48,7 @@ constexpr float kDotRadius = 5.0f;
 constexpr float kGraphPadding = 12.0f;
 
 constexpr ImU32 kTextMuted = IM_COL32(125, 133, 144, 255);
+constexpr ImU32 kBadgeTextMuted = IM_COL32(255, 255, 255, 145);
 constexpr ImU32 kRowBackground = IM_COL32(22, 27, 34, 255);
 constexpr ImU32 kRowHover = IM_COL32(28, 34, 43, 255);
 constexpr ImU32 kRowSelected = IM_COL32(33, 52, 74, 255);
@@ -262,6 +264,87 @@ const TextEditor::Language* DiffLanguage(const std::string& path)
     return nullptr;
 }
 
+constexpr std::array kDiffContextChoices{0, 1, 3, 5, 10, 25};
+
+int WhitespaceModeIndex(DiffWhitespaceMode mode)
+{
+    switch (mode)
+    {
+    case DiffWhitespaceMode::IgnoreWhitespace: return 1;
+    case DiffWhitespaceMode::IgnoreAllWhitespace: return 2;
+    default: return 0;
+    }
+}
+
+DiffWhitespaceMode WhitespaceModeFromIndex(int index)
+{
+    switch (index)
+    {
+    case 1: return DiffWhitespaceMode::IgnoreWhitespace;
+    case 2: return DiffWhitespaceMode::IgnoreAllWhitespace;
+    default: return DiffWhitespaceMode::Normal;
+    }
+}
+
+int ContextLineChoiceIndex(int context_lines)
+{
+    const auto choice = std::ranges::find(kDiffContextChoices, context_lines);
+    return choice == kDiffContextChoices.end() ? 2 : static_cast<int>(choice - kDiffContextChoices.begin());
+}
+
+const char* ContextLineChoiceLabel(int index)
+{
+    switch (kDiffContextChoices[static_cast<std::size_t>(index)])
+    {
+    case 0: return "0 lines";
+    case 1: return "1 line";
+    case 3: return "3 lines";
+    case 5: return "5 lines";
+    case 10: return "10 lines";
+    default: return "25 lines";
+    }
+}
+
+bool IsImagePath(const std::string& path)
+{
+    std::string extension = std::filesystem::path(path).extension().string();
+    std::ranges::transform(
+        extension, extension.begin(), [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
+    constexpr std::array<std::string_view, 9> extensions{
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".tga", ".svg", ".ico"};
+    return std::ranges::find(extensions, extension) != extensions.end();
+}
+
+bool IsSymlinkMode(unsigned int mode)
+{
+    return (mode & 0170000U) == 0120000U;
+}
+
+bool IsSubmoduleMode(unsigned int mode)
+{
+    return (mode & 0170000U) == 0160000U;
+}
+
+std::string FormatFileMode(unsigned int mode)
+{
+    if (mode == 0)
+        return "none";
+    std::array<char, 16> buffer{};
+    std::snprintf(buffer.data(), buffer.size(), "%06o", mode);
+    return buffer.data();
+}
+
+const char* ModeKind(unsigned int mode)
+{
+    if (IsSubmoduleMode(mode))
+        return "submodule";
+    if (IsSymlinkMode(mode))
+        return "symlink";
+    if ((mode & 0111U) != 0)
+        return "executable file";
+    return mode == 0 ? "none" : "file";
+}
+
 ImU32 BookmarkBadgeColor(std::string_view name, const std::vector<NamedRef>& refs)
 {
     const auto local = std::ranges::find_if(refs, [&](const NamedRef& ref) {
@@ -293,6 +376,25 @@ std::string ReferenceLabel(const NamedRef& ref)
 {
     return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && !ref.remote.empty()
         ? ref.remote + "/" + ref.name : ref.name;
+}
+
+std::pair<std::string, std::size_t> ReferenceBadgeLabel(const NamedRef& ref, const std::vector<NamedRef>& refs)
+{
+    if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
+        return {ReferenceLabel(ref), 0};
+    const auto local = std::ranges::find_if(refs, [&](const NamedRef& candidate) {
+        return candidate.kind == GG_NAMED_REF_LOCAL_BOOKMARK && candidate.name == ref.name
+            && candidate.target == ref.target;
+    });
+    const auto remote = std::ranges::find_if(refs, [&](const NamedRef& candidate) {
+        return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == ref.name
+            && candidate.target == ref.target && !candidate.remote.empty();
+    });
+    if (local == refs.end() || remote == refs.end())
+        return {ReferenceLabel(ref), 0};
+    if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK)
+        return {};
+    return {ReferenceLabel(*remote), remote->remote.size() + 1};
 }
 
 const Remote* DefaultRemote(const RepoSnapshot& snapshot)
@@ -340,7 +442,8 @@ std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name,
     return result;
 }
 
-void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color)
+void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,
+    std::size_t dimmed_prefix = 0)
 {
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
     const float pad_x = FontPx(7.0f);
@@ -349,7 +452,13 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_top);
     const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
-    draw->AddText(ImVec2(minimum.x + pad_x, minimum.y + pad_top), IM_COL32_WHITE, label.data(), label.data() + label.size());
+    ImVec2 text(minimum.x + pad_x, minimum.y + pad_top);
+    if (dimmed_prefix != 0)
+    {
+        draw->AddText(text, kBadgeTextMuted, label.data(), label.data() + dimmed_prefix);
+        text.x += ImGui::CalcTextSize(label.data(), label.data() + dimmed_prefix).x;
+    }
+    draw->AddText(text, IM_COL32_WHITE, label.data() + dimmed_prefix, label.data() + label.size());
     cursor.x = maximum.x + FontPx(6.0f);
 }
 
@@ -379,7 +488,8 @@ bool DrawTextWithin(ImDrawList* draw, ImVec2 position, float maximum_x, std::str
 }
 
 void DrawElidedBadge(
-    ImDrawList* draw, ImVec2 cursor, float center_y, float maximum_x, std::string_view label, ImU32 color)
+    ImDrawList* draw, ImVec2 cursor, float center_y, float maximum_x, std::string_view label, ImU32 color,
+    std::size_t dimmed_prefix = 0)
 {
     if (maximum_x <= cursor.x)
         return;
@@ -390,7 +500,14 @@ void DrawElidedBadge(
     const ImVec2 minimum(cursor.x, text_y - pad_top);
     const ImVec2 maximum(maximum_x, text_y + ImGui::GetTextLineHeight() + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
-    DrawElidedText(draw, ImVec2(minimum.x + pad_x, text_y), maximum.x - pad_x, label, IM_COL32_WHITE);
+    ImVec2 text(minimum.x + pad_x, text_y);
+    if (dimmed_prefix != 0)
+    {
+        if (DrawTextWithin(draw, text, maximum.x - pad_x, label.substr(0, dimmed_prefix), kBadgeTextMuted))
+            return;
+        text.x += ImGui::CalcTextSize(label.data(), label.data() + dimmed_prefix).x;
+    }
+    DrawElidedText(draw, text, maximum.x - pad_x, label.substr(dimmed_prefix), IM_COL32_WHITE);
 }
 
 bool BadgedSelectable(std::string_view label, bool selected, float height, ImU32 color,
@@ -874,6 +991,11 @@ void Application::LoadSettings()
         _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
         _default_layout = json.value("defaultLayout", true);
         _diff_side_by_side = json.value("diffSideBySide", false);
+        const int whitespace = json.value("diffWhitespaceMode", 0);
+        _diff_whitespace_mode = WhitespaceModeFromIndex(whitespace);
+        const int context_lines = json.value("diffContextLines", 3);
+        _diff_context_lines =
+            std::ranges::find(kDiffContextChoices, context_lines) == kDiffContextChoices.end() ? 3 : context_lines;
     }
     catch (const std::exception& error)
     {
@@ -889,7 +1011,8 @@ void Application::SaveSettings()
     {
         std::filesystem::create_directories(_settings_path.parent_path());
         const nlohmann::json json{{"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout},
-            {"diffSideBySide", _diff_side_by_side}};
+            {"diffSideBySide", _diff_side_by_side}, {"diffWhitespaceMode", WhitespaceModeIndex(_diff_whitespace_mode)},
+            {"diffContextLines", _diff_context_lines}};
         const std::filesystem::path temporary = _settings_path.string() + ".tmp";
         std::ofstream(temporary) << json.dump(2) << '\n';
         std::error_code error;
@@ -940,6 +1063,7 @@ void Application::ApplyEvent(Event event)
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
                     const std::string old_working = _snapshot == nullptr ? "" : _snapshot->working_copy;
                     const std::string old_selection = _selected_revision;
+                    const std::string old_compare_to = _compare_to;
                     const bool had_selection = !_selected_revisions.empty();
                     std::unordered_map<std::string, std::string> selected_changes;
                     if (_snapshot != nullptr)
@@ -956,7 +1080,10 @@ void Application::ApplyEvent(Event event)
                     _graph_generation = 0;
                     const bool repository_changed = old_root != _snapshot->root;
                     if (repository_changed)
+                    {
                         _preferred_file.clear();
+                        _compare_to.clear();
+                    }
                     if (repository_changed)
                     {
                         _selected_revision = !_snapshot->working_copy.empty() ? _snapshot->working_copy
@@ -1027,36 +1154,37 @@ void Application::ApplyEvent(Event event)
                             }
                         }
                     }
-                    const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
-                    if (repository_changed || selection_changed)
+                    if (!_compare_to.empty())
                     {
-                        if (_selected_revision.empty())
-                        {
-                            _selected_file.clear();
-                            _pending_revision.clear();
-                            _diff = {};
-                        }
+                        if (_snapshot->working_copy.empty() || _selected_revision == _snapshot->working_copy)
+                            _compare_to.clear();
                         else
-                        {
-                            _pending_revision = _selected_revision;
-                            _engine.Enqueue(LoadDiff{_selected_revision, _preferred_file, true});
-                        }
+                            _compare_to = _snapshot->working_copy;
                     }
+                    const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
+                    if (repository_changed || selection_changed || old_compare_to != _compare_to)
+                        RequestDiff(true);
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
-                    if (value.diff.revision != _selected_revision)
+                    if (value.diff.revision != _selected_revision || value.diff.compare_to != _compare_to
+                        || value.diff.options.whitespace_mode != _diff_whitespace_mode
+                        || value.diff.options.context_lines != _diff_context_lines)
                         return;
-                    if (value.diff.revision == _pending_revision)
+                    if (value.diff.revision == _pending_revision || _selected_file.empty())
                     {
                         _selected_file = value.diff.path;
                         if (_preferred_file.empty())
                             _preferred_file = _selected_file;
                         _pending_revision.clear();
                         _diff = std::move(value.diff);
+                        _diff_loading = false;
                     }
                     else if (value.diff.path == _selected_file)
+                    {
                         _diff = std::move(value.diff);
+                        _diff_loading = false;
+                    }
                 }
                 else if constexpr (std::is_same_v<T, OperationStarted>)
                 {
@@ -1080,7 +1208,10 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, OperationFinished>)
                 {
-                    _status_message = value.name + " completed";
+                    if (value.name == "close")
+                        ResetRepositoryState();
+                    else
+                        _status_message = value.name + " completed";
                     _active_operation.clear();
                     _progress_phase.clear();
                 }
@@ -1089,6 +1220,8 @@ void Application::ApplyEvent(Event event)
                     _error_message = value.message;
                     _active_operation.clear();
                     _progress_phase.clear();
+                    if (value.operation == "diff")
+                        _diff_loading = false;
                 }
                 else if constexpr (std::is_same_v<T, CredentialRequest>)
                 {
@@ -1106,6 +1239,8 @@ void Application::RenderFrame()
     if (_dialog == Dialog::None)
     {
         if (_active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
+        if (_snapshot != nullptr && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W))
+            _engine.Enqueue(CloseRepository{});
         if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             CreateChange();
     }
@@ -1119,6 +1254,8 @@ void Application::RenderFrame()
             _engine.Enqueue(Redo{});
         if (_snapshot != nullptr && _active_operation.empty() && ImGui::IsKeyPressed(ImGuiKey_F5))
             _engine.Enqueue(Refresh{});
+        if (_snapshot != nullptr && _dialog == Dialog::None && ImGui::IsKeyPressed(ImGuiKey_F6))
+            NavigateChangedFile(io.KeyShift ? -1 : 1);
         const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
         if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty() && plain_key
             && !_selected_revision.empty())
@@ -1233,6 +1370,16 @@ void Application::RenderMenuBar()
             ImGui::EndMenu();
         }
         ImGui::Separator();
+        if (_snapshot != nullptr)
+        {
+            if (ActionMenuItem(ICON_MS_FOLDER_OPEN, "Open working directory"))
+                OpenExternalPath(_snapshot->root, "Working directory");
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
+                ImGui::SetClipboardText(_snapshot->root.c_str());
+            if (ActionMenuItem(ICON_MS_CLOSE, "Close repository", "Ctrl+W"))
+                _engine.Enqueue(CloseRepository{});
+            ImGui::Separator();
+        }
         if (ActionMenuItem(ICON_MS_REFRESH, "Refresh", "F5", _snapshot != nullptr))
             _engine.Enqueue(Refresh{});
         ImGui::EndDisabled();
@@ -1244,7 +1391,7 @@ void Application::RenderMenuBar()
     {
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
-        if (ActionMenuItem(ICON_MS_COMMIT, "Commit...")) OpenDialog(Dialog::Commit);
+        if (ActionMenuItem(ICON_MS_COMMIT, "Commit...", nullptr, _compare_to.empty())) OpenDialog(Dialog::Commit);
         if (ActionMenuItem(ICON_MS_INFO, "Metaedit...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
         if (ActionMenuItem(ICON_MS_EDIT, "Edit", nullptr, !_selected_revision.empty()))
             _engine.Enqueue(Edit{_selected_revision});
@@ -1253,7 +1400,9 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Rebase);
         if (ActionMenuItem(ICON_MS_MERGE, "Squash...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
         if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Split);
-        if (ActionMenuItem(ICON_MS_RESTORE, "Restore...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Restore);
+        if (ActionMenuItem(ICON_MS_RESTORE, "Restore...", nullptr,
+                !_selected_revision.empty() && _compare_to.empty()))
+            OpenDialog(Dialog::Restore);
         if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", nullptr, !_selected_revision.empty())) RequestAbandon(_selected_revision);
         if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, !_selected_revision.empty()))
             QueueCommands({SimplifyParents{{_selected_revision}}}, {_selected_revision},
@@ -1283,6 +1432,13 @@ void Application::RenderMenuBar()
             ImGui::MenuItem("Diff", nullptr, &_show_diff);
             ImGui::MenuItem("Operations", nullptr, &_show_operations);
             ImGui::Separator();
+            if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Previous changed file", "Shift+F6",
+                    CanNavigateChangedFile(-1)))
+                NavigateChangedFile(-1);
+            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Next changed file", "F6",
+                    CanNavigateChangedFile(1)))
+                NavigateChangedFile(1);
+            ImGui::Separator();
         }
         if (ActionMenuItem(ICON_MS_HOME, "Reset layout"))
         {
@@ -1303,10 +1459,13 @@ void Application::RenderToolbar()
     ImGui::BeginDisabled(!CanCreateChange());
     if (ActionButton(ICON_MS_ADD, "New")) CreateChange();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Create and edit an empty change on the selected parent(s). This is undoable.");
+        ImGui::SetTooltip(
+            "Create and edit an empty change on the selected parent(s). An already-empty current change is refreshed.");
     ImGui::EndDisabled();
     ImGui::SameLine();
+    ImGui::BeginDisabled(!_compare_to.empty());
     if (ActionButton(ICON_MS_COMMIT, "Commit")) OpenDialog(Dialog::Commit);
+    ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("|");
     ImGui::SameLine();
@@ -1362,7 +1521,7 @@ void Application::RenderToolbar()
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
         _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
     if (ActionButton(ICON_MS_FOLDER, repository_name))
-        SDL_OpenURL(FileUrl(_snapshot->root).c_str()); // GCOV_EXCL_LINE: external application handoff
+        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
     ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
@@ -1541,6 +1700,12 @@ void Application::RenderBookmarks()
                 _input_secondary = name;
             }
             ImGui::Separator();
+            if (ActionMenuItem(ICON_MS_EDIT, "Rename...", nullptr, has_local))
+            {
+                OpenDialog(Dialog::BookmarkRename);
+                _input_primary = name;
+                _input_secondary = name;
+            }
             const std::string delete_label = IconLabel(ICON_MS_DELETE, "Delete");
             if (ImGui::BeginMenu(delete_label.c_str()))
             {
@@ -1681,7 +1846,9 @@ void Application::RenderWorkspaces()
         if (ImGui::BeginPopupContextItem("workspace context"))
         {
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
-                SDL_OpenURL(FileUrl(workspace.root).c_str()); // GCOV_EXCL_LINE: external application handoff
+                OpenExternalPath(workspace.root, "Workspace directory"); // GCOV_EXCL_LINE: external application handoff
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
+                ImGui::SetClipboardText(workspace.root.c_str());
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
             if (ActionMenuItem(ICON_MS_EDIT, "Rename current...")) OpenDialog(Dialog::WorkspaceRename);
@@ -1909,13 +2076,16 @@ void Application::RenderHistory()
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
                     _open_drop_actions = _pending_drop.source != _pending_drop.target;
                 }
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
+                if (_compare_to.empty())
                 {
-                    const char* source = static_cast<const char*>(payload->Data);
-                    const char* path = source + std::char_traits<char>::length(source) + 1;
-                    if (source != revision.oid && path < source + payload->DataSize && *path != '\0')
-                        QueueCommands({MoveFiles{source, revision.oid, {path}}}, {source, revision.oid},
-                            "Moving this file will rewrite a locked source or destination commit.");
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
+                    {
+                        const char* source = static_cast<const char*>(payload->Data);
+                        const char* path = source + std::char_traits<char>::length(source) + 1;
+                        if (source != revision.oid && path < source + payload->DataSize && *path != '\0')
+                            QueueCommands({MoveFiles{source, revision.oid, {path}}}, {source, revision.oid},
+                                "Moving this file will rewrite a locked source or destination commit.");
+                    }
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -1926,6 +2096,9 @@ void Application::RenderHistory()
                 {
                     IdCopyMenuItems("change ID", revision.change_id, ChangePrefix(revision.change_id));
                     IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
+                    if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
+                            !revision.description.empty()))
+                        ImGui::SetClipboardText(revision.description.c_str());
                     ImGui::EndMenu();
                 }
                 ImGui::Separator();
@@ -2111,7 +2284,9 @@ void Application::RenderHistory()
                 if (ref.target != revision.oid) continue;
                 const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
                     || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-                const std::string label = ReferenceLabel(ref);
+                const auto [label, dimmed_prefix] = ReferenceBadgeLabel(ref, _snapshot->refs);
+                if (label.empty())
+                    continue;
                 const std::string key = (bookmark ? "bookmark:" : "tag:") + label;
                 if (std::ranges::find(drawn_refs, key) != drawn_refs.end())
                     continue;
@@ -2120,11 +2295,11 @@ void Application::RenderHistory()
                 if (badge_cursor.x + badge_width > content_right)
                 {
                     DrawElidedBadge(draw, badge_cursor, center, content_right, label,
-                        RefBadgeColor(ref, _snapshot->refs));
+                        RefBadgeColor(ref, _snapshot->refs), dimmed_prefix);
                     elided = true;
                     break;
                 }
-                DrawBadge(draw, badge_cursor, center, label, RefBadgeColor(ref, _snapshot->refs));
+                DrawBadge(draw, badge_cursor, center, label, RefBadgeColor(ref, _snapshot->refs), dimmed_prefix);
             }
             ImGui::PopClipRect();
 
@@ -2238,6 +2413,17 @@ void Application::RenderChanges()
         return;
     }
     const bool actions_locked = !_active_operation.empty();
+    const bool comparing = !_compare_to.empty();
+    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
+        || (!comparing && _selected_revision == _snapshot->working_copy));
+    if (ImGui::SmallButton(comparing ? "Show change diff" : "Compare with @"))
+        ToggleComparison();
+    ImGui::EndDisabled();
+    if (comparing)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
+    }
     std::string parent;
     std::string child;
     const auto source = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
@@ -2256,39 +2442,51 @@ void Application::RenderChanges()
         if (children != 1)
             child.clear();
     }
-    if (_diff.files.empty())
-        ImGui::TextDisabled("Selected change is empty.");
+    if (_diff_loading && !_pending_revision.empty())
+        ImGui::TextDisabled("Loading selected change...");
+    else if (_diff.files.empty())
+        ImGui::TextDisabled(comparing ? "The comparison has no differences." : "Selected change is empty.");
     else
-        ImGui::TextDisabled("%zu changed file%s", _diff.files.size(), _diff.files.size() == 1 ? "" : "s");
-    ImGui::SetNextItemWidth(-1.0f);
+        ImGui::TextDisabled("%zu %s file%s", _diff.files.size(), comparing ? "differing" : "changed",
+            _diff.files.size() == 1 ? "" : "s");
+    const float navigation_width = FontPx(74.0f);
+    ImGui::SetNextItemWidth(-navigation_width);
     ImGui::InputTextWithHint("##changes filter", "Filter changed files", &_changes_filter);
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!CanNavigateChangedFile(-1));
+    if (ImGui::ArrowButton("Previous changed file", ImGuiDir_Up)) NavigateChangedFile(-1);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Previous changed file (Shift+F6)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!CanNavigateChangedFile(1));
+    if (ImGui::ArrowButton("Next changed file", ImGuiDir_Down)) NavigateChangedFile(1);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Next changed file (F6)");
+    ImGui::BeginChild("file list");
+    const ImVec2 item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
     for (const StatusEntry& file : _diff.files)
     {
         const std::string status = DeltaName(file.status);
-        if (!ContainsInsensitive(status, _changes_filter) && !ContainsInsensitive(file.path, _changes_filter)
-            && !ContainsInsensitive(file.old_path, _changes_filter))
+        if (!FileMatchesFilter(file))
             continue;
         ImGui::PushID(&file);
         const std::string label = status + "  " + file.path;
         const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
-        const bool selected =
-            ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
+        const bool selected = ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
         ImDrawList* draw = ImGui::GetWindowDrawList();
-        draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f,
-            ImDrawFlags_RoundCornersLeft);
-        ImVec2 text(minimum.x + 12.0f,
-            minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f);
+        draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), accent, 4.0f, ImDrawFlags_RoundCornersLeft);
+        ImVec2 text(minimum.x + 12.0f, minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f);
         draw->AddText(text, accent, status.c_str());
         text.x += ImGui::CalcTextSize(status.c_str()).x + ImGui::CalcTextSize("  ").x;
-        const bool elided = DrawTextWithin(
-            draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
-        if (selected) SelectFile(file.path);
-        if (!actions_locked && ImGui::BeginDragDropSource())
+        const bool elided = DrawTextWithin(draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
+        if (selected)
+            SelectFile(file.path);
+        if (!actions_locked && !comparing && ImGui::BeginDragDropSource())
         {
             std::string payload = _diff.revision;
             payload.push_back('\0');
@@ -2298,14 +2496,41 @@ void Application::RenderChanges()
             ImGui::Text("Move %s", file.path.c_str());
             ImGui::EndDragDropSource();
         }
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
         if (ImGui::BeginPopupContextItem("file context"))
         {
-            ImGui::BeginDisabled(actions_locked || parent.empty());
+            const std::optional<std::filesystem::path> absolute = WorkingCopyPath(_snapshot->root, file.path);
+            const bool file_exists = absolute.has_value() && std::filesystem::exists(*absolute)
+                && !std::filesystem::is_directory(*absolute);
+            const bool folder_exists = absolute.has_value() && std::filesystem::is_directory(absolute->parent_path());
+            ImGui::BeginDisabled(!file_exists);
+            if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "Open working-copy file"))
+                OpenExternalPath(*absolute, "File");
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(!folder_exists);
+            if (ActionMenuItem(ICON_MS_FOLDER_OPEN, "Open containing folder"))
+                OpenExternalPath(absolute->parent_path(), "Containing folder");
+            ImGui::EndDisabled();
+            const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
+            if (ImGui::BeginMenu(copy_label.c_str()))
+            {
+                if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Name"))
+                    ImGui::SetClipboardText(std::filesystem::path(file.path).filename().string().c_str());
+                if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Relative path"))
+                    ImGui::SetClipboardText(file.path.c_str());
+                ImGui::BeginDisabled(!absolute.has_value());
+                if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Absolute path"))
+                    ImGui::SetClipboardText(absolute->string().c_str());
+                ImGui::EndDisabled();
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
+            ImGui::BeginDisabled(actions_locked || comparing || parent.empty());
             if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to parent"))
                 QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
-            ImGui::BeginDisabled(actions_locked || child.empty());
+            ImGui::BeginDisabled(actions_locked || comparing || child.empty());
             if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to child"))
                 QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
                     "Moving this file will rewrite a locked source or destination commit.");
@@ -2313,7 +2538,7 @@ void Application::RenderChanges()
             if (_selected_revision == _snapshot->working_copy)
             {
                 ImGui::Separator();
-                ImGui::BeginDisabled(actions_locked);
+                ImGui::BeginDisabled(actions_locked || comparing);
                 if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
                 {
                     _selected_file = file.path;
@@ -2333,6 +2558,7 @@ void Application::RenderChanges()
             }
             ImGui::EndPopup();
         }
+        ImGui::PopStyleVar();
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
@@ -2357,13 +2583,15 @@ void Application::RenderChanges()
             ImGui::PushID(&conflict);
             if (ImGui::SmallButton("Open externally"))
             {
-                const std::string path = (std::filesystem::path(_snapshot->root) / conflict.path).string(); // GCOV_EXCL_LINE: external application handoff
-                SDL_OpenURL(FileUrl(path).c_str()); // GCOV_EXCL_LINE: external application handoff
+                const std::string path = (std::filesystem::path(_snapshot->root) / conflict.path)
+                                             .string(); // GCOV_EXCL_LINE: external application handoff
+                OpenExternalPath(path, "Conflicted file"); // GCOV_EXCL_LINE: external application handoff
             }
             ImGui::PopID();
         }
         ImGui::TextWrapped("Save resolved files; ggui snapshots them automatically.");
     }
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -2453,46 +2681,238 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
-    ImGui::Checkbox("Side by side", &_diff_side_by_side);
-    ImGui::Separator();
+    if (_diff_loading)
+    {
+        const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
+        const int frame = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
+        ImGui::Text("%s Loading...", spinner[static_cast<std::size_t>(frame)]);
+        ImGui::End();
+        return;
+    }
     if (_diff.revision.empty())
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
+        ImGui::End();
+        return;
     }
-    else if (_diff.path.empty())
+    if (_diff.path.empty())
     {
         ImGui::TextUnformatted("Selected change is empty.");
+        ImGui::End();
+        return;
     }
-    else if (_diff.binary)
+
+    const auto file = std::ranges::find_if(_diff.files,
+        [this](const StatusEntry& entry) { return entry.path == _diff.path || entry.old_path == _diff.path; });
+    const git_delta_t status = file == _diff.files.end() ? GIT_DELTA_UNMODIFIED : file->status;
+    const bool plain = status == GIT_DELTA_ADDED || status == GIT_DELTA_UNTRACKED || status == GIT_DELTA_DELETED;
+
+    const auto reload = [this](DiffWhitespaceMode whitespace, int context_lines)
     {
-        ImGui::TextUnformatted("Binary file; no text diff available.");
-    }
-    else
+        _diff_whitespace_mode = whitespace;
+        _diff_context_lines = context_lines;
+        RequestDiff(false);
+    };
+
+    ImGui::SetNextItemWidth(FontPx(145.0f));
+    int view_index = _diff_side_by_side ? 1 : 0;
+    if (ImGui::Combo("View", &view_index, "Unified\0Side by Side\0"))
+        _diff_side_by_side = view_index == 1;
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(FontPx(190.0f));
+    int whitespace_index = WhitespaceModeIndex(_diff_whitespace_mode);
+    if (ImGui::Combo("##whitespace mode", &whitespace_index, "Normal\0Ignore Whitespace\0Ignore All Whitespace\0"))
+        reload(WhitespaceModeFromIndex(whitespace_index), _diff_context_lines);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Choose how whitespace-only changes are displayed.");
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(FontPx(115.0f));
+    int context_index = ContextLineChoiceIndex(_diff_context_lines);
+    if (ImGui::BeginCombo("##context lines", ContextLineChoiceLabel(context_index)))
     {
-        static TextDiff diff;
-        static std::string loaded_before;
-        static std::string loaded_after;
-        static std::string loaded_path;
-        static bool dark_palette = !_dark_theme;
-        if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path)
+        for (int index = 0; index < static_cast<int>(kDiffContextChoices.size()); ++index)
         {
-            loaded_before = _diff.before;
-            loaded_after = _diff.after;
-            loaded_path = _diff.path;
+            const bool selected = index == context_index;
+            if (ImGui::Selectable(ContextLineChoiceLabel(index), selected))
+                reload(_diff_whitespace_mode, kDiffContextChoices[static_cast<std::size_t>(index)]);
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Number of unchanged lines shown around each change.");
+
+    ImGui::SameLine();
+    ImGui::BeginDisabled(_diff.patch.empty());
+    if (ActionButton(ICON_MS_CONTENT_COPY, "Copy Patch"))
+    {
+        ImGui::SetClipboardText(_diff.patch.c_str());
+        _status_message = "Patch copied to clipboard";
+    }
+    ImGui::SameLine();
+    if (ActionButton(ICON_MS_SAVE, "Save Patch..."))
+        ImGui::OpenPopup("Save Patch");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!_compare_to.empty() || _active_operation.size() != 0);
+    if (ActionButton(ICON_MS_UPLOAD_FILE, "Apply Patch..."))
+        ImGui::OpenPopup("Apply Patch");
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(_snapshot == nullptr);
+    if (ActionButton(ICON_MS_OPEN_IN_NEW, "External Diff"))
+    {
+        const std::string revision = _diff.revision + "^!";
+        std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",
+            _compare_to.empty() ? revision.c_str() : _diff.revision.c_str()};
+        if (!_compare_to.empty())
+            arguments.push_back(_compare_to.c_str());
+        arguments.insert(arguments.end(), {"--", _diff.path.c_str(), nullptr});
+        SDL_Process* process = SDL_CreateProcess(
+            arguments.data(), false); // GCOV_EXCL_LINE: external application handoff
+        if (process == nullptr)
+            _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
+        else
+        {
+            SDL_DestroyProcess(process); // GCOV_EXCL_LINE: external process owns its lifetime
+            _status_message = "External diff opened";
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::Separator();
+
+    static char patch_save_path[512] = "patch.diff";
+    if (ImGui::BeginPopupModal("Save Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Save patch to file");
+        ImGui::SetNextItemWidth(FontPx(420.0f));
+        ImGui::InputText("Path", patch_save_path, IM_ARRAYSIZE(patch_save_path));
+        if (ImGui::Button("Save"))
+        {
+            std::ofstream output(patch_save_path, std::ios::binary);
+            output.write(_diff.patch.data(), static_cast<std::streamsize>(_diff.patch.size()));
+            if (output)
+            {
+                _status_message = "Patch saved to " + std::string(patch_save_path);
+                ImGui::CloseCurrentPopup();
+            }
+            else
+                _error_message = "Could not save patch to " + std::string(patch_save_path);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    static char patch_apply_path[512]{};
+    if (ImGui::BeginPopupModal("Apply Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("Apply a patch to the current working copy. Invalid or conflicting patches are rejected.");
+        if (ImGui::Button("Apply from Clipboard"))
+        {
+            const char* clipboard = ImGui::GetClipboardText();
+            _engine.Enqueue(ApplyPatch{clipboard == nullptr ? "" : clipboard, {}});
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(FontPx(420.0f));
+        ImGui::InputText("File", patch_apply_path, IM_ARRAYSIZE(patch_apply_path));
+        if (ImGui::Button("Apply from File"))
+        {
+            _engine.Enqueue(ApplyPatch{{}, patch_apply_path});
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    const bool mode_changed = _diff.old_mode != _diff.new_mode;
+    const bool special_mode = IsSymlinkMode(_diff.old_mode) || IsSymlinkMode(_diff.new_mode)
+        || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode);
+    if (mode_changed || special_mode)
+    {
+        const std::string old_mode = FormatFileMode(_diff.old_mode);
+        const std::string new_mode = FormatFileMode(_diff.new_mode);
+        ImGui::TextDisabled("Mode: %s (%s) → %s (%s)", old_mode.c_str(), ModeKind(_diff.old_mode), new_mode.c_str(),
+            ModeKind(_diff.new_mode));
+    }
+
+    if (IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode))
+    {
+        ImGui::TextUnformatted("Submodule diff preview is not available.");
+        ImGui::TextDisabled("Old commit: %s", _diff.old_oid.empty() ? "(none)" : _diff.old_oid.c_str());
+        ImGui::TextDisabled("New commit: %s", _diff.new_oid.empty() ? "(none)" : _diff.new_oid.c_str());
+        ImGui::End();
+        return;
+    }
+    if (_diff.binary)
+    {
+        ImGui::TextUnformatted(
+            IsImagePath(_diff.path) ? "Image diff preview is not available." : "Binary diff preview is not available.");
+        ImGui::TextDisabled("Old blob: %s", _diff.old_oid.empty() ? "(none)" : _diff.old_oid.c_str());
+        ImGui::TextDisabled("New blob: %s", _diff.new_oid.empty() ? "(none)" : _diff.new_oid.c_str());
+        ImGui::TextWrapped("Use External Diff to open a configured image or binary diff tool.");
+        ImGui::End();
+        return;
+    }
+
+    static TextDiff diff;
+    static TextEditor editor;
+    static std::string loaded_before;
+    static std::string loaded_after;
+    static std::string loaded_path;
+    static DiffWhitespaceMode loaded_whitespace = DiffWhitespaceMode::Normal;
+    static int loaded_context_lines = 3;
+    static bool loaded_plain = false;
+    static bool dark_palette = !_dark_theme;
+    if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
+        || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
+        || loaded_plain != plain)
+    {
+        loaded_before = _diff.before;
+        loaded_after = _diff.after;
+        loaded_path = _diff.path;
+        loaded_whitespace = _diff_whitespace_mode;
+        loaded_context_lines = _diff_context_lines;
+        loaded_plain = plain;
+        if (plain)
+        {
+            editor.SetLanguage(DiffLanguage(_diff.path));
+            editor.SetText(status == GIT_DELTA_DELETED ? loaded_before : loaded_after);
+            editor.SetReadOnlyEnabled(true);
+        }
+        else
+        {
             diff.SetLanguage(DiffLanguage(_diff.path));
             diff.SetText(loaded_before, loaded_after);
         }
-        diff.SetSideBySideMode(_diff_side_by_side);
-        if (dark_palette != _dark_theme)
-        {
-            dark_palette = _dark_theme;
-            const TextEditor::Palette& palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
-            diff.SetPalette(palette);
-            diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
-                _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
-        }
-        diff.Render("##rich diff", ImGui::GetContentRegionAvail(), true);
     }
+    if (dark_palette != _dark_theme)
+    {
+        dark_palette = _dark_theme;
+        const TextEditor::Palette& palette = _dark_theme ? TextEditor::GetDarkPalette() : TextEditor::GetLightPalette();
+        diff.SetPalette(palette);
+        editor.SetPalette(palette);
+        diff.SetColors(_dark_theme ? IM_COL32(46, 160, 67, 55) : IM_COL32(46, 160, 67, 38),
+            _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
+    }
+
+    const ImVec2 available = ImGui::GetContentRegionAvail();
+    if (plain)
+    {
+        editor.Render("##file view", available, true);
+        ImGui::End();
+        return;
+    }
+
+    diff.SetSideBySideMode(_diff_side_by_side);
+    diff.Render("##diff view", available, true);
     ImGui::End();
 }
 
@@ -2576,7 +2996,7 @@ void Application::RenderDialogs()
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
         "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
-        "Create bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
+        "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
         "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action", "Locked commit warning###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
@@ -2687,6 +3107,19 @@ void Application::RenderDialogs()
         DialogInput("Name", "bookmark name", &_input_primary, focus_first);
         DialogInput("Revision", "defaults to selected change", &_input_secondary);
         break;
+    case Dialog::BookmarkRename:
+    {
+        ImGui::Text("Rename bookmark %s", _input_secondary.c_str());
+        DialogInput("New name", "bookmark name", &_input_primary, focus_first);
+        const bool conflict = _snapshot != nullptr && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
+        });
+        if (_input_primary == _input_secondary)
+            ImGui::TextDisabled("Choose a different name.");
+        else if (conflict)
+            ImGui::TextDisabled("A local bookmark already uses this name.");
+        break;
+    }
     case Dialog::Tag:
         ImGui::TextUnformatted("Create or move tag");
         DialogInput("Name", "tag name", &_input_primary, focus_first);
@@ -2833,6 +3266,9 @@ void Application::SubmitDialog()
         _engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {_input_primary},
             _input_secondary.empty() ? _selected_revision : _input_secondary, {}});
         break;
+    case Dialog::BookmarkRename:
+        _engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {_input_secondary}, {}, _input_primary});
+        break;
     case Dialog::Tag:
         _engine.Enqueue(Tag{GG_TAG_SET, {_input_primary},
             _input_secondary.empty() ? _selected_revision : _input_secondary, _input_flag});
@@ -2882,6 +3318,8 @@ void Application::SubmitDialog()
 
 void Application::SelectRevision(const std::string& oid, bool additive)
 {
+    if (_snapshot != nullptr && oid == _snapshot->working_copy)
+        _compare_to.clear();
     const auto selected = std::ranges::find(_selected_revisions, oid);
     if (!additive)
         _selected_revisions = {oid};
@@ -2895,16 +3333,36 @@ void Application::SelectRevision(const std::string& oid, bool additive)
         : _selected_revisions.empty() ? ""
                                       : _selected_revisions.back();
     if (_selected_revision.empty())
+        _compare_to.clear();
+    RequestDiff(true);
+}
+
+void Application::RequestDiff(bool fallback_to_first)
+{
+    if (_selected_revision.empty())
     {
         _selected_file.clear();
         _pending_revision.clear();
         _diff = {};
+        _diff_loading = false;
     }
     else
     {
-        _pending_revision = _selected_revision;
-        _engine.Enqueue(LoadDiff{_selected_revision, _preferred_file, true});
+        _pending_revision = fallback_to_first ? _selected_revision : "";
+        _diff_loading = true;
+        _engine.Enqueue(LoadDiff{_selected_revision, fallback_to_first ? _preferred_file : _selected_file,
+            fallback_to_first, {_diff_whitespace_mode, _diff_context_lines}, _compare_to});
     }
+}
+
+void Application::ToggleComparison()
+{
+    if (!_compare_to.empty())
+        _compare_to.clear();
+    else if (_snapshot != nullptr && !_selected_revision.empty() && !_snapshot->working_copy.empty()
+        && _selected_revision != _snapshot->working_copy)
+        _compare_to = _snapshot->working_copy;
+    RequestDiff(true);
 }
 
 void Application::RevealRevision(const std::string& oid)
@@ -2951,11 +3409,9 @@ void Application::CreateChange()
     const auto selected = _selected_revisions.size() == 1
         ? std::ranges::find(_snapshot->revisions, _selected_revisions.front(), &Revision::oid)
         : _snapshot->revisions.end();
-    if (selected != _snapshot->revisions.end() && selected->empty && !selected->parents.empty())
+    if (selected != _snapshot->revisions.end() && selected->oid == _snapshot->working_copy && selected->empty)
     {
-        QueueCommands(
-            {NewChange{{}, SelectedParentRevisions(), {}, {}, false}, Abandon{{selected->oid}, true, false, {}}},
-            {selected->oid}, "Replacing this empty change will rewrite a locked commit.");
+        _engine.Enqueue(Refresh{});
         return;
     }
     _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
@@ -3104,6 +3560,12 @@ bool Application::CanSubmitDialog() const
     case Dialog::Rebase: return HasText(_input_primary);
     case Dialog::Split: return HasText(_input_filesets);
     case Dialog::Bookmark:
+        return HasText(_input_primary);
+    case Dialog::BookmarkRename:
+        return HasText(_input_primary) && _input_primary != _input_secondary && _snapshot != nullptr
+            && std::ranges::none_of(_snapshot->refs, [this](const NamedRef& ref) {
+                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
+               });
     case Dialog::Tag:
     case Dialog::WorkspaceAdd:
     case Dialog::WorkspaceRename: return HasText(_input_primary);
@@ -3137,8 +3599,113 @@ void Application::SelectFile(const std::string& path)
     _preferred_file = path;
     _pending_revision.clear();
     if (!_selected_revision.empty())
-        _engine.Enqueue(LoadDiff{_selected_revision, path});
+    {
+        RequestDiff(false);
+    }
 }
+
+void Application::ResetRepositoryState()
+{
+    _snapshot.reset();
+    _diff = {};
+    _visible_revisions.clear();
+    _graph_rows.clear();
+    _graph_generation = 0;
+    _revision_prefixes.clear();
+    _change_prefixes.clear();
+    _operation_prefixes.clear();
+    _selected_revision.clear();
+    _selected_revisions.clear();
+    _selected_file.clear();
+    _preferred_file.clear();
+    _pending_revision.clear();
+    _compare_to.clear();
+    _bookmark_filter.clear();
+    _tag_filter.clear();
+    _changes_filter.clear();
+    _graph_filter.clear();
+    _built_filter.clear();
+    _diff_loading = false;
+    _default_layout = true;
+    _status_message.clear();
+    _error_message.clear();
+    if (_window != nullptr)
+        SDL_SetWindowTitle(_window, "ggui");
+}
+
+bool Application::FileMatchesFilter(const StatusEntry& file) const
+{
+    const std::string status = DeltaName(file.status);
+    return ContainsInsensitive(status, _changes_filter) || ContainsInsensitive(file.path, _changes_filter)
+        || ContainsInsensitive(file.old_path, _changes_filter);
+}
+
+bool Application::CanNavigateChangedFile(int direction) const
+{
+    std::vector<const StatusEntry*> files;
+    for (const StatusEntry& file : _diff.files)
+        if (FileMatchesFilter(file))
+            files.push_back(&file);
+    if (files.empty())
+        return false;
+    const auto selected = std::ranges::find_if(files,
+        [this](const StatusEntry* file) { return file->path == _selected_file; });
+    if (selected == files.end())
+        return true;
+    return direction < 0 ? selected != files.begin() : std::next(selected) != files.end();
+}
+
+void Application::NavigateChangedFile(int direction)
+{
+    std::vector<const StatusEntry*> files;
+    for (const StatusEntry& file : _diff.files)
+        if (FileMatchesFilter(file))
+            files.push_back(&file);
+    if (files.empty())
+        return;
+    auto selected = std::ranges::find_if(files,
+        [this](const StatusEntry* file) { return file->path == _selected_file; });
+    if (selected == files.end())
+        selected = direction < 0 ? std::prev(files.end()) : files.begin();
+    else if (direction < 0 && selected != files.begin())
+        --selected;
+    else if (direction > 0 && std::next(selected) != files.end())
+        ++selected;
+    else
+        return;
+    SelectFile((*selected)->path);
+}
+
+std::optional<std::filesystem::path> Application::WorkingCopyPath(
+    const std::string& root, const std::string& relative)
+{
+    if (root.empty() || relative.empty())
+        return std::nullopt;
+    const std::filesystem::path relative_path(relative);
+    if (relative_path.is_absolute())
+        return std::nullopt;
+    std::error_code error;
+    const std::filesystem::path canonical_root = std::filesystem::weakly_canonical(root, error);
+    if (error)
+        return std::nullopt;
+    const std::filesystem::path candidate = std::filesystem::weakly_canonical(canonical_root / relative_path, error);
+    if (error)
+        return std::nullopt;
+    const std::filesystem::path within = candidate.lexically_relative(canonical_root);
+    if (within.empty() || within.is_absolute() || *within.begin() == "..")
+        return std::nullopt;
+    return candidate;
+}
+
+// GCOV_EXCL_START: OS-default file handlers are platform integrations
+void Application::OpenExternalPath(const std::filesystem::path& path, std::string_view description)
+{
+    if (!SDL_OpenURL(FileUrl(path.string()).c_str()))
+        _error_message = SDL_GetError();
+    else
+        _status_message = std::string(description) + " opened";
+}
+// GCOV_EXCL_STOP
 
 // GCOV_EXCL_START: nativefiledialog owns the platform-dependent modal interaction
 void Application::PickAndOpen(bool initialize)
@@ -3301,6 +3868,31 @@ const std::vector<std::string>& Application::SelectedRevisionsForTest() const
     return _selected_revisions;
 }
 
+bool Application::DiffSideBySideForTest() const
+{
+    return _diff_side_by_side;
+}
+
+const std::string& Application::CompareToForTest() const
+{
+    return _compare_to;
+}
+
+bool Application::CanNavigateChangedFileForTest(int direction) const
+{
+    return CanNavigateChangedFile(direction);
+}
+
+void Application::NavigateChangedFileForTest(int direction)
+{
+    NavigateChangedFile(direction);
+}
+
+void Application::ToggleComparisonForTest()
+{
+    ToggleComparison();
+}
+
 void Application::SelectRevisionForTest(const std::string& oid, bool additive)
 {
     SelectRevision(oid, additive);
@@ -3337,6 +3929,13 @@ void Application::ShowWorkspaceRenameForTest()
     OpenDialog(Dialog::WorkspaceRename);
 }
 
+void Application::ShowBookmarkRenameForTest(const std::string& name)
+{
+    OpenDialog(Dialog::BookmarkRename);
+    _input_primary = name;
+    _input_secondary = name;
+}
+
 void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 {
     _test_snapshot_mode = true;
@@ -3353,22 +3952,15 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _selected_file.clear();
     _preferred_file.clear();
     _pending_revision.clear();
+    _compare_to.clear();
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
+    _diff_loading = false;
     _graph_generation = 0;
 }
 
 void Application::ClearSnapshotForTest()
 {
-    _snapshot.reset();
-    _revision_prefixes.clear();
-    _change_prefixes.clear();
-    _operation_prefixes.clear();
-    _selected_revision.clear();
-    _selected_revisions.clear();
-    _selected_file.clear();
-    _preferred_file.clear();
-    _pending_revision.clear();
-    _diff = {};
+    ResetRepositoryState();
 }
 
 void Application::AddRecentForTest(const std::string& path)
@@ -3419,6 +4011,12 @@ std::string Application::FileUrlForTest(const std::string& path)
     return FileUrl(path);
 }
 
+std::optional<std::filesystem::path> Application::WorkingCopyPathForTest(
+    const std::string& root, const std::string& relative)
+{
+    return WorkingCopyPath(root, relative);
+}
+
 std::string Application::LimitLinesForTest(const std::string& text, std::size_t maximum)
 {
     return LimitedLines(text, maximum);
@@ -3427,6 +4025,12 @@ std::string Application::LimitLinesForTest(const std::string& text, std::size_t 
 std::string Application::ReferenceLabelForTest(const NamedRef& ref)
 {
     return ReferenceLabel(ref);
+}
+
+std::pair<std::string, std::size_t> Application::ReferenceBadgeLabelForTest(
+    const NamedRef& ref, const std::vector<NamedRef>& refs)
+{
+    return ReferenceBadgeLabel(ref, refs);
 }
 
 unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)

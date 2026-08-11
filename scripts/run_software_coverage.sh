@@ -19,7 +19,8 @@ cleanup() { find "$test_root" -depth -delete; }
 trap cleanup EXIT
 
 software() {
-  env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe SDL_AUDIODRIVER=dummy xvfb-run -a "$@"
+  env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe SDL_AUDIODRIVER=dummy XDG_RUNTIME_DIR=/tmp-run \
+    xvfb-run -a "$@"
 }
 
 if command -v glxinfo >/dev/null 2>&1; then

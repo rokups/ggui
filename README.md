@@ -44,6 +44,20 @@ operation log, bookmarks, tags, workspaces, and sparse-checkout panels. The
 Change menu exposes gg's local change operations. A newly opened plain Git
 repository needs **New** before it has a gg working-copy change.
 
+The Changes panel can compare any selected change directly with the current
+working-copy snapshot (`@`). The comparison follows rewritten changes and the
+latest `@`, keeps the preferred file selected when possible, and supports the
+same patch export and external-diff actions as a normal change diff. File
+mutations and patch application stay disabled until **Show change diff** exits
+comparison mode.
+
+Use **F6** and **Shift+F6** to move to the next or previous changed file. The
+navigation respects the active Changes filter and stops at the first and last
+matching file. Repository, workspace, file, history, and bookmark context
+menus provide portable open, copy, and rename actions. **Ctrl+W** closes the
+current repository without changing it and returns to the recent-repository
+welcome screen.
+
 Left-drag a graph row onto the top of another row to reorder before it, onto
 the middle to squash, or onto the bottom to rebase. Drop below the final row
 to reorder after it. Right-drag anywhere onto a row to choose the action from
@@ -54,6 +68,10 @@ Repository and libgit2 handles stay on one worker thread. The UI exchanges
 typed commands and immutable snapshots with that worker. External Git and
 working-tree changes are adopted automatically once per second and on window
 focus. Clone credentials are requested on demand and are never persisted.
+
+Common shortcuts: **Ctrl+O** open repository, **Ctrl+W** close repository,
+**Ctrl+N** new change, **Ctrl+Z/Ctrl+Y** undo/redo, **F5** refresh,
+**Shift+F6/F6** previous/next changed file.
 
 Graph rendering was adapted from the ImGit graph lane renderer; the
 surrounding application architecture is new.

@@ -298,6 +298,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Change/New change");
         context->Yield(4);
         IM_CHECK_NE(Application::Instance().SnapshotForTest()->working_copy, previous_working_copy);
+        const std::string empty_working_copy = Application::Instance().SnapshotForTest()->working_copy;
+        context->MenuClick("//##MainMenuBar/Change/New change");
+        context->Yield(4);
+        IM_CHECK_EQ(Application::Instance().SnapshotForTest()->working_copy, empty_working_copy);
 
         Repository().Write("tracked.txt", "changed\n");
         Application::Instance().RefreshForTest();
@@ -410,8 +414,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
                  "Restore this file", "Track", "Untrack"})
-            IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
-                & ImGuiItemFlags_Disabled) != 0);
+        {
+            const std::string item = std::string("**/") + action;
+            IM_CHECK(!context->ItemExists(item.c_str())
+                || (context->ItemInfo(item.c_str()).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        }
         context->KeyPress(ImGuiKey_Escape);
 
         FocusWindow(context, "Bookmarks");
@@ -712,6 +719,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                         {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BOOKMARK}),
             "origin/feature");
         const RepoSnapshot snapshot = RichSnapshot();
+        IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[5], snapshot.refs),
+            std::make_pair(std::string("origin/remote-bookmark"), std::size_t{7}));
+        IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[6], snapshot.refs).first.empty());
+        IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[8], snapshot.refs).first, "diverged");
+        IM_CHECK_EQ(
+            Application::ReferenceBadgeLabelForTest(snapshot.refs[9], snapshot.refs).first, "origin/diverged");
         const std::array bookmark_colors{
             Application::BookmarkColorForTest("coverage-bookmark", snapshot.refs),
             Application::BookmarkColorForTest("remote-only", snapshot.refs),
@@ -1117,6 +1130,165 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/M  modified.txt"));
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "ComparisonModeAndChangedFileNavigation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ToggleComparisonForTest();
+        IM_CHECK_EQ(application.CompareToForTest(), "merge");
+        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false,
+            RichSnapshot().status, "merge"}});
+        context->Yield(2);
+        FocusWindow(context, "Changes");
+        IM_CHECK(context->ItemExists("Show change diff"));
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+
+        application.SelectRevisionForTest("right");
+        IM_CHECK_EQ(application.CompareToForTest(), "merge");
+        application.ApplyEventForTest(DiffReady{{1000, "right", "stale.txt", {}, "stale\n", false,
+            {{{}, "stale.txt", GIT_DELTA_ADDED, false}}, "old-working-copy"}});
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+
+        RepoSnapshot rewritten = RichSnapshot();
+        rewritten.generation++;
+        rewritten.working_copy = "merge-rewritten";
+        for (Revision& revision : rewritten.revisions)
+            if (revision.oid == "merge") revision.oid = "merge-rewritten";
+        for (NamedRef& ref : rewritten.refs)
+            if (ref.target == "merge") ref.target = "merge-rewritten";
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(rewritten))});
+        IM_CHECK_EQ(application.CompareToForTest(), "merge-rewritten");
+        application.ApplyEventForTest(DiffReady{{1001, "right", "added.txt", {}, "fresh\n", false,
+            {{{}, "added.txt", GIT_DELTA_ADDED, false}}, "merge-rewritten"}});
+        IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
+        application.SelectRevisionForTest("merge-rewritten");
+        IM_CHECK(application.CompareToForTest().empty());
+
+        application.SetSnapshotForTest(RichSnapshot());
+        IM_CHECK(application.CanNavigateChangedFileForTest(1));
+        IM_CHECK(application.CanNavigateChangedFileForTest(-1));
+        application.NavigateChangedFileForTest(1);
+        IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
+        IM_CHECK(!application.CanNavigateChangedFileForTest(-1));
+        FocusWindow(context, "Changes");
+        context->ItemInputValue("##changes filter", "modified.txt");
+        context->Yield(2);
+        context->KeyPress(ImGuiKey_F6);
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+        IM_CHECK(!application.CanNavigateChangedFileForTest(-1));
+        IM_CHECK(!application.CanNavigateChangedFileForTest(1));
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_F6);
+        IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
+    };
+
+    test = IM_REGISTER_TEST(engine, "Interactions", "ComparisonLocksFileActionsAndPortableCopies");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ToggleComparisonForTest();
+        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false,
+            RichSnapshot().status, "merge"}});
+        context->Yield(3);
+
+        context->SetRef("ggui dockspace");
+        IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        FocusWindow(context, "Diff");
+        IM_CHECK((context->ItemInfo("Apply Patch...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+        FocusWindow(context, "Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
+                 "Restore this file", "Track", "Untrack"})
+        {
+            const std::string item = std::string("**/") + action;
+            IM_CHECK(!context->ItemExists(item.c_str())
+                || (context->ItemInfo(item.c_str()).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        }
+        IM_CHECK((context->ItemInfo("**/Open working-copy file").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK(context->ItemExists("**/Open containing folder"));
+        context->ItemClick("**/Copy");
+        context->Yield();
+        context->ItemClick("**/Relative path");
+        IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), "modified.txt");
+        const auto copy_file_value = [&](const char* action) {
+            FocusWindow(context, "Changes");
+            context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+            context->Yield();
+            context->ItemClick("**/Copy");
+            context->Yield();
+            context->ItemClick((std::string("**/") + action).c_str());
+            return std::string(ImGui::GetClipboardText());
+        };
+        IM_CHECK_EQ(copy_file_value("Name"), "modified.txt");
+        IM_CHECK_EQ(copy_file_value("Absolute path"),
+            std::filesystem::weakly_canonical(Repository().Path() / "modified.txt").string());
+
+        const auto safe = Application::WorkingCopyPathForTest(Repository().Path().string(), "tracked.txt");
+        IM_CHECK(safe.has_value());
+        IM_CHECK_EQ(*safe, std::filesystem::weakly_canonical(Repository().Path() / "tracked.txt"));
+        IM_CHECK(!Application::WorkingCopyPathForTest(Repository().Path().string(), "../outside.txt").has_value());
+
+        context->MenuClick("//##MainMenuBar/Repository/Copy path");
+        IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), Repository().Path().string());
+
+        FocusWindow(context, "Workspaces");
+        context->ItemClick("**/current", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Copy path");
+        IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), Repository().Path().string());
+
+        FocusWindow(context, "History");
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK(!rows.empty());
+        context->ItemClick(rows.front(), ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Copy");
+        context->Yield();
+        context->ItemClick("**/Full description");
+        IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), "Merge subject\nbody");
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "CloseRepositoryAndRenameBookmark");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.AddRecentForTest("retained-repository");
+        context->Yield(2);
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/feature", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Rename...");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemInputValue("New name", "coverage-bookmark");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemInputValue("New name", "feature-renamed");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/remote-only", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Rename...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+
+        application.ApplyEventForTest(OperationStarted{"close"});
+        application.ApplyEventForTest(OperationFinished{"close"});
+        context->Yield(3);
+        IM_CHECK_EQ(application.SnapshotForTest(), nullptr);
+        ImGuiWindow* welcome = ImGui::FindWindowByName("Welcome");
+        IM_CHECK(welcome != nullptr && welcome->Active);
+        context->SetRef("Welcome");
+        IM_CHECK(context->ItemExists("**/retained-repository"));
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "BookmarkContextMenus");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application::Instance().SetSnapshotForTest(RichSnapshot());
@@ -1493,13 +1665,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         FocusWindow(context, "Diff");
         context->SetRef("Diff");
-        context->ItemUncheck("Side by side");
+        context->ComboClick("View/Unified");
+        context->Yield();
+        IM_CHECK(!application.DiffSideBySideForTest());
         application.ApplyEventForTest(
             DiffReady{{1000, "merge", "second.cpp", "before\n", "after\n", false, RichSnapshot().status}});
         context->Yield(2);
         context->SetRef("Diff");
-        IM_CHECK(!context->ItemIsChecked("Side by side"));
-        context->ItemCheck("Side by side");
+        IM_CHECK(!application.DiffSideBySideForTest());
+        context->ComboClick("View/Side by Side");
+        context->Yield();
+        IM_CHECK(application.DiffSideBySideForTest());
     };
 
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");
