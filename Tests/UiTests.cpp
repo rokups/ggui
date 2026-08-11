@@ -317,6 +317,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
         OpenAndCancel(context, "//##MainMenuBar/Repository/Clone...");
+        context->MenuClick("//##MainMenuBar/Edit/Apply patch...");
+        IM_CHECK_NE(WaitForWindow(context, "Apply Patch"), nullptr);
+        context->SetRef("Apply Patch");
+        IM_CHECK(context->ItemExists("Apply from Clipboard"));
+        IM_CHECK(context->ItemExists("Apply from File"));
+        context->ItemClick("Cancel");
         for (const char* action : {"Commit...", "Metaedit...", "Rebase...", "Squash...",
                  "Split...", "Restore...", "Abandon..."})
         {
@@ -1239,7 +1245,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         FocusWindow(context, "Diff");
-        IM_CHECK((context->ItemInfo("Apply Patch...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK(!context->ItemExists("Apply Patch..."));
 
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
@@ -1559,6 +1565,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 }
                 context->Yield(2);
             }
+
+            context->SetRef("History");
+            context->ItemClick(rows[0], ImGuiMouseButton_Right);
+            context->Yield();
+            IM_CHECK(context->ItemExists("**/Split..."));
+            context->KeyPress(ImGuiKey_Escape);
         }
 
         context->SetRef("Changes");
@@ -1566,19 +1578,34 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK(context->ItemExists("**/Move to parent"));
         IM_CHECK(context->ItemExists("**/Move to child"));
+        IM_CHECK_LT(context->ItemInfo("**/Move to child").RectFull.Min.y,
+            context->ItemInfo("**/Move to parent").RectFull.Min.y);
         context->KeyPress(ImGuiKey_Escape);
 
         application.SelectRevisionForTest("right");
-        application.ApplyEventForTest(
-            DiffReady{{1000, "right", {}, {}, {}, false, RichSnapshot().status}});
+        DiffResult right_diff{1000, "right", "modified.txt", "old\n", "new\n", false, RichSnapshot().status};
+        right_diff.patch = "right patch\n";
+        application.ApplyEventForTest(DiffReady{std::move(right_diff)});
         context->Yield(2);
         context->SetRef("Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK((context->ItemInfo("**/Copy patch").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Save patch...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK(context->ItemExists("**/External diff"));
         for (const char* action : {"Move to parent", "Move to child"})
             IM_CHECK((context->ItemInfo((std::string("**/") + action).c_str()).ItemFlags
                 & ImGuiItemFlags_Disabled) == 0);
-        context->KeyPress(ImGuiKey_Escape);
+        context->ItemClick("**/Copy patch");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "right patch\n");
+
+        context->SetRef("Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Save patch...");
+        IM_CHECK_NE(WaitForWindow(context, "Save Patch"), nullptr);
+        context->SetRef("Save Patch");
+        context->ItemClick("Cancel");
 
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(2);
@@ -1652,6 +1679,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Y);
         context->KeyPress(ImGuiKey_F5);
 
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("right");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "right", "modified.txt", "old\n", "new\n", false, RichSnapshot().status}});
+        context->Yield(2);
+        context->SetRef("Changes");
+        context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/External diff");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/vs @").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/vs parent").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
         SDL_Event event{};
         event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
         application.ProcessEventForTest(event);
@@ -1713,6 +1755,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             1.0f);
         IM_CHECK_GT(context->ItemInfo("Compare with @").RectFull.Min.x,
             context->ItemInfo("External Diff").RectFull.Max.x);
+        const auto expected_combo_width = [](const char* longest_entry) {
+            return ImGui::CalcTextSize(longest_entry).x + ImGui::GetStyle().FramePadding.x * 2.0f
+                + ImGui::GetFrameHeight();
+        };
+        IM_CHECK_GE(context->ItemInfo("View").RectFull.GetWidth() + 0.5f,
+            expected_combo_width("Side by Side"));
+        IM_CHECK_GE(context->ItemInfo("##whitespace mode").RectFull.GetWidth() + 0.5f,
+            expected_combo_width("Ignore All Whitespace"));
+        IM_CHECK_GE(context->ItemInfo("##context lines").RectFull.GetWidth() + 0.5f,
+            expected_combo_width("25 lines"));
         context->SetRef("Diff");
         context->ItemClick("##context lines");
         context->Yield();
@@ -1748,6 +1800,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_S);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Selected filesets"));
+        IM_CHECK(!context->ItemExists("Into"));
         context->ItemClick("Cancel");
 
         context->KeyPress(ImGuiKey_A);

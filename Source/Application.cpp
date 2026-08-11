@@ -1273,15 +1273,7 @@ void Application::RenderFrame()
             if (ImGui::IsKeyPressed(ImGuiKey_A))
                 RequestAbandon(_selected_revision);
             if (ImGui::IsKeyPressed(ImGuiKey_S))
-            {
-                const auto selected = std::ranges::find_if(_snapshot->revisions,
-                    [this](const Revision& revision) { return revision.oid == _selected_revision; });
-                if (selected != _snapshot->revisions.end() && selected->parents.size() == 1)
-                {
-                    OpenDialog(Dialog::Squash);
-                    _input_secondary = selected->parents.front();
-                }
-            }
+                OpenDialog(Dialog::Split);
         }
     }
     if (_snapshot == nullptr)
@@ -1421,6 +1413,9 @@ void Application::RenderMenuBar()
             _engine.Enqueue(Undo{});
         if (ActionMenuItem(ICON_MS_REDO, "Redo", "Ctrl+Y", _snapshot->can_redo && _active_operation.empty()))
             _engine.Enqueue(Redo{});
+        ImGui::Separator();
+        if (ActionMenuItem(ICON_MS_UPLOAD_FILE, "Apply patch...", nullptr, _compare_to.empty()))
+            _open_apply_patch = true;
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View"))
@@ -2150,7 +2145,11 @@ void Application::RenderHistory()
                 }
                 ImGui::Separator();
                 if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E")) _engine.Enqueue(Edit{revision.oid});
-                if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
+                if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", "S"))
+                {
+                    SelectRevision(revision.oid);
+                    OpenDialog(Dialog::Split);
+                }
                 if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A")) RequestAbandon(revision.oid);
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
@@ -2509,6 +2508,8 @@ void Application::RenderChanges()
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
         if (ImGui::BeginPopupContextItem("file context"))
         {
+            if (_selected_file != file.path)
+                SelectFile(file.path);
             const std::optional<std::filesystem::path> absolute = WorkingCopyPath(_snapshot->root, file.path);
             const bool file_exists = absolute.has_value() && std::filesystem::exists(*absolute)
                 && !std::filesystem::is_directory(*absolute);
@@ -2535,14 +2536,38 @@ void Application::RenderChanges()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            ImGui::BeginDisabled(actions_locked || comparison_active || parent.empty());
-            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to parent"))
-                QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
-                    "Moving this file will rewrite a locked source or destination commit.");
+            const bool patch_available = _diff.path == file.path && !_diff.patch.empty();
+            ImGui::BeginDisabled(!patch_available);
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy patch"))
+            {
+                ImGui::SetClipboardText(_diff.patch.c_str());
+                _status_message = "Patch copied to clipboard";
+            }
+            if (ActionMenuItem(ICON_MS_SAVE, "Save patch..."))
+                _open_save_patch = true;
             ImGui::EndDisabled();
+            const std::string external_diff_label = IconLabel(ICON_MS_OPEN_IN_NEW, "External diff");
+            if (ImGui::BeginMenu(external_diff_label.c_str()))
+            {
+                ImGui::BeginDisabled(_diff.revision == _snapshot->working_copy || _snapshot->working_copy.empty());
+                if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "vs @"))
+                    OpenExternalDiff(file.path, _snapshot->working_copy);
+                ImGui::EndDisabled();
+                ImGui::BeginDisabled(parent.empty());
+                if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "vs parent"))
+                    OpenExternalDiff(file.path, {});
+                ImGui::EndDisabled();
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             ImGui::BeginDisabled(actions_locked || comparison_active || child.empty());
             if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to child"))
                 QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
+                    "Moving this file will rewrite a locked source or destination commit.");
+            ImGui::EndDisabled();
+            ImGui::BeginDisabled(actions_locked || comparison_active || parent.empty());
+            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to parent"))
+                QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
             if (_selected_revision == _snapshot->working_copy)
@@ -2749,14 +2774,18 @@ void Application::RenderDiff()
         _diff_context_lines = context_lines;
         RequestDiff(false);
     };
+    const auto combo_width = [](const char* longest_entry) {
+        return ImGui::CalcTextSize(longest_entry).x + ImGui::GetStyle().FramePadding.x * 2.0f
+            + ImGui::GetFrameHeight();
+    };
 
-    ImGui::SetNextItemWidth(FontPx(145.0f));
+    ImGui::SetNextItemWidth(combo_width("Side by Side"));
     int view_index = _diff_side_by_side ? 1 : 0;
     if (ImGui::Combo("View", &view_index, "Unified\0Side by Side\0"))
         _diff_side_by_side = view_index == 1;
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(FontPx(190.0f));
+    ImGui::SetNextItemWidth(combo_width("Ignore All Whitespace"));
     int whitespace_index = WhitespaceModeIndex(_diff_whitespace_mode);
     if (ImGui::Combo("##whitespace mode", &whitespace_index, "Normal\0Ignore Whitespace\0Ignore All Whitespace\0"))
         reload(WhitespaceModeFromIndex(whitespace_index), _diff_context_lines);
@@ -2764,7 +2793,7 @@ void Application::RenderDiff()
         ImGui::SetTooltip("Choose how whitespace-only changes are displayed.");
 
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(FontPx(115.0f));
+    ImGui::SetNextItemWidth(combo_width("25 lines"));
     int context_index = ContextLineChoiceIndex(_diff_context_lines);
     if (ImGui::BeginCombo("##context lines", ContextLineChoiceLabel(context_index)))
     {
@@ -2790,89 +2819,16 @@ void Application::RenderDiff()
     }
     ImGui::SameLine();
     if (ActionButton(ICON_MS_SAVE, "Save Patch..."))
-        ImGui::OpenPopup("Save Patch");
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!_compare_to.empty() || _active_operation.size() != 0);
-    if (ActionButton(ICON_MS_UPLOAD_FILE, "Apply Patch..."))
-        ImGui::OpenPopup("Apply Patch");
+        _open_save_patch = true;
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(_snapshot == nullptr);
     if (ActionButton(ICON_MS_OPEN_IN_NEW, "External Diff"))
-    {
-        const std::string revision = _diff.revision + "^!";
-        std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",
-            _compare_to.empty() ? revision.c_str() : _diff.revision.c_str()};
-        if (!_compare_to.empty())
-            arguments.push_back(_compare_to.c_str());
-        arguments.insert(arguments.end(), {"--", _diff.path.c_str(), nullptr});
-        SDL_Process* process = SDL_CreateProcess(
-            arguments.data(), false); // GCOV_EXCL_LINE: external application handoff
-        if (process == nullptr)
-            _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
-        else
-        {
-            SDL_DestroyProcess(process); // GCOV_EXCL_LINE: external process owns its lifetime
-            _status_message = "External diff opened";
-        }
-    }
+        OpenExternalDiff(_diff.path, _compare_to);
     ImGui::EndDisabled();
     ImGui::SameLine();
     render_comparison();
     ImGui::Separator();
-
-    static char patch_save_path[512] = "patch.diff";
-    if (ImGui::BeginPopupModal("Save Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        ImGui::TextUnformatted("Save patch to file");
-        if (ImGui::IsWindowAppearing())
-            ImGui::SetKeyboardFocusHere();
-        ImGui::SetNextItemWidth(FontPx(420.0f));
-        ImGui::InputText("Path", patch_save_path, IM_ARRAYSIZE(patch_save_path));
-        if (ImGui::Button("Save"))
-        {
-            std::ofstream output(patch_save_path, std::ios::binary);
-            output.write(_diff.patch.data(), static_cast<std::streamsize>(_diff.patch.size()));
-            if (output)
-            {
-                _status_message = "Patch saved to " + std::string(patch_save_path);
-                ImGui::CloseCurrentPopup();
-            }
-            else
-                _error_message = "Could not save patch to " + std::string(patch_save_path);
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel"))
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
-
-    static char patch_apply_path[512]{};
-    if (ImGui::BeginPopupModal("Apply Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-    {
-        ImGui::TextWrapped("Apply a patch to the current working copy. Invalid or conflicting patches are rejected.");
-        if (ImGui::Button("Apply from Clipboard"))
-        {
-            const char* clipboard = ImGui::GetClipboardText();
-            _engine.Enqueue(ApplyPatch{clipboard == nullptr ? "" : clipboard, {}});
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::Spacing();
-        ImGui::SetNextItemWidth(FontPx(420.0f));
-        ImGui::InputText("File", patch_apply_path, IM_ARRAYSIZE(patch_apply_path));
-        if (ImGui::Button("Apply from File"))
-        {
-            _engine.Enqueue(ApplyPatch{{}, patch_apply_path});
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::IsWindowAppearing())
-            ImGui::SetKeyboardFocusHere();
-        if (ImGui::Button("Cancel"))
-            ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-    }
 
     const bool mode_changed = _diff.old_mode != _diff.new_mode;
     const bool special_mode = IsSymlinkMode(_diff.old_mode) || IsSymlinkMode(_diff.new_mode)
@@ -3033,6 +2989,66 @@ void Application::OpenDialog(Dialog dialog)
 
 void Application::RenderDialogs()
 {
+    if (_open_save_patch)
+    {
+        ImGui::OpenPopup("Save Patch");
+        _open_save_patch = false;
+    }
+    static char patch_save_path[512] = "patch.diff";
+    if (ImGui::BeginPopupModal("Save Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted("Save patch to file");
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        ImGui::SetNextItemWidth(FontPx(420.0f));
+        ImGui::InputText("Path", patch_save_path, IM_ARRAYSIZE(patch_save_path));
+        if (ImGui::Button("Save"))
+        {
+            std::ofstream output(patch_save_path, std::ios::binary);
+            output.write(_diff.patch.data(), static_cast<std::streamsize>(_diff.patch.size()));
+            if (output)
+            {
+                _status_message = "Patch saved to " + std::string(patch_save_path);
+                ImGui::CloseCurrentPopup();
+            }
+            else
+                _error_message = "Could not save patch to " + std::string(patch_save_path);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (_open_apply_patch)
+    {
+        ImGui::OpenPopup("Apply Patch");
+        _open_apply_patch = false;
+    }
+    static char patch_apply_path[512]{};
+    if (ImGui::BeginPopupModal("Apply Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("Apply a patch to the current working copy. Invalid or conflicting patches are rejected.");
+        if (ImGui::Button("Apply from Clipboard"))
+        {
+            const char* clipboard = ImGui::GetClipboardText();
+            _engine.Enqueue(ApplyPatch{clipboard == nullptr ? "" : clipboard, {}});
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::Spacing();
+        ImGui::SetNextItemWidth(FontPx(420.0f));
+        ImGui::InputText("File", patch_apply_path, IM_ARRAYSIZE(patch_apply_path));
+        if (ImGui::Button("Apply from File"))
+        {
+            _engine.Enqueue(ApplyPatch{{}, patch_apply_path});
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     if (_dialog == Dialog::None)
         return;
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
@@ -3679,6 +3695,8 @@ void Application::ResetRepositoryState()
     _pending_revision.clear();
     _compare_to.clear();
     _file_comparison = false;
+    _open_save_patch = false;
+    _open_apply_patch = false;
     _bookmark_filter.clear();
     _tag_filter.clear();
     _changes_filter.clear();
@@ -3763,6 +3781,26 @@ void Application::OpenExternalPath(const std::filesystem::path& path, std::strin
         _error_message = SDL_GetError();
     else
         _status_message = std::string(description) + " opened";
+}
+
+void Application::OpenExternalDiff(const std::string& path, const std::string& compare_to)
+{
+    if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
+        return;
+    const std::string revision = _diff.revision + "^!";
+    std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",
+        compare_to.empty() ? revision.c_str() : _diff.revision.c_str()};
+    if (!compare_to.empty())
+        arguments.push_back(compare_to.c_str());
+    arguments.insert(arguments.end(), {"--", path.c_str(), nullptr});
+    SDL_Process* process = SDL_CreateProcess(arguments.data(), false); // GCOV_EXCL_LINE: external application handoff
+    if (process == nullptr)
+        _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
+    else
+    {
+        SDL_DestroyProcess(process); // GCOV_EXCL_LINE: external process owns its lifetime
+        _status_message = "External diff opened";
+    }
 }
 // GCOV_EXCL_STOP
 

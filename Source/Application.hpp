@@ -160,6 +160,7 @@ private:
     static std::optional<std::filesystem::path> WorkingCopyPath(
         const std::string& root, const std::string& relative);
     void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
+    void OpenExternalDiff(const std::string& path, const std::string& compare_to);
     std::vector<std::string> SelectedParentRevisions() const;
     std::vector<std::string> AbandonRevisions(
         const std::string& revision, bool include_descendants) const;
@@ -218,6 +219,8 @@ private:
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
     bool _open_drop_actions = false;
+    bool _open_save_patch = false;
+    bool _open_apply_patch = false;
     std::vector<Command> _pending_commands;
     std::string _locked_warning;
     bool _pending_change_info_save = false;
