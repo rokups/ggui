@@ -2732,6 +2732,7 @@ void Application::RenderDiff()
     }
     if (_diff.path.empty())
     {
+        ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Selected change is empty.");
         ImGui::SameLine();
         render_comparison();
