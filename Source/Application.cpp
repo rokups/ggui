@@ -69,8 +69,6 @@ constexpr ImU32 kStatusSpecial = IM_COL32(166, 91, 216, 255);
 constexpr ImU32 kStatusConflict = IM_COL32(255, 123, 114, 255);
 constexpr ImU32 kStatusPushed = IM_COL32(246, 248, 250, 255);
 constexpr ImU32 kStatusUnpushed = IM_COL32(219, 109, 40, 255);
-constexpr ImU32 kChangeId = IM_COL32(166, 91, 216, 255);
-constexpr ImU32 kWorkingChangeId = IM_COL32(225, 113, 247, 255);
 constexpr ImU32 kCommitId = IM_COL32(47, 129, 247, 255);
 constexpr ImU32 kWorkingCommitId = IM_COL32(100, 181, 246, 255);
 
@@ -623,11 +621,6 @@ void DialogMultiline(const char* label, std::string* value, float height, bool f
     ImGui::InputTextMultiline(id.c_str(), value, ImVec2(-1.0f, height));
 }
 
-ImU32 ChangeIdColor(bool working)
-{
-    return working ? kWorkingChangeId : kChangeId;
-}
-
 ImU32 CommitIdColor(bool working)
 {
     return working ? kWorkingCommitId : kCommitId;
@@ -720,30 +713,31 @@ const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::strin
     if (identifier == "@")
         identifier = snapshot.working_copy;
     bool ambiguous = false;
-    const auto unique_prefix = [&](auto member) {
-        const Revision* result = nullptr;
-        for (const Revision& revision : snapshot.revisions)
-            if ((revision.*member).starts_with(identifier))
-            {
-                if (result != nullptr && result->oid != revision.oid)
-                {
-                    ambiguous = true;
-                    return static_cast<const Revision*>(nullptr);
-                }
-                result = &revision;
-            }
+    const Revision* result = nullptr;
+    for (const Revision& revision : snapshot.revisions)
+    {
+        const bool matches = revision.oid.starts_with(identifier)
+            || std::ranges::any_of(revision.aliases,
+                [&](const std::string& alias) { return alias.starts_with(identifier); });
+        if (!matches)
+            continue;
+        if (result != nullptr && result->oid != revision.oid)
+        {
+            ambiguous = true;
+            result = nullptr;
+            break;
+        }
+        result = &revision;
+    }
+    if (result != nullptr || ambiguous)
         return result;
-    };
-    const Revision* change = unique_prefix(&Revision::change_id);
-    if (change != nullptr || ambiguous)
-        return change;
     for (const NamedRef& ref : snapshot.refs)
         if ((ref.remote.empty() && ref.name == identifier)
             || (!ref.remote.empty() && ref.remote + "/" + ref.name == identifier))
             if (const auto revision = std::ranges::find(snapshot.revisions, ref.target, &Revision::oid);
                 revision != snapshot.revisions.end())
                 return &*revision;
-    return unique_prefix(&Revision::oid);
+    return nullptr;
 }
 
 const Revision* RebaseBranchRoot(
@@ -1174,14 +1168,6 @@ void Application::ApplyEvent(Event event)
                     const std::string old_selection = _selected_revision;
                     const std::string old_compare_to = _compare_to;
                     const bool had_selection = !_selected_revisions.empty();
-                    std::unordered_map<std::string, std::string> selected_changes;
-                    if (_snapshot != nullptr)
-                    {
-                        for (const Revision& revision : _snapshot->revisions)
-                            if (!revision.change_id.empty()
-                                && std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end())
-                                selected_changes.emplace(revision.oid, revision.change_id);
-                    }
                     _snapshot = std::move(value.snapshot);
                     SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
                     RebuildIdPrefixes();
@@ -1228,10 +1214,10 @@ void Application::ApplyEvent(Event event)
                             if (std::ranges::any_of(
                                     _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; }))
                                 continue;
-                            const auto change = selected_changes.find(oid);
-                            const auto replacement = change == selected_changes.end()
-                                ? _snapshot->revisions.end()
-                                : std::ranges::find(_snapshot->revisions, change->second, &Revision::change_id);
+                            const auto replacement = std::ranges::find_if(_snapshot->revisions,
+                                [&](const Revision& revision) {
+                                    return std::ranges::find(revision.aliases, oid) != revision.aliases.end();
+                                });
                             if (replacement != _snapshot->revisions.end())
                             {
                                 if (_selected_revision == oid)
@@ -2082,7 +2068,9 @@ void Application::RebuildGraph()
     {
         const Revision& revision = _snapshot->revisions[index];
         bool matches = _graph_filter.empty() || ContainsInsensitive(revision.description, _graph_filter)
-            || ContainsInsensitive(revision.change_id, _graph_filter) || ContainsInsensitive(revision.oid, _graph_filter);
+            || ContainsInsensitive(revision.oid, _graph_filter)
+            || std::ranges::any_of(revision.aliases,
+                [&](const std::string& alias) { return ContainsInsensitive(alias, _graph_filter); });
         if (!matches)
         {
             matches = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
@@ -2109,20 +2097,17 @@ void Application::RebuildIdPrefixes()
             destination.emplace(values[index], lengths[index]);
     };
     std::vector<std::string> revision_ids;
-    std::vector<std::string> change_ids;
     revision_ids.reserve(_snapshot->revisions.size());
-    change_ids.reserve(_snapshot->revisions.size());
     for (const Revision& revision : _snapshot->revisions)
     {
         revision_ids.push_back(revision.oid);
-        change_ids.push_back(revision.change_id);
+        revision_ids.insert(revision_ids.end(), revision.aliases.begin(), revision.aliases.end());
     }
     std::vector<std::string> operation_ids;
     operation_ids.reserve(_snapshot->operations.size());
     for (const Operation& operation : _snapshot->operations)
         operation_ids.push_back(operation.oid);
     build(revision_ids, _revision_prefixes);
-    build(change_ids, _change_prefixes);
     build(operation_ids, _operation_prefixes);
 }
 
@@ -2130,12 +2115,6 @@ std::size_t Application::RevisionPrefix(const std::string& oid) const
 {
     const auto found = _revision_prefixes.find(oid);
     return found == _revision_prefixes.end() ? std::min<std::size_t>(1, oid.size()) : found->second;
-}
-
-std::size_t Application::ChangePrefix(const std::string& id) const
-{
-    const auto found = _change_prefixes.find(id);
-    return found == _change_prefixes.end() ? std::min<std::size_t>(1, id.size()) : found->second;
 }
 
 std::size_t Application::OperationPrefix(const std::string& oid) const
@@ -2247,7 +2226,7 @@ void Application::RenderHistory()
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
                         : ratio < 0.8f                  ? DropAction::Squash
                                                       : DropAction::Rebase;
-                    const std::string tooltip = DropTooltip(*hovered_drop, revision.change_id);
+                    const std::string tooltip = DropTooltip(*hovered_drop, revision.oid);
                     ImGui::SetTooltip("%s", tooltip.c_str());
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
@@ -2257,7 +2236,7 @@ void Application::RenderHistory()
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
                 if (hovered_action_drop)
-                    ImGui::SetTooltip("Choose an action for %s", revision.change_id.c_str());
+                    ImGui::SetTooltip("Choose an action for %s", revision.oid.c_str());
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
                 {
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
@@ -2281,8 +2260,10 @@ void Application::RenderHistory()
                 const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
                 if (ImGui::BeginMenu(copy_label.c_str()))
                 {
-                    IdCopyMenuItems("change ID", revision.change_id, ChangePrefix(revision.change_id));
                     IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
+                    for (std::size_t index = 0; index < revision.aliases.size(); ++index)
+                        IdCopyMenuItems("alias " + std::to_string(index + 1), revision.aliases[index],
+                            RevisionPrefix(revision.aliases[index]));
                     if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
                             !revision.description.empty()))
                         ImGui::SetClipboardText(revision.description.c_str());
@@ -2462,7 +2443,6 @@ void Application::RenderHistory()
                 }
                 content_cursor.x = DrawHighlightedId(draw, content_cursor, id, prefix, color);
             };
-            draw_id(revision.change_id, ChangePrefix(revision.change_id), ChangeIdColor(revision.working_copy));
             draw_id(revision.oid, RevisionPrefix(revision.oid), CommitIdColor(revision.working_copy));
             if (!elided)
                 draw_text(revision.author, kTextMuted, 16.0f);
@@ -2502,8 +2482,17 @@ void Application::RenderHistory()
                 ImGui::TextUnformatted(message.empty() ? "(no description)" : message.c_str());
                 ImGui::Separator();
                 ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
-                ImGui::Text("Change: %s", revision.change_id.c_str());
                 ImGui::Text("Commit: %s", revision.oid.c_str());
+                if (!revision.aliases.empty())
+                {
+                    std::string aliases;
+                    for (const std::string& alias : revision.aliases)
+                    {
+                        if (!aliases.empty()) aliases += ", ";
+                        aliases += alias;
+                    }
+                    ImGui::TextWrapped("Aliases: %s", aliases.c_str());
+                }
                 if (!revision.parents.empty())
                 {
                     std::string parents;
@@ -2550,11 +2539,11 @@ void Application::RenderHistory()
             && (dragging->IsDataType("GGUI_CHANGE") || dragging->IsDataType("GGUI_CHANGE_ACTION"));
         if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
         {
-            const std::string tooltip = DropTooltip(DropAction::ReorderAfter, final.change_id);
+            const std::string tooltip = DropTooltip(DropAction::ReorderAfter, final.oid);
             ImGui::SetTooltip("%s", tooltip.c_str());
         }
         else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION"))
-            ImGui::SetTooltip("Choose an action after %s", final.change_id.c_str());
+            ImGui::SetTooltip("Choose an action after %s", final.oid.c_str());
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
         {
             _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
@@ -2850,22 +2839,27 @@ void Application::RenderChangeInformation()
     ImGui::Text("%s%s", date.c_str(), revision->pushed ? "  locked" : "");
     ImGui::SameLine(0.0f, 12.0f);
     ImGui::BeginGroup();
-    TextLabelledId("Change ", revision->change_id, ChangePrefix(revision->change_id),
-        ChangeIdColor(revision->working_copy));
-    ImGui::EndGroup();
-    if (ImGui::BeginPopupContextItem("change ID context"))
-    {
-        IdCopyMenuItems("change ID", revision->change_id, ChangePrefix(revision->change_id));
-        ImGui::EndPopup();
-    }
-    ImGui::SameLine(0.0f, 12.0f);
-    ImGui::BeginGroup();
     TextLabelledId("Commit ", revision->oid, RevisionPrefix(revision->oid), CommitIdColor(revision->working_copy));
     ImGui::EndGroup();
     if (ImGui::BeginPopupContextItem("commit ID context"))
     {
         IdCopyMenuItems("commit ID", revision->oid, RevisionPrefix(revision->oid));
+        for (std::size_t index = 0; index < revision->aliases.size(); ++index)
+            IdCopyMenuItems("alias " + std::to_string(index + 1), revision->aliases[index],
+                RevisionPrefix(revision->aliases[index]));
         ImGui::EndPopup();
+    }
+    if (!revision->aliases.empty())
+    {
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::TextDisabled("%zu alias%s", revision->aliases.size(), revision->aliases.size() == 1 ? "" : "es");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::BeginTooltip();
+            for (const std::string& alias : revision->aliases)
+                ImGui::TextUnformatted(alias.c_str());
+            ImGui::EndTooltip();
+        }
     }
     const float button_height = ImGui::GetFrameHeight();
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
@@ -3465,7 +3459,7 @@ void Application::RenderDialogs()
     {
         TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        DialogInput("Destination", "change ID, bookmark, or commit ID", &_input_primary, focus_first);
+        DialogInput("Destination", "commit ID or bookmark", &_input_primary, focus_first);
         ImGui::Checkbox("Rebase entire branch", &_input_flag);
         const Revision* source = RebaseSource();
         if (source == nullptr)
@@ -3840,11 +3834,7 @@ std::vector<std::string> Application::SelectedParentRevisions() const
             parents.emplace_back("@");
             continue;
         }
-        const auto revision = std::ranges::find_if(
-            _snapshot->revisions, [&](const Revision& candidate) { return candidate.oid == oid; });
-        parents.push_back(revision == _snapshot->revisions.end() || revision->change_id.empty()
-                ? oid
-                : revision->change_id);
+        parents.push_back(oid);
     }
     return parents;
 }
@@ -3876,7 +3866,7 @@ bool Application::IsLocked(const std::string& identifier) const
     if (ref != _snapshot->refs.end())
         oid = ref->target;
     const auto revision = std::ranges::find_if(_snapshot->revisions, [&](const Revision& candidate) {
-        return candidate.oid == oid || candidate.change_id == oid;
+        return candidate.oid == oid || std::ranges::find(candidate.aliases, oid) != candidate.aliases.end();
     });
     return revision != _snapshot->revisions.end() && revision->pushed;
 }
@@ -4096,7 +4086,6 @@ void Application::ResetRepositoryState()
     _graph_rows.clear();
     _graph_generation = 0;
     _revision_prefixes.clear();
-    _change_prefixes.clear();
     _operation_prefixes.clear();
     _selected_revision.clear();
     _selected_revisions.clear();
@@ -4530,9 +4519,9 @@ bool Application::ContainsInsensitiveForTest(const std::string& text, const std:
     return ContainsInsensitive(text, query);
 }
 
-unsigned int Application::IdColorForTest(bool change_id, bool working_copy)
+unsigned int Application::IdColorForTest(bool working_copy)
 {
-    return change_id ? ChangeIdColor(working_copy) : CommitIdColor(working_copy);
+    return CommitIdColor(working_copy);
 }
 
 bool Application::SupportsDiffLanguageForTest(const std::string& path)

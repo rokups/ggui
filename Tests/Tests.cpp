@@ -19,6 +19,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -145,6 +146,13 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
                   << ", revisions=" << (last_snapshot == nullptr ? 0 : last_snapshot->revisions.size())
                   << ", status=" << (last_snapshot == nullptr ? 0 : last_snapshot->status.size());
     return {};
+}
+
+auto FindRevision(const RepoSnapshot& snapshot, std::string_view id)
+{
+    return std::ranges::find_if(snapshot.revisions, [&](const Revision& revision) {
+        return revision.oid == id || std::ranges::find(revision.aliases, id) != revision.aliases.end();
+    });
 }
 
 struct TerminalEvent
@@ -845,7 +853,7 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     ASSERT_NE(opened, nullptr);
     const auto source = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
     ASSERT_NE(source, opened->revisions.end());
-    const std::string source_change = source->change_id;
+    const std::string source_id = source->oid;
 
     engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
     const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -854,7 +862,7 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     ASSERT_NE(child, nullptr);
     const auto child_revision = std::ranges::find(child->revisions, child->working_copy, &Revision::oid);
     ASSERT_NE(child_revision, child->revisions.end());
-    const std::string child_change = child_revision->change_id;
+    const std::string child_id = child_revision->oid;
 
     engine.Enqueue(LoadDiff{source->oid, "tracked.txt", false,
         DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}});
@@ -875,10 +883,8 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
                });
     });
     ASSERT_NE(moved_to_child, nullptr);
-    const auto rewritten_source =
-        std::ranges::find(moved_to_child->revisions, source_change, &Revision::change_id);
-    const auto rewritten_child =
-        std::ranges::find(moved_to_child->revisions, child_change, &Revision::change_id);
+    const auto rewritten_source = FindRevision(*moved_to_child, source_id);
+    const auto rewritten_child = FindRevision(*moved_to_child, child_id);
     ASSERT_NE(rewritten_source, moved_to_child->revisions.end());
     ASSERT_NE(rewritten_child, moved_to_child->revisions.end());
 
@@ -907,10 +913,8 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
                });
     });
     ASSERT_NE(moved_to_parent, nullptr);
-    const auto restored_source =
-        std::ranges::find(moved_to_parent->revisions, source_change, &Revision::change_id);
-    const auto emptied_child =
-        std::ranges::find(moved_to_parent->revisions, child_change, &Revision::change_id);
+    const auto restored_source = FindRevision(*moved_to_parent, source_id);
+    const auto emptied_child = FindRevision(*moved_to_parent, child_id);
     ASSERT_NE(restored_source, moved_to_parent->revisions.end());
     ASSERT_NE(emptied_child, moved_to_parent->revisions.end());
     engine.Enqueue(LoadDiff{restored_source->oid, "tracked.txt"});
@@ -945,7 +949,7 @@ TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
     ASSERT_NE(root_snapshot, nullptr);
     const auto root = std::ranges::find(root_snapshot->revisions, "branch root", &Revision::description);
     ASSERT_NE(root, root_snapshot->revisions.end());
-    const std::string root_change = root->change_id;
+    const std::string root_id = root->oid;
 
     engine.Enqueue(NewChange{"branch tip", {"@"}, {}, {}, false});
     const auto tip_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -957,7 +961,7 @@ TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
     ASSERT_NE(tip_snapshot, nullptr);
     const auto tip = std::ranges::find(tip_snapshot->revisions, "branch tip", &Revision::description);
     ASSERT_NE(tip, tip_snapshot->revisions.end());
-    const std::string tip_change = tip->change_id;
+    const std::string tip_id = tip->oid;
 
     engine.Enqueue(NewChange{"destination", {base->oid}, {}, {}, false});
     const auto destination_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -970,15 +974,15 @@ TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
     const auto destination =
         std::ranges::find(destination_snapshot->revisions, "destination", &Revision::description);
     ASSERT_NE(destination, destination_snapshot->revisions.end());
-    const std::string destination_change = destination->change_id;
+    const std::string destination_id = destination->oid;
 
-    engine.Enqueue(Rebase{tip_change, destination_change, true});
+    engine.Enqueue(Rebase{tip_id, destination_id, true});
     const auto rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         if (snapshot.generation <= destination_snapshot->generation)
             return false;
-        const auto rewritten_root = std::ranges::find(snapshot.revisions, root_change, &Revision::change_id);
-        const auto rewritten_tip = std::ranges::find(snapshot.revisions, tip_change, &Revision::change_id);
-        const auto target = std::ranges::find(snapshot.revisions, destination_change, &Revision::change_id);
+        const auto rewritten_root = FindRevision(snapshot, root_id);
+        const auto rewritten_tip = FindRevision(snapshot, tip_id);
+        const auto target = FindRevision(snapshot, destination_id);
         return rewritten_root != snapshot.revisions.end() && rewritten_tip != snapshot.revisions.end()
             && target != snapshot.revisions.end() && rewritten_root->parents == std::vector{target->oid}
             && rewritten_tip->parents == std::vector{rewritten_root->oid};
@@ -1002,7 +1006,7 @@ TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
     ASSERT_NE(opened, nullptr);
     const auto working = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
     ASSERT_NE(working, opened->revisions.end());
-    const std::string working_change = working->change_id;
+    const std::string working_id = working->oid;
     ASSERT_EQ(working->parents.size(), 1U);
     engine.Enqueue(RevertDiffLines{
         working->parents.front(), "tracked.txt", {{DiffLineKind::Addition, -1, 0, 0}}});
@@ -1024,7 +1028,7 @@ TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
         return snapshot.generation > opened->generation && snapshot.working_copy != working->oid;
     });
     ASSERT_NE(line_reverted, nullptr);
-    const auto rewritten = std::ranges::find(line_reverted->revisions, working_change, &Revision::change_id);
+    const auto rewritten = FindRevision(*line_reverted, working_id);
     ASSERT_NE(rewritten, line_reverted->revisions.end());
     engine.Enqueue(LoadDiff{rewritten->oid, "tracked.txt", false,
         DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}});
@@ -1073,7 +1077,7 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     ASSERT_NE(changed, nullptr);
     const auto source = std::ranges::find(changed->revisions, changed->working_copy, &Revision::oid);
     ASSERT_NE(source, changed->revisions.end());
-    const std::string source_change = source->change_id;
+    const std::string source_id = source->oid;
 
     engine.Enqueue(NewChange{"later change", {"@"}, {}, {}, false});
     const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -1087,12 +1091,12 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     });
     ASSERT_NE(later, nullptr);
 
-    engine.Enqueue(RevertFile{source_change, {}, "missing.txt", {}});
+    engine.Enqueue(RevertFile{source_id, {}, "missing.txt", {}});
     const TerminalEvent missing = WaitForTerminal(engine, "revert file");
     EXPECT_FALSE(missing.finished);
     EXPECT_NE(missing.message.find("no changes"), std::string::npos);
 
-    engine.Enqueue(RevertFile{source_change, "tracked.txt", "tracked.txt", {}});
+    engine.Enqueue(RevertFile{source_id, "tracked.txt", "tracked.txt", {}});
     const auto reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > later->generation;
     });
@@ -1101,7 +1105,7 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), std::istreambuf_iterator<char>()),
         "one\n2\n3\n4\n5\n6\n7\n8\n9\nTEN\n");
 
-    engine.Enqueue(RevertFile{source_change, "old.txt", "new.txt", {}});
+    engine.Enqueue(RevertFile{source_id, "old.txt", "new.txt", {}});
     ASSERT_NE(WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > reverted->generation;
     }), nullptr);

@@ -64,7 +64,7 @@ public:
     static std::vector<std::string> SplitLinesForTest(const std::string& text);
     static std::string DeltaNameForTest(git_delta_t status);
     static bool ContainsInsensitiveForTest(const std::string& text, const std::string& query);
-    static unsigned int IdColorForTest(bool change_id, bool working_copy);
+    static unsigned int IdColorForTest(bool working_copy);
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
     static std::optional<std::filesystem::path> WorkingCopyPathForTest(
@@ -152,7 +152,6 @@ private:
     void RebuildGraph();
     void RebuildIdPrefixes();
     std::size_t RevisionPrefix(const std::string& oid) const;
-    std::size_t ChangePrefix(const std::string& id) const;
     std::size_t OperationPrefix(const std::string& oid) const;
     void RevealRevision(const std::string& oid);
     void SelectRevision(const std::string& oid, bool additive = false);
@@ -206,7 +205,6 @@ private:
     std::string _built_filter;
     std::string _reveal_revision;
     std::unordered_map<std::string, std::size_t> _revision_prefixes;
-    std::unordered_map<std::string, std::size_t> _change_prefixes;
     std::unordered_map<std::string, std::size_t> _operation_prefixes;
     std::string _selected_revision;
     std::vector<std::string> _selected_revisions;

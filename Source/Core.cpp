@@ -719,7 +719,9 @@ struct RepositoryEngine::Impl
             value.oid = OidString(source.oid);
             for (size_t parent = 0; parent < source.parents.count; ++parent)
                 value.parents.push_back(OidString(source.parents.ids[parent]));
-            value.change_id = source.change_id == nullptr ? "" : source.change_id;
+            value.aliases.reserve(source.aliases.count);
+            for (size_t alias = 0; alias < source.aliases.count; ++alias)
+                value.aliases.push_back(OidString(source.aliases.ids[alias]));
             value.description = source.description == nullptr ? "" : source.description;
             value.author = source.author == nullptr || source.author->name == nullptr ? "" : source.author->name;
             value.author_email = source.author == nullptr || source.author->email == nullptr ? "" : source.author->email;

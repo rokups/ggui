@@ -158,11 +158,11 @@ RepoSnapshot RichSnapshot()
     snapshot.root = Repository().Path().string();
     snapshot.working_copy = "merge";
     snapshot.revisions = {
-        {"merge", {"left", "right", "third"}, "change-merge", "Merge subject\nbody", "Merger", 5, true, true, false},
-        {"left", {"base"}, "change-left", "Left", "Left Author", 4, false, false, false},
-        {"right", {"base"}, "change-right", "Right", "Right Author", 3, false, false, true},
-        {"third", {"base"}, "change-third", "", "Third Author", 2, false, false, false, true},
-        {"base", {}, "change-base", "Base", "Base Author", 1, false, false, true},
+        {"merge", {"left", "right", "third"}, {"change-merge"}, "Merge subject\nbody", "Merger", 5, true, true, false},
+        {"left", {"base"}, {"change-left"}, "Left", "Left Author", 4, false, false, false},
+        {"right", {"base"}, {"change-right"}, "Right", "Right Author", 3, false, false, true},
+        {"third", {"base"}, {"change-third"}, "", "Third Author", 2, false, false, false, true},
+        {"base", {}, {"change-base"}, "Base", "Base Author", 1, false, false, true},
     };
     snapshot.revisions.front().author_email = "merger@example.test";
     snapshot.refs = {
@@ -489,7 +489,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             Revision revision;
             revision.oid = "revision-" + std::to_string(index);
             if (index + 1 < 80) revision.parents.push_back("revision-" + std::to_string(index + 1));
-            revision.change_id = "change-" + std::to_string(index);
+            revision.aliases = {"change-" + std::to_string(index)};
             revision.description = "Revision " + std::to_string(index);
             revision.author = "Author";
             snapshot.revisions.push_back(std::move(revision));
@@ -684,8 +684,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedRevisionsForTest()[1], "right");
         const std::vector<std::string> parents = application.SelectedParentsForTest();
         IM_CHECK_EQ(parents.size(), 2U);
-        IM_CHECK_EQ(parents[0], "change-left");
-        IM_CHECK_EQ(parents[1], "change-right");
+        IM_CHECK_EQ(parents[0], "left");
+        IM_CHECK_EQ(parents[1], "right");
         context->SetRef("ggui dockspace");
         IM_CHECK((context->ItemInfo("New").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("New");
@@ -711,9 +711,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK_EQ(Application::DeltaNameForTest(status), name);
         IM_CHECK(Application::ContainsInsensitiveForTest("Graph First", "gRaPh"));
         IM_CHECK(!Application::ContainsInsensitiveForTest("Graph First", "missing"));
-        IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(false, false));
-        IM_CHECK_NE(Application::IdColorForTest(true, false), Application::IdColorForTest(true, true));
-        IM_CHECK_NE(Application::IdColorForTest(false, false), Application::IdColorForTest(false, true));
+        IM_CHECK_NE(Application::IdColorForTest(true), Application::IdColorForTest(false));
         IM_CHECK(Application::SupportsDiffLanguageForTest("source.cpp"));
         IM_CHECK(Application::SupportsDiffLanguageForTest("shader.glsl"));
         const std::string limited = Application::LimitLinesForTest(
@@ -796,7 +794,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         RepoSnapshot rewritten = RichSnapshot();
         rewritten.generation++;
         for (Revision& revision : rewritten.revisions)
-            if (revision.oid == "left") revision.oid = "left-rewritten";
+            if (revision.oid == "left")
+            {
+                revision.oid = "left-rewritten";
+                revision.aliases.push_back("left");
+            }
         for (NamedRef& ref : rewritten.refs)
             if (ref.target == "left") ref.target = "left-rewritten";
         application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(rewritten))});
@@ -1493,7 +1495,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 revision.pushed = true;
             }
         snapshot.revisions.insert(snapshot.revisions.begin(),
-            {"tip", {"left"}, "change-tip", "Current source tip", "Tip Author", 6, false, false, false});
+            {"tip", {"left"}, {"change-tip"}, "Current source tip", "Tip Author", 6, false, false, false});
         application.SetSnapshotForTest(std::move(snapshot));
         application.SelectRevisionForTest("tip");
         context->Yield(2);
@@ -1630,9 +1632,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             }
             context->ItemClick("**/Copy");
             context->Yield();
-            for (const char* action : {"Short change ID", "Full change ID", "Short commit ID", "Full commit ID"})
+            for (const char* action : {"Short commit ID", "Full commit ID", "Short alias 1", "Full alias 1"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
-            context->ItemClick("**/Short change ID");
+            context->ItemClick("**/Short alias 1");
             context->Yield();
             IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "change-m");
 
@@ -1916,9 +1918,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         RepoSnapshot snapshot = RichSnapshot();
         snapshot.working_copy = "child";
         snapshot.revisions = {
-            {"child", {"source"}, "change-child", "Child", {}, 3, true, false, true},
-            {"source", {"base"}, "change-source", "Source", {}, 2, false, false, false},
-            {"base", {}, "change-base", "Base", {}, 1, false, false, false},
+            {"child", {"source"}, {"change-child"}, "Child", {}, 3, true, false, true},
+            {"source", {"base"}, {"change-source"}, "Source", {}, 2, false, false, false},
+            {"base", {}, {"change-base"}, "Base", {}, 1, false, false, false},
         };
         snapshot.status = {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}};
         application.SetSnapshotForTest(std::move(snapshot));
@@ -2160,7 +2162,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         {
             Revision revision;
             revision.oid = "extra-" + std::to_string(index);
-            revision.change_id = "extra-change-" + std::to_string(index);
+            revision.aliases = {"extra-change-" + std::to_string(index)};
             revision.description = "Extra revision " + std::to_string(index);
             snapshot.revisions.push_back(std::move(revision));
         }
@@ -2196,7 +2198,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_LE(std::fabs((*graph)->Scroll.y - initial_scroll), 0.01f);
 
         application.SelectRevisionForTest("left");
-        IM_CHECK_EQ(application.SelectedParentsForTest(), std::vector<std::string>{"change-left"});
+        IM_CHECK_EQ(application.SelectedParentsForTest(), std::vector<std::string>{"left"});
 
         context->KeyPress(ImGuiKey_E);
         context->KeyPress(ImGuiKey_N);

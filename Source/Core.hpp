@@ -21,7 +21,7 @@ struct Revision
 {
     std::string oid;
     std::vector<std::string> parents;
-    std::string change_id;
+    std::vector<std::string> aliases;
     std::string description;
     std::string author;
     std::int64_t timestamp = 0;

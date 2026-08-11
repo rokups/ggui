@@ -74,6 +74,9 @@ The toolbar shows the closest bookmark reachable from the working-copy change.
 In History, **Up/Down** select the adjacent visible change and **N** creates a
 new child of the selected change. Author email is available as a tooltip and
 the author row's context menu supports copying or editing its identity.
+History rows show each change's current Git commit ID. IDs retained from prior
+rewrites remain searchable, keep selections attached across refreshes, and are
+available from the change-information and copy menus as aliases.
 
 Left-drag a graph row onto the top of another row to reorder before it, onto
 the middle to squash, or onto the bottom to rebase. Drop below the final row
