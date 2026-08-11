@@ -93,6 +93,14 @@ bool SameChangedLine(const DiffLine& first, const DiffLine& second)
         && first.old_line == second.old_line && first.new_line == second.new_line;
 }
 
+bool SameInverseLine(const DiffLine& forward, const DiffLine& reverse)
+{
+    return (forward.kind == DiffLineKind::Addition && reverse.kind == DiffLineKind::Deletion
+               && forward.new_line == reverse.old_line)
+        || (forward.kind == DiffLineKind::Deletion && reverse.kind == DiffLineKind::Addition
+            && forward.old_line == reverse.new_line);
+}
+
 std::vector<std::string_view> TextLines(std::string_view text)
 {
     std::vector<std::string_view> result;
@@ -714,6 +722,7 @@ struct RepositoryEngine::Impl
             value.change_id = source.change_id == nullptr ? "" : source.change_id;
             value.description = source.description == nullptr ? "" : source.description;
             value.author = source.author == nullptr || source.author->name == nullptr ? "" : source.author->name;
+            value.author_email = source.author == nullptr || source.author->email == nullptr ? "" : source.author->email;
             value.timestamp = source.committer == nullptr ? 0 : source.committer->when.time;
             value.working_copy = value.oid == result->working_copy;
             value.conflicted = source.has_conflicts != 0;
@@ -1052,6 +1061,8 @@ struct RepositoryEngine::Impl
             pathspec.push_back(path.data());
         git_diff_options options = GIT_DIFF_OPTIONS_INIT;
         options.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+        if (!command.lines.empty())
+            options.context_lines = 0;
         options.pathspec = {pathspec.data(), pathspec.size()};
         git_diff* raw_diff = nullptr;
         Check(git_diff_tree_to_tree(
@@ -1060,7 +1071,75 @@ struct RepositoryEngine::Impl
         std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
         if (git_diff_num_deltas(diff.get()) == 0)
             throw std::runtime_error("selected file has no changes in the source change");
-        Check(git_apply(git.get(), diff.get(), GIT_APPLY_LOCATION_WORKDIR, nullptr), "apply inverse file diff");
+        std::vector<bool> selected_hunks;
+        if (!command.lines.empty())
+        {
+            for (std::size_t delta = 0; delta < git_diff_num_deltas(diff.get()); ++delta)
+            {
+                git_patch* raw_patch = nullptr;
+                Check(git_patch_from_diff(&raw_patch, diff.get(), delta), "load inverse file patch");
+                std::unique_ptr<git_patch, decltype(&git_patch_free)> patch(raw_patch, git_patch_free);
+                for (std::size_t hunk = 0; hunk < git_patch_num_hunks(patch.get()); ++hunk)
+                {
+                    const git_diff_hunk* raw_hunk = nullptr;
+                    std::size_t count = 0;
+                    Check(git_patch_get_hunk(&raw_hunk, &count, patch.get(), hunk), "load inverse file hunk");
+                    bool selected = false;
+                    for (std::size_t line = 0; line < count && !selected; ++line)
+                    {
+                        const git_diff_line* raw_line = nullptr;
+                        Check(git_patch_get_line_in_hunk(&raw_line, patch.get(), hunk, line),
+                            "load inverse file line");
+                        const DiffLine reverse = DiffLineFromRaw(*raw_line, static_cast<int>(hunk));
+                        selected = std::ranges::any_of(command.lines,
+                            [&](const DiffLine& forward) { return SameInverseLine(forward, reverse); });
+                    }
+                    selected_hunks.push_back(selected);
+                }
+            }
+            if (std::ranges::none_of(selected_hunks, [](bool selected) { return selected; }))
+                throw std::runtime_error("selected hunk no longer matches the source change");
+        }
+        struct HunkSelection
+        {
+            const std::vector<bool>& selected;
+            std::size_t index = 0;
+        } selection{selected_hunks};
+        git_apply_options apply_options = GIT_APPLY_OPTIONS_INIT;
+        if (!selected_hunks.empty())
+        {
+            apply_options.hunk_cb = [](const git_diff_hunk*, void* payload) {
+                HunkSelection& value = *static_cast<HunkSelection*>(payload);
+                return value.index < value.selected.size() && value.selected[value.index++] ? 0 : 1;
+            };
+            apply_options.payload = &selection;
+        }
+        Check(git_apply(git.get(), diff.get(), GIT_APPLY_LOCATION_WORKDIR,
+                  selected_hunks.empty() ? nullptr : &apply_options),
+            "apply inverse file diff");
+        Sync();
+        PublishSnapshot();
+    }
+
+    void DeleteWorkingFile(const DeleteFile& command)
+    {
+        Sync();
+        const std::filesystem::path relative = std::filesystem::path(command.path).lexically_normal();
+        if (relative.empty() || relative.is_absolute()
+            || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+            throw std::runtime_error("delete file requires a repository-relative path");
+        const char* workdir = git_repository_workdir(git.get());
+        if (workdir == nullptr)
+            throw std::runtime_error("repository has no working directory"); // GCOV_EXCL_LINE: bare repos are rejected
+        const std::filesystem::path target = std::filesystem::path(workdir) / relative;
+        std::error_code error;
+        const std::filesystem::file_status status = std::filesystem::symlink_status(target, error);
+        if (error || status.type() == std::filesystem::file_type::not_found)
+            throw std::runtime_error("working-copy file does not exist");
+        if (std::filesystem::is_directory(status))
+            throw std::runtime_error("working-copy path is a directory");
+        if (!std::filesystem::remove(target, error) || error)
+            throw std::runtime_error("could not delete working-copy file"); // GCOV_EXCL_LINE: filesystem race/failure
         Sync();
         PublishSnapshot();
     }
@@ -1551,6 +1630,7 @@ struct RepositoryEngine::Impl
                 [](const DeleteRemote&) { return "delete remote"; },
                 [](const LoadDiff&) { return "diff"; }, [](const ApplyPatch&) { return "apply patch"; },
                 [](const RevertFile&) { return "revert file"; },
+                [](const DeleteFile&) { return "delete file"; },
                 [](const NewChange&) { return "new"; },
                 [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
                 [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },
@@ -1624,6 +1704,8 @@ struct RepositoryEngine::Impl
                 ApplyPatchText(*value);
             else if (const auto* value = std::get_if<RevertFile>(&command))
                 RevertFileChange(*value);
+            else if (const auto* value = std::get_if<DeleteFile>(&command))
+                DeleteWorkingFile(*value);
             else
                 DispatchMutation(command);
             if (!quiet)

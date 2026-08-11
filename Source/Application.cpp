@@ -419,6 +419,30 @@ const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revi
     return local == snapshot.refs.end() ? nullptr : &*local;
 }
 
+const NamedRef* ClosestBookmark(const RepoSnapshot& snapshot, const std::string& revision)
+{
+    std::vector<std::string_view> pending{revision};
+    std::unordered_set<std::string_view> visited;
+    for (std::size_t index = 0; index < pending.size(); ++index)
+    {
+        const std::string_view oid = pending[index];
+        if (!visited.emplace(oid).second)
+            continue;
+        if (const NamedRef* local = BookmarkAt(snapshot, std::string(oid)); local != nullptr)
+            return local;
+        const auto remote = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.target == oid;
+        });
+        if (remote != snapshot.refs.end())
+            return &*remote;
+        const auto node = std::ranges::find(snapshot.revisions, oid, &Revision::oid);
+        if (node != snapshot.revisions.end())
+            for (const std::string& parent : node->parents)
+                pending.push_back(parent);
+    }
+    return nullptr;
+}
+
 std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark)
 {
     const auto tracked = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
@@ -450,7 +474,7 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
     const float pad_x = FontPx(7.0f);
     const float pad_top = FontPx(3.0f);
-    const float pad_bottom = 0.0f;
+    const float pad_bottom = pad_top;
     const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_top);
     const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
@@ -497,7 +521,7 @@ void DrawElidedBadge(
         return;
     const float pad_x = FontPx(7.0f);
     const float pad_top = FontPx(3.0f);
-    const float pad_bottom = 0.0f;
+    const float pad_bottom = pad_top;
     const float text_y = center_y - ImGui::GetTextLineHeight() * 0.5f;
     const ImVec2 minimum(cursor.x, text_y - pad_top);
     const ImVec2 maximum(maximum_x, text_y + ImGui::GetTextLineHeight() + pad_bottom);
@@ -1353,7 +1377,7 @@ void Application::RenderFrame()
             if (ImGui::IsKeyPressed(ImGuiKey_E))
                 _engine.Enqueue(Edit{_selected_revision});
             if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
-                CreateChange();
+                CreateChange(true);
             if (ImGui::IsKeyPressed(ImGuiKey_A))
                 RequestAbandon(_selected_revision);
             if (ImGui::IsKeyPressed(ImGuiKey_S))
@@ -1658,6 +1682,14 @@ void Application::RenderToolbar()
             IdCopyMenuItems("commit ID", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy));
             ImGui::EndPopup();
         }
+        if (const NamedRef* closest = ClosestBookmark(*_snapshot, _snapshot->working_copy); closest != nullptr)
+        {
+            ImGui::SameLine();
+            const std::string label = ReferenceLabel(*closest);
+            ImGui::TextDisabled("%s %s", ICON_MS_BOOKMARK, label.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Closest bookmark to the working copy");
+        }
     }
     if (!_active_operation.empty())
     {
@@ -1763,7 +1795,8 @@ void Application::RenderBookmarks()
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
-    if (ImGui::Button("Create bookmark", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::Bookmark);
+    if (ActionButton(ICON_MS_BOOKMARK_ADD, "Create bookmark", ImVec2(-1.0f, 0.0f)))
+        OpenDialog(Dialog::Bookmark);
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
@@ -2138,6 +2171,31 @@ void Application::RenderHistory()
         }
         _reveal_revision.clear();
     }
+    const ImGuiIO& io = ImGui::GetIO();
+    if (!io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
+        && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)
+        && (ImGui::IsKeyPressed(ImGuiKey_UpArrow) || ImGui::IsKeyPressed(ImGuiKey_DownArrow))
+        && !_visible_revisions.empty())
+    {
+        const int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+        const auto selected = std::ranges::find_if(_visible_revisions, [&](int index) {
+            return _snapshot->revisions[index].oid == _selected_revision;
+        });
+        const int current = selected == _visible_revisions.end()
+            ? (direction > 0 ? -1 : static_cast<int>(_visible_revisions.size()))
+            : static_cast<int>(selected - _visible_revisions.begin());
+        const int target = std::clamp(current + direction, 0, static_cast<int>(_visible_revisions.size()) - 1);
+        if (target != current)
+        {
+            SelectRevision(_snapshot->revisions[_visible_revisions[static_cast<std::size_t>(target)]].oid);
+            const float target_y = target * kRowHeight;
+            const float viewport = ImGui::GetContentRegionAvail().y;
+            if (target_y < ImGui::GetScrollY())
+                ImGui::SetScrollY(target_y);
+            else if (target_y + kRowHeight > ImGui::GetScrollY() + viewport)
+                ImGui::SetScrollY(target_y + kRowHeight - viewport);
+        }
+    }
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -2223,6 +2281,12 @@ void Application::RenderHistory()
                 }
                 ImGui::Separator();
                 ImGui::BeginDisabled(actions_locked);
+                if (ActionMenuItem(ICON_MS_ADD, "New", "N"))
+                {
+                    SelectRevision(revision.oid);
+                    CreateChange(true);
+                }
+                ImGui::Separator();
                 const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
                 const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
                 if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
@@ -2659,7 +2723,7 @@ void Application::RenderChanges()
             ImGui::BeginDisabled(
                 actions_locked || comparison_active || _diff_loading || _snapshot->working_copy.empty());
             if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
-                QueueCommands({RevertFile{_diff.revision, file.old_path, file.path}}, {"@"},
+                QueueCommands({RevertFile{_diff.revision, file.old_path, file.path, {}}}, {"@"},
                     "Reverting this file will rewrite the locked working-copy commit.");
             ImGui::EndDisabled();
             ImGui::Separator();
@@ -2689,6 +2753,10 @@ void Application::RenderChanges()
                 if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
                     QueueCommands({UntrackPaths{{file.path}}}, {"@"},
                         "Untracking this file will rewrite the locked working-copy commit.");
+                ImGui::Separator();
+                if (ActionMenuItem(ICON_MS_DELETE, "Delete file", nullptr, file_exists))
+                    QueueCommands({DeleteFile{file.path}}, {"@"},
+                        "Deleting this file will rewrite the locked working-copy commit.");
                 ImGui::EndDisabled();
             }
             ImGui::EndPopup();
@@ -2752,6 +2820,22 @@ void Application::RenderChangeInformation()
     }
 
     ImGui::TextUnformatted(revision->author.empty() ? "Unknown author" : revision->author.c_str());
+    if (ImGui::IsItemHovered() && !revision->author_email.empty())
+        ImGui::SetTooltip("%s", revision->author_email.c_str());
+    if (ImGui::BeginPopupContextItem("author context"))
+    {
+        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy author", nullptr, !revision->author.empty()))
+            ImGui::SetClipboardText(revision->author.c_str());
+        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy email", nullptr, !revision->author_email.empty()))
+            ImGui::SetClipboardText(revision->author_email.c_str());
+        ImGui::Separator();
+        if (ActionMenuItem(ICON_MS_EDIT, "Edit author", nullptr, _active_operation.empty()))
+        {
+            OpenDialog(Dialog::Metaedit);
+            _input_flag = true;
+        }
+        ImGui::EndPopup();
+    }
     ImGui::SameLine(0.0f, 12.0f);
     const std::string date = FormatTimestamp(revision->timestamp);
     ImGui::Text("%s%s", date.c_str(), revision->pushed ? "  locked" : "");
@@ -2842,16 +2926,12 @@ void Application::RenderDiff()
         const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
         const int frame = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
         ImGui::Text("%s Loading...", spinner[static_cast<std::size_t>(frame)]);
-        ImGui::SameLine();
-        render_comparison();
         ImGui::End();
         return;
     }
     if (_diff.revision.empty())
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
-        ImGui::SameLine();
-        render_comparison();
         ImGui::End();
         return;
     }
@@ -2859,8 +2939,6 @@ void Application::RenderDiff()
     {
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted("Selected change is empty.");
-        ImGui::SameLine();
-        render_comparison();
         ImGui::End();
         return;
     }
@@ -2971,6 +3049,9 @@ void Application::RenderDiff()
     static int loaded_context_lines = 3;
     static bool loaded_plain = false;
     static bool dark_palette = !_dark_theme;
+    static int side_selection_anchor = -1;
+    static int side_selection_end = -1;
+    static bool side_selecting = false;
     if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
         || loaded_revision != _diff.revision || loaded_compare_to != _diff.compare_to
         || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
@@ -2984,6 +3065,9 @@ void Application::RenderDiff()
         loaded_whitespace = _diff_whitespace_mode;
         loaded_context_lines = _diff_context_lines;
         loaded_plain = plain;
+        side_selection_anchor = -1;
+        side_selection_end = -1;
+        side_selecting = false;
         if (plain)
         {
             editor.SetLanguage(DiffLanguage(_diff.path));
@@ -3021,12 +3105,46 @@ void Application::RenderDiff()
     const auto render_move_context = [&](TextEditor& view, bool supports_selection, bool side_by_side) {
         ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
         IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
+        const float line_height = std::max(view.GetLineHeight(), 1.0f);
+        const float content_y = ImGui::GetItemRectMin().y + ImGui::GetStyle().WindowPadding.y;
+        const auto mouse_row = [&] {
+            return std::clamp(view.GetFirstVisibleLine()
+                    + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height),
+                0, std::max(0, static_cast<int>(_diff.lines.size()) - 1));
+        };
+        if (side_by_side)
+        {
+            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+                if (!ImGui::GetIO().KeyShift || side_selection_anchor < 0)
+                    side_selection_anchor = mouse_row();
+                side_selection_end = mouse_row();
+                side_selecting = true;
+            }
+            if (side_selecting && ImGui::IsMouseDown(ImGuiMouseButton_Left))
+                side_selection_end = mouse_row();
+            else
+                side_selecting = false;
+            if (side_selection_anchor >= 0 && side_selection_end >= 0
+                && side_selection_anchor != side_selection_end)
+            {
+                const int first = std::min(side_selection_anchor, side_selection_end);
+                const int last = std::max(side_selection_anchor, side_selection_end);
+                const float line_spacing = std::max(line_height - ImGui::GetTextLineHeight(), 0.0f);
+                const float top = view_window->DC.CursorStartPos.y + first * line_height - line_spacing * 0.5f;
+                const float bottom = view_window->DC.CursorStartPos.y + (last + 1) * line_height
+                    - line_spacing * 0.5f;
+                view_window->DrawList->PushClipRect(
+                    view_window->InnerClipRect.Min, view_window->InnerClipRect.Max, true);
+                view_window->DrawList->AddRectFilled(ImVec2(view_window->InnerClipRect.Min.x, top),
+                    ImVec2(view_window->InnerClipRect.Max.x, bottom),
+                    ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.18f));
+                view_window->DrawList->PopClipRect();
+            }
+        }
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
-            const float line_height = std::max(view.GetLineHeight(), 1.0f);
-            const float content_y = ImGui::GetItemRectMin().y + ImGui::GetStyle().WindowPadding.y;
-            context_row = view.GetFirstVisibleLine()
-                + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height);
+            context_row = mouse_row();
             context_revision = _diff.revision;
             context_path = _diff.path;
             context_line.clear();
@@ -3048,6 +3166,13 @@ void Application::RenderDiff()
                     last = selection.end.line;
                     if (last > first && selection.end.column == 0)
                         --last;
+                    context_has_selection = context_row >= first && context_row <= last;
+                }
+                else if (side_by_side && side_selection_anchor >= 0 && side_selection_end >= 0
+                    && side_selection_anchor != side_selection_end)
+                {
+                    first = std::min(side_selection_anchor, side_selection_end);
+                    last = std::max(side_selection_anchor, side_selection_end);
                     context_has_selection = context_row >= first && context_row <= last;
                 }
                 if (!context_has_selection)
@@ -3128,18 +3253,22 @@ void Application::RenderDiff()
             child, context_region, linear_child);
         move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move selection to parent" : "Move hunk to parent",
             parent, context_region, !parent.empty());
-        if (!stale && _snapshot != nullptr && _diff.revision == _snapshot->working_copy)
+        if (!stale && _snapshot != nullptr)
         {
-            const auto revert = [&](const char* label, const std::vector<DiffLine>& lines) {
-                ImGui::BeginDisabled(unsupported || lines.empty());
-                if (ActionMenuItem(ICON_MS_RESTORE, label))
-                    QueueCommands({RevertDiffLines{_diff.revision, _diff.path, lines}}, {_diff.revision},
+            ImGui::Separator();
+            if (_diff.revision == _snapshot->working_copy)
+            {
+                ImGui::BeginDisabled(unsupported || context_line.empty());
+                if (ActionMenuItem(ICON_MS_RESTORE, "Revert line"))
+                    QueueCommands({RevertDiffLines{_diff.revision, _diff.path, context_line}}, {_diff.revision},
                         "Reverting these lines will rewrite the locked working-copy commit.");
                 ImGui::EndDisabled();
-            };
-            ImGui::Separator();
-            revert("Revert line", context_line);
-            revert("Revert hunk", context_hunk);
+            }
+            ImGui::BeginDisabled(unsupported || context_hunk.empty() || _snapshot->working_copy.empty());
+            if (ActionMenuItem(ICON_MS_RESTORE, "Revert hunk"))
+                QueueCommands({RevertFile{_diff.revision, _diff.path, _diff.path, context_hunk}}, {"@"},
+                    "Reverting this hunk will rewrite the locked working-copy commit.");
+            ImGui::EndDisabled();
         }
         ImGui::EndPopup();
     };
@@ -3224,7 +3353,12 @@ void Application::OpenDialog(Dialog dialog)
         const auto selected = std::ranges::find_if(
             _snapshot->revisions, [this](const Revision& revision) { return revision.oid == _selected_revision; });
         if (selected != _snapshot->revisions.end())
+        {
             _input_primary = selected->description;
+            _input_secondary = selected->author;
+            if (!selected->author_email.empty())
+                _input_secondary += " <" + selected->author_email + ">";
+        }
     }
     if (dialog == Dialog::Split || dialog == Dialog::Restore)
         _input_filesets = _selected_file;
@@ -3346,8 +3480,8 @@ void Application::RenderDialogs()
     case Dialog::Metaedit:
         TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        DialogMultiline("Description", &_input_primary, 100.0f, focus_first);
-        DialogInput("Author", "Name <email>", &_input_secondary);
+        DialogMultiline("Description", &_input_primary, 100.0f, focus_first && !_input_flag);
+        DialogInput("Author", "Name <email>", &_input_secondary, focus_first && _input_flag);
         break;
     case Dialog::Rebase:
     {
@@ -3737,14 +3871,15 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
-void Application::CreateChange()
+void Application::CreateChange(bool force_child)
 {
     if (!_active_operation.empty())
         return;
     const auto selected = _selected_revisions.size() == 1
         ? std::ranges::find(_snapshot->revisions, _selected_revisions.front(), &Revision::oid)
         : _snapshot->revisions.end();
-    if (selected != _snapshot->revisions.end() && selected->oid == _snapshot->working_copy && selected->empty)
+    if (!force_child && selected != _snapshot->revisions.end()
+        && selected->oid == _snapshot->working_copy && selected->empty)
     {
         _engine.Enqueue(Refresh{});
         return;
@@ -4452,6 +4587,12 @@ std::pair<std::string, std::size_t> Application::ReferenceBadgeLabelForTest(
     const NamedRef& ref, const std::vector<NamedRef>& refs)
 {
     return ReferenceBadgeLabel(ref, refs);
+}
+
+std::string Application::ClosestBookmarkForTest(const RepoSnapshot& snapshot, const std::string& revision)
+{
+    const NamedRef* bookmark = ClosestBookmark(snapshot, revision);
+    return bookmark == nullptr ? "" : ReferenceLabel(*bookmark);
 }
 
 unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)

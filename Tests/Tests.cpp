@@ -344,6 +344,7 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
     ASSERT_NE(opened, nullptr);
     EXPECT_EQ(opened->revisions.back().description, "base");
+    EXPECT_EQ(opened->revisions.back().author_email, "ggui@example.test");
     ASSERT_EQ(opened->remotes.size(), 1U);
     EXPECT_EQ(opened->remotes.front().name, "origin");
     EXPECT_EQ(opened->remotes.front().fetch_url, "https://example.test/repository.git");
@@ -1086,12 +1087,12 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     });
     ASSERT_NE(later, nullptr);
 
-    engine.Enqueue(RevertFile{source_change, {}, "missing.txt"});
+    engine.Enqueue(RevertFile{source_change, {}, "missing.txt", {}});
     const TerminalEvent missing = WaitForTerminal(engine, "revert file");
     EXPECT_FALSE(missing.finished);
     EXPECT_NE(missing.message.find("no changes"), std::string::npos);
 
-    engine.Enqueue(RevertFile{source_change, "tracked.txt", "tracked.txt"});
+    engine.Enqueue(RevertFile{source_change, "tracked.txt", "tracked.txt", {}});
     const auto reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > later->generation;
     });
@@ -1100,12 +1101,99 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), std::istreambuf_iterator<char>()),
         "one\n2\n3\n4\n5\n6\n7\n8\n9\nTEN\n");
 
-    engine.Enqueue(RevertFile{source_change, "old.txt", "new.txt"});
+    engine.Enqueue(RevertFile{source_change, "old.txt", "new.txt", {}});
     ASSERT_NE(WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > reverted->generation;
     }), nullptr);
     EXPECT_TRUE(std::filesystem::exists(repository.path / "old.txt"));
     EXPECT_FALSE(std::filesystem::exists(repository.path / "new.txt"));
+}
+
+TEST(RepositoryEngine, RevertsSelectedHunksOntoWorkingCopy)
+{
+    TemporaryRepository repository;
+    const auto contents = [](std::string first, std::string fifth) {
+        std::string result = std::move(first) + "\n";
+        for (int line = 2; line <= 20; ++line)
+            result += (line == 5 ? std::move(fifth) : std::to_string(line)) + "\n";
+        return result;
+    };
+    std::ofstream(repository.path / "tracked.txt") << contents("one", "5");
+    const std::string commit = "git -C " + Quote(repository.path)
+        + " add tracked.txt && git -C " + Quote(repository.path) + " commit -m expanded >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+    engine.Enqueue(NewChange{"selected hunks", {}, {}, {}, false});
+    const auto selected = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.working_copy.empty();
+    });
+    ASSERT_NE(selected, nullptr);
+    std::ofstream(repository.path / "tracked.txt") << contents("ONE", "FIVE");
+    engine.Enqueue(Refresh{});
+    const auto changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > selected->generation && !snapshot.status.empty();
+    });
+    ASSERT_NE(changed, nullptr);
+    const std::string source = changed->working_copy;
+    engine.Enqueue(LoadDiff{source, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    std::vector<DiffLine> first_hunk;
+    std::ranges::copy_if(diff->lines, std::back_inserter(first_hunk), [](const DiffLine& line) {
+        return line.hunk == 0 && line.kind != DiffLineKind::Context;
+    });
+    ASSERT_FALSE(first_hunk.empty());
+    ASSERT_TRUE(std::ranges::any_of(diff->lines, [](const DiffLine& line) {
+        return line.hunk == 1 && line.kind != DiffLineKind::Context;
+    }));
+
+    engine.Enqueue(NewChange{"working child", {"@"}, {}, {}, false});
+    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > changed->generation && snapshot.working_copy != source;
+    });
+    ASSERT_NE(child, nullptr);
+    engine.Enqueue(RevertFile{source, "tracked.txt", "tracked.txt", first_hunk});
+    const auto reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > child->generation;
+    });
+    ASSERT_NE(reverted, nullptr);
+    std::ifstream tracked(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), std::istreambuf_iterator<char>()),
+        contents("one", "FIVE"));
+
+    engine.Enqueue(RevertFile{source, "tracked.txt", "tracked.txt",
+        {{DiffLineKind::Addition, -1, 9999, 0}}});
+    const TerminalEvent stale = WaitForTerminal(engine, "revert file");
+    EXPECT_FALSE(stale.finished);
+    EXPECT_NE(stale.message.find("no longer matches"), std::string::npos);
+}
+
+TEST(RepositoryEngine, DeletesWorkingCopyFiles)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+
+    engine.Enqueue(DeleteFile{"missing.txt"});
+    EXPECT_FALSE(WaitForTerminal(engine, "delete file").finished);
+    engine.Enqueue(DeleteFile{"."});
+    EXPECT_FALSE(WaitForTerminal(engine, "delete file").finished);
+
+    engine.Enqueue(DeleteFile{"tracked.txt"});
+    const auto deleted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& file) {
+                   return file.path == "tracked.txt" && file.status == GIT_DELTA_DELETED;
+               });
+    });
+    ASSERT_NE(deleted, nullptr);
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "tracked.txt"));
 }
 
 TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)
@@ -1227,6 +1315,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {RevertDiffLines{"missing-source", "tracked.txt", {{DiffLineKind::Addition, -1, 0, 0}}},
             "revert diff lines"},
         {RevertFile{}, "revert file"},
+        {DeleteFile{"../outside"}, "delete file"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
         {Bookmark{GG_BOOKMARK_RENAME, {"missing"}, "missing", "renamed"}, "bookmark"},
         {Tag{GG_TAG_SET, {"coverage-tag"}, "missing", true}, "tag"},

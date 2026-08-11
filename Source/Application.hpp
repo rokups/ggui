@@ -73,6 +73,7 @@ public:
     static std::string ReferenceLabelForTest(const NamedRef& ref);
     static std::pair<std::string, std::size_t> ReferenceBadgeLabelForTest(
         const NamedRef& ref, const std::vector<NamedRef>& refs);
+    static std::string ClosestBookmarkForTest(const RepoSnapshot& snapshot, const std::string& revision);
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
@@ -172,7 +173,7 @@ private:
         const std::string& revision, bool include_descendants) const;
     std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
         const std::vector<std::string>& revisions) const;
-    void CreateChange();
+    void CreateChange(bool force_child = false);
     void RequestAbandon(const std::string& revision);
     void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
         std::string warning);

@@ -54,11 +54,13 @@ application stay disabled until comparison mode is exited. The Diff context
 selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
 the current working-copy change while preserving later edits where the patch
-applies.
+applies. Working-copy file menus can also delete the file from disk.
 Right-click a text diff to move the clicked line, the active selection, or
 the containing hunk to an adjacent parent or child change; unavailable targets
-and unsupported diff contexts remain disabled. Files in the working-copy
-change also offer line- and hunk-level revert actions.
+and unsupported diff contexts remain disabled. Unified and side-by-side views
+both support multi-line selection. A hunk can be reverted from any selected
+change onto `@`; files in the working-copy change additionally offer line-level
+revert.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
 navigation respects the active Changes filter and stops at the first and last
@@ -66,6 +68,11 @@ matching file. Repository, workspace, file, history, and bookmark context
 menus provide portable open, copy, and rename actions. **Ctrl+W** closes the
 current repository without changing it and returns to the recent-repository
 welcome screen.
+
+The toolbar shows the closest bookmark reachable from the working-copy change.
+In History, **Up/Down** select the adjacent visible change and **N** creates a
+new child of the selected change. Author email is available as a tooltip and
+the author row's context menu supports copying or editing its identity.
 
 Left-drag a graph row onto the top of another row to reorder before it, onto
 the middle to squash, or onto the bottom to rebase. Drop below the final row
@@ -82,7 +89,8 @@ focus. Clone credentials are requested on demand and are never persisted.
 
 Common shortcuts: **Ctrl+O** open repository, **Ctrl+W** close repository,
 **Ctrl+N** new change, **Ctrl+Z/Ctrl+Y** undo/redo, **F5** refresh,
-**Shift+F6/F6** previous/next changed file.
+**Shift+F6/F6** previous/next changed file, **Up/Down** previous/next history
+item, **N** new child of the selected change.
 
 Graph rendering was adapted from the ImGit graph lane renderer; the
 surrounding application architecture is new.

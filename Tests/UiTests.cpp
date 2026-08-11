@@ -164,6 +164,7 @@ RepoSnapshot RichSnapshot()
         {"third", {"base"}, "change-third", "", "Third Author", 2, false, false, false, true},
         {"base", {}, "change-base", "Base", "Base Author", 1, false, false, true},
     };
+    snapshot.revisions.front().author_email = "merger@example.test";
     snapshot.refs = {
         {"coverage-bookmark", {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, true, true},
         {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
@@ -728,6 +729,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                         {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BOOKMARK}),
             "origin/feature");
         const RepoSnapshot snapshot = RichSnapshot();
+        IM_CHECK_EQ(Application::ClosestBookmarkForTest(snapshot, "merge"), "coverage-bookmark");
+        IM_CHECK_EQ(Application::ClosestBookmarkForTest(snapshot, "third"), "upstream/remote-only");
+        IM_CHECK(Application::ClosestBookmarkForTest(snapshot, "missing").empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[5], snapshot.refs),
             std::make_pair(std::string("origin/remote-bookmark"), std::size_t{7}));
         IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[6], snapshot.refs).first.empty());
@@ -816,6 +820,36 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(branch.size(), 5U);
         for (const char* revision : {"base", "left", "right", "third", "merge"})
             IM_CHECK(std::ranges::find(branch, revision) != branch.end());
+        application.SelectRevisionForTest("merge");
+        context->Yield(2);
+        FocusWindow(context, "Change information");
+        ImGuiWindow* change_information = ImGui::FindWindowByName("Change information");
+        IM_CHECK_NE(change_information, nullptr);
+        const ImVec2 author_position = change_information->DC.CursorStartPos
+            + ImVec2(20.0f, ImGui::GetTextLineHeight() * 0.5f);
+        context->MouseMoveToPos(author_position);
+        context->Yield(2);
+        IM_CHECK(GImGui->TooltipPreviousWindow != nullptr);
+        context->MouseClick(ImGuiMouseButton_Right);
+        context->Yield();
+        for (const char* action : {"Copy author", "Copy email", "Edit author"})
+            IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
+        context->ItemClick("**/Copy email");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "merger@example.test");
+        context->SetRef("Change information");
+        context->MouseMoveToPos(author_position);
+        context->MouseClick(ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Edit author");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        const ImGuiID author_input = context->ItemInfo("Author").ID;
+        IM_CHECK_EQ(GImGui->NavId, author_input);
+        const ImGuiInputTextState* author_state = ImGui::GetInputTextState(author_input);
+        IM_CHECK_NE(author_state, nullptr);
+        IM_CHECK_STR_EQ(author_state->TextA.Data, "Merger <merger@example.test>");
+        context->ItemClick("Cancel");
+
         application.SelectRevisionForTest("right");
         context->Yield(3);
 
@@ -1575,6 +1609,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->SetRef("History");
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
+            IM_CHECK(context->ItemExists("**/New"));
             const ImGuiTestItemInfo push_item = context->ItemInfo("**/Push");
             const ImGuiTestItemInfo push_to_item = context->ItemInfo("**/Push to...");
             IM_CHECK_GE(push_to_item.RectFull.Min.y - push_item.RectFull.Min.y,
@@ -1637,6 +1672,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK(context->ItemExists("**/Delete file"));
         IM_CHECK(context->ItemExists("**/Move to parent"));
         IM_CHECK(context->ItemExists("**/Move to child"));
         IM_CHECK_LT(context->ItemInfo("**/Move to child").RectFull.Min.y,
@@ -1651,6 +1687,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK(!context->ItemExists("**/Delete file"));
         IM_CHECK((context->ItemInfo("**/Copy patch").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Save patch...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(context->ItemExists("**/External diff"));
@@ -1828,6 +1865,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         FocusWindow(context, "Diff");
         IM_CHECK(!context->ItemExists("##diff view"));
+        IM_CHECK(!context->ItemExists("Compare with @"));
         IM_CHECK(application.SelectedFileForTest().empty());
     };
 
@@ -1974,6 +2012,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
         }
         IM_CHECK(!context->ItemExists("**/Revert line"));
+        IM_CHECK(context->ItemExists("**/Revert hunk"));
+        IM_CHECK((context->ItemInfo("**/Revert hunk").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
@@ -2023,6 +2063,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
 
+        context->MouseMoveToPos(line_position(1));
+        context->MouseDown();
+        context->Yield();
+        context->MouseMoveToPos(line_position(3));
+        context->Yield();
+        context->MouseUp();
+        context->Yield();
+        open_line(2);
+        IM_CHECK(context->ItemExists("**/Move selection to child"));
+        IM_CHECK(context->ItemExists("**/Move selection to parent"));
+        IM_CHECK(!context->ItemExists("**/Move hunk to child"));
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
         application.SelectRevisionForTest("child");
         DiffResult working_result{1000, "child", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
             {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}}};
@@ -2066,6 +2120,22 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/feature");
         FocusWindow(context, "History");
+
+        context->KeyPress(ImGuiKey_DownArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"right"});
+        context->KeyPress(ImGuiKey_UpArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+        context->KeyPress(ImGuiKey_UpArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+        context->KeyPress(ImGuiKey_UpArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+
+        application.SelectRevisionForTest("left");
+        IM_CHECK_EQ(application.SelectedParentsForTest(), std::vector<std::string>{"change-left"});
 
         context->KeyPress(ImGuiKey_E);
         context->KeyPress(ImGuiKey_N);

@@ -29,6 +29,7 @@ struct Revision
     bool conflicted = false;
     bool pushed = false;
     bool empty = false;
+    std::string author_email{};
 };
 
 struct NamedRef
@@ -155,7 +156,7 @@ struct DiffResult
     bool binary = false;
     git_delta_t selected_status = GIT_DELTA_UNMODIFIED;
     std::vector<StatusEntry> files;
-    std::vector<DiffLine> lines;
+    std::vector<DiffLine> lines{};
     std::string patch;
     std::string old_oid;
     std::string new_oid;
@@ -233,6 +234,11 @@ struct RevertFile
 {
     std::string source;
     std::string old_path;
+    std::string path;
+    std::vector<DiffLine> lines;
+};
+struct DeleteFile
+{
     std::string path;
 };
 struct NewChange
@@ -390,10 +396,10 @@ struct ChmodPaths
 };
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, RevertFile, NewChange, Describe, Metaedit, Edit, MoveChange, Commit,
-    Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, RevertDiffLines,
-    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
-    UntrackPaths, ChmodPaths>;
+    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, RevertFile, DeleteFile, NewChange, Describe, Metaedit, Edit, MoveChange,
+    Commit, Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines,
+    RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget,
+    WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {
