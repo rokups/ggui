@@ -922,6 +922,68 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     EXPECT_TRUE(child_after_return->patch.empty());
 }
 
+TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt") << "one\ntwo\nthree\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add tracked.txt && git -C "
+        + Quote(repository.path) + " commit -m lines >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+    std::ofstream(repository.path / "tracked.txt") << "zero\none\ntwo\nTHREE\n";
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine,
+        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty() && !snapshot.status.empty(); });
+    ASSERT_NE(opened, nullptr);
+    const auto working = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
+    ASSERT_NE(working, opened->revisions.end());
+    const std::string working_change = working->change_id;
+    ASSERT_EQ(working->parents.size(), 1U);
+    engine.Enqueue(RevertDiffLines{
+        working->parents.front(), "tracked.txt", {{DiffLineKind::Addition, -1, 0, 0}}});
+    const TerminalEvent rejected = WaitForTerminal(engine, "revert diff lines");
+    EXPECT_FALSE(rejected.finished);
+    EXPECT_NE(rejected.message.find("working copy"), std::string::npos);
+
+    engine.Enqueue(LoadDiff{working->oid, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}});
+    const auto initial = WaitForDiff(engine);
+    ASSERT_TRUE(initial.has_value());
+    const auto inserted = std::ranges::find_if(initial->lines, [](const DiffLine& line) {
+        return line.kind == DiffLineKind::Addition && line.new_line == 0;
+    });
+    ASSERT_NE(inserted, initial->lines.end());
+
+    engine.Enqueue(RevertDiffLines{working->oid, "tracked.txt", {*inserted}});
+    const auto line_reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.working_copy != working->oid;
+    });
+    ASSERT_NE(line_reverted, nullptr);
+    const auto rewritten = std::ranges::find(line_reverted->revisions, working_change, &Revision::change_id);
+    ASSERT_NE(rewritten, line_reverted->revisions.end());
+    engine.Enqueue(LoadDiff{rewritten->oid, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}});
+    const auto after_line = WaitForDiff(engine);
+    ASSERT_TRUE(after_line.has_value());
+    EXPECT_EQ(after_line->after, "one\ntwo\nTHREE\n");
+
+    std::vector<DiffLine> hunk;
+    std::ranges::copy_if(after_line->lines, std::back_inserter(hunk), [](const DiffLine& line) {
+        return line.kind != DiffLineKind::Context;
+    });
+    ASSERT_EQ(hunk.size(), 2U);
+    engine.Enqueue(RevertDiffLines{rewritten->oid, "tracked.txt", std::move(hunk)});
+    const auto hunk_reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > line_reverted->generation && snapshot.working_copy != rewritten->oid;
+    });
+    ASSERT_NE(hunk_reverted, nullptr);
+    engine.Enqueue(LoadDiff{hunk_reverted->working_copy, "tracked.txt"});
+    const auto clean = WaitForDiff(engine);
+    ASSERT_TRUE(clean.has_value());
+    EXPECT_TRUE(clean->patch.empty());
+}
+
 TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)
 {
     TemporaryRepository repository;
@@ -1038,6 +1100,8 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {MoveDiffLines{"missing-source", "missing-destination", "tracked.txt",
              {{DiffLineKind::Addition, -1, 0, 0}}},
             "move diff lines"},
+        {RevertDiffLines{"missing-source", "tracked.txt", {{DiffLineKind::Addition, -1, 0, 0}}},
+            "revert diff lines"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
         {Bookmark{GG_BOOKMARK_RENAME, {"missing"}, "missing", "renamed"}, "bookmark"},
         {Tag{GG_TAG_SET, {"coverage-tag"}, "missing", true}, "tag"},

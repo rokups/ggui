@@ -1860,6 +1860,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK(context->ItemExists(path.c_str()));
             IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
         }
+        IM_CHECK(!context->ItemExists("**/Revert line"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
@@ -1904,6 +1905,40 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         highlight = line_highlight();
         IM_CHECK_LE(std::fabs(highlight.Min.x - split_x), 0.01f);
         IM_CHECK_GT(highlight.Max.x, split_x);
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        application.SelectRevisionForTest("child");
+        DiffResult working_result{1000, "child", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
+            {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}}};
+        working_result.old_mode = working_result.new_mode = GIT_FILEMODE_BLOB;
+        working_result.lines = {
+            {DiffLineKind::Context, 39, 49, 0},
+            {DiffLineKind::Deletion, 40, -1, 0},
+            {DiffLineKind::Addition, -1, 50, 0},
+            {DiffLineKind::Context, 41, 51, 0},
+        };
+        application.ApplyEventForTest(DiffReady{std::move(working_result)});
+        context->Yield(3);
+        context->SetRef("Diff");
+        if (application.DiffSideBySideForTest())
+        {
+            context->ComboClick("View/Unified");
+            context->Yield();
+        }
+        open_line(1);
+        for (const char* action : {"Revert line", "Revert hunk"})
+        {
+            const std::string path = std::string("**/") + action;
+            IM_CHECK(context->ItemExists(path.c_str()));
+            IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        }
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        open_line(0);
+        IM_CHECK((context->ItemInfo("**/Revert line").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Revert hunk").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
     };

@@ -318,6 +318,12 @@ struct MoveDiffLines
     std::string path;
     std::vector<DiffLine> lines;
 };
+struct RevertDiffLines
+{
+    std::string source;
+    std::string path;
+    std::vector<DiffLine> lines;
+};
 struct SimplifyParents
 {
     std::vector<std::string> revisions;
@@ -378,9 +384,9 @@ struct ChmodPaths
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, ApplyPatch, NewChange, Describe, Metaedit, Edit, MoveChange, Commit, Rebase,
-    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, SimplifyParents,
-    Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths,
-    UntrackPaths, ChmodPaths>;
+    Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines, RevertDiffLines,
+    SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget, WorkspaceRename,
+    TrackPaths, UntrackPaths, ChmodPaths>;
 
 struct SnapshotReady
 {

@@ -1020,7 +1020,7 @@ struct RepositoryEngine::Impl
         PublishSnapshot();
     }
 
-    void MoveDiffSelection(const MoveDiffLines& command)
+    void MoveDiffSelection(const MoveDiffLines& command, bool revert = false)
     {
         Sync();
         if (command.path.empty() || command.lines.empty())
@@ -1029,31 +1029,44 @@ struct RepositoryEngine::Impl
         git_oid source_oid{};
         git_oid destination_oid{};
         Check(gg_repository_resolve(&source_oid, gg, command.source.c_str()), "resolve line move source");
-        Check(gg_repository_resolve(&destination_oid, gg, command.destination.c_str()),
-            "resolve line move destination");
+        if (revert)
+        {
+            git_oid working_copy_oid{};
+            Check(gg_repository_resolve(&working_copy_oid, gg, "@"), "resolve working copy");
+            if (git_oid_equal(&source_oid, &working_copy_oid) == 0)
+                throw std::runtime_error("lines can only be reverted from the working copy");
+        }
+        else
+            Check(gg_repository_resolve(&destination_oid, gg, command.destination.c_str()),
+                "resolve line move destination");
 
         git_commit* raw_source = nullptr;
         git_commit* raw_destination = nullptr;
         Check(git_commit_lookup(&raw_source, git.get(), &source_oid), "load line move source");
-        Check(git_commit_lookup(&raw_destination, git.get(), &destination_oid), "load line move destination");
+        if (!revert)
+            Check(git_commit_lookup(&raw_destination, git.get(), &destination_oid), "load line move destination");
         std::unique_ptr<git_commit, decltype(&git_commit_free)> source(raw_source, git_commit_free);
         std::unique_ptr<git_commit, decltype(&git_commit_free)> destination(raw_destination, git_commit_free);
-        if (git_commit_parentcount(source.get()) != 1)
+        if (!revert && git_commit_parentcount(source.get()) != 1)
             throw std::runtime_error("line move source must have exactly one parent");
 
-        const git_oid* source_parent_oid = git_commit_parent_id(source.get(), 0);
-        const bool move_to_parent = git_oid_equal(source_parent_oid, &destination_oid) != 0;
-        const bool move_to_child = git_commit_parentcount(destination.get()) == 1
+        const git_oid* source_parent_oid = git_commit_parentcount(source.get()) == 0
+            ? nullptr
+            : git_commit_parent_id(source.get(), 0);
+        const bool move_to_parent = !revert && git_oid_equal(source_parent_oid, &destination_oid) != 0;
+        const bool move_to_child = !revert && git_commit_parentcount(destination.get()) == 1
             && git_oid_equal(git_commit_parent_id(destination.get(), 0), &source_oid) != 0;
-        if (!move_to_parent && !move_to_child)
+        if (!revert && !move_to_parent && !move_to_child)
             throw std::runtime_error("line moves require an adjacent parent or child");
 
         git_commit* raw_source_parent = nullptr;
-        Check(git_commit_parent(&raw_source_parent, source.get(), 0), "load line move parent");
+        if (source_parent_oid != nullptr)
+            Check(git_commit_parent(&raw_source_parent, source.get(), 0), "load line move parent");
         std::unique_ptr<git_commit, decltype(&git_commit_free)> source_parent(raw_source_parent, git_commit_free);
         git_tree* raw_before_tree = nullptr;
         git_tree* raw_after_tree = nullptr;
-        Check(git_commit_tree(&raw_before_tree, source_parent.get()), "load line move parent tree");
+        if (source_parent != nullptr)
+            Check(git_commit_tree(&raw_before_tree, source_parent.get()), "load line move parent tree");
         Check(git_commit_tree(&raw_after_tree, source.get()), "load line move source tree");
         std::unique_ptr<git_tree, decltype(&git_tree_free)> before_tree(raw_before_tree, git_tree_free);
         std::unique_ptr<git_tree, decltype(&git_tree_free)> after_tree(raw_after_tree, git_tree_free);
@@ -1218,7 +1231,7 @@ struct RepositoryEngine::Impl
         options.from = synthetic.c_str();
         options.into = into.c_str();
         options.restore_descendants = move_to_child ? 1 : 0;
-        Mutate("move diff lines", [&](auto* out, auto* operation) {
+        Mutate(revert ? "revert diff lines" : "move diff lines", [&](auto* out, auto* operation) {
             return gg_repository_restore(out, gg, &options, operation);
         });
     }
@@ -1377,6 +1390,9 @@ struct RepositoryEngine::Impl
                     });
                 },
                 [&](const MoveDiffLines& value) { MoveDiffSelection(value); },
+                [&](const RevertDiffLines& value) {
+                    MoveDiffSelection(MoveDiffLines{value.source, {}, value.path, value.lines}, true);
+                },
                 [&](const SimplifyParents& value) {
                     gg_simplify_parents_options options = GG_SIMPLIFY_PARENTS_OPTIONS_INIT;
                     const StringArray revisions(value.revisions);
@@ -1486,6 +1502,7 @@ struct RepositoryEngine::Impl
                 [](const Restore&) { return "restore"; },
                 [](const MoveFiles&) { return "move files"; },
                 [](const MoveDiffLines&) { return "move diff lines"; },
+                [](const RevertDiffLines&) { return "revert diff lines"; },
                 [](const SimplifyParents&) { return "simplify parents"; }, [](const Bookmark&) { return "bookmark"; },
                 [](const Tag&) { return "tag"; }, [](const Undo&) { return "undo"; }, [](const Redo&) { return "redo"; },
                 [](const RestoreOperation&) { return "restore operation"; },

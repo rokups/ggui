@@ -2898,6 +2898,7 @@ void Application::RenderDiff()
     static bool context_has_selection = false;
     static std::vector<DiffLine> context_line;
     static std::vector<DiffLine> context_region;
+    static std::vector<DiffLine> context_hunk;
     static std::string context_revision;
     static std::string context_path;
     const auto render_move_context = [&](TextEditor& view, bool supports_selection, bool side_by_side) {
@@ -2913,6 +2914,7 @@ void Application::RenderDiff()
             context_path = _diff.path;
             context_line.clear();
             context_region.clear();
+            context_hunk.clear();
             context_has_selection = false;
             if (context_row >= 0 && context_row < static_cast<int>(_diff.lines.size()))
             {
@@ -2945,6 +2947,10 @@ void Application::RenderDiff()
                         && (context_has_selection || (hunk >= 0 && line.hunk == hunk)))
                         context_region.push_back(line);
                 }
+                if (hunk >= 0)
+                    std::ranges::copy_if(_diff.lines, std::back_inserter(context_hunk), [&](const DiffLine& line) {
+                        return line.kind != DiffLineKind::Context && line.hunk == hunk;
+                    });
             }
             ImGui::OpenPopup("Diff line context");
         }
@@ -2962,13 +2968,14 @@ void Application::RenderDiff()
             return file.path == _diff.path && file.conflicted;
         });
         const bool stale = context_revision != _diff.revision || context_path != _diff.path;
-        const bool unsupported = stale || !linear_source || !_compare_to.empty() || !_active_operation.empty()
+        const bool unsupported = stale || !_compare_to.empty() || !_active_operation.empty()
             || conflicted || _diff.selected_status == GIT_DELTA_RENAMED
             || _diff.selected_status == GIT_DELTA_COPIED || _diff.selected_status == GIT_DELTA_TYPECHANGE
             || IsSymlinkMode(_diff.old_mode)
             || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
             || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
-        if (!unsupported && !context_line.empty() && (linear_child || !parent.empty()))
+        const bool move_unsupported = unsupported || !linear_source;
+        if (!move_unsupported && !context_line.empty() && (linear_child || !parent.empty()))
         {
             const float line_height = std::max(view.GetLineHeight(), 1.0f);
             const float line_spacing = std::max(line_height - ImGui::GetTextLineHeight(), 0.0f);
@@ -2990,7 +2997,7 @@ void Application::RenderDiff()
         }
         const auto move = [&](std::string_view icon, const char* label, const std::string& destination,
                               const std::vector<DiffLine>& lines, bool target_valid) {
-            ImGui::BeginDisabled(unsupported || !target_valid || lines.empty());
+            ImGui::BeginDisabled(move_unsupported || !target_valid || lines.empty());
             if (ActionMenuItem(icon, label))
                 QueueCommands({MoveDiffLines{_diff.revision, destination, _diff.path, lines}},
                     {_diff.revision, destination},
@@ -3004,6 +3011,19 @@ void Application::RenderDiff()
             child, context_region, linear_child);
         move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move selection to parent" : "Move hunk to parent",
             parent, context_region, !parent.empty());
+        if (!stale && _snapshot != nullptr && _diff.revision == _snapshot->working_copy)
+        {
+            const auto revert = [&](const char* label, const std::vector<DiffLine>& lines) {
+                ImGui::BeginDisabled(unsupported || lines.empty());
+                if (ActionMenuItem(ICON_MS_RESTORE, label))
+                    QueueCommands({RevertDiffLines{_diff.revision, _diff.path, lines}}, {_diff.revision},
+                        "Reverting these lines will rewrite the locked working-copy commit.");
+                ImGui::EndDisabled();
+            };
+            ImGui::Separator();
+            revert("Revert line", context_line);
+            revert("Revert hunk", context_hunk);
+        }
         ImGui::EndPopup();
     };
 
