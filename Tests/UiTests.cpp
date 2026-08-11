@@ -399,7 +399,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         context->SetRef("ggui dockspace");
-        for (const char* action : {"New", "Commit", "Move @ earlier", "Move @ later", "Undo", "Redo",
+        for (const char* action : {"New", "Commit", "Prev", "Next", "Undo", "Redo",
                  "Refresh", "Pull", "Fetch", "Push", "Push to..."})
         {
             IM_CHECK(context->ItemExists(action));
@@ -529,6 +529,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Push to...");
         ImGuiWindow* dialog = WaitForWindow(context, "ggui action");
         IM_CHECK_NE(dialog, nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Remote").ID);
         const float width = dialog->SizeFull.x;
         context->Yield(4);
         dialog = ImGui::FindWindowByName("ggui action");
@@ -548,6 +550,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         ApplyOpenDialog(context, "//##MainMenuBar/Repository/Clone...");
+        IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("URL").ID);
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->MouseMove("Apply");
         context->Yield();
@@ -614,9 +617,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK(!context->ItemExists("**/Dismiss error"));
 
-        context->MouseMove("Move @ earlier");
+        context->MouseMove("Prev");
         context->Yield();
-        context->MouseMove("Move @ later");
+        context->MouseMove("Next");
         context->Yield();
         const std::string repository_name = Repository().Path().filename().string();
         context->MouseMove(repository_name.c_str());
@@ -816,6 +819,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Confirm"));
+        IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Cancel").ID);
         context->ItemClick("Cancel");
 
         application.SelectRevisionForTest("third");
@@ -837,6 +841,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("Also abandon all descendants (full branch)"));
         IM_CHECK(context->ItemExists("Also delete bookmark from remote"));
         IM_CHECK(context->ItemIsChecked("Retain bookmarks"));
+        IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Cancel").ID);
         context->ItemCheck("Also delete bookmark from remote");
         context->ItemClick("Cancel");
 
@@ -862,6 +867,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Confirm"));
+        IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Confirm").ID);
         context->ItemClick("Cancel");
     };
 
@@ -1140,8 +1146,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false,
             RichSnapshot().status, "merge"}});
         context->Yield(2);
-        FocusWindow(context, "Changes");
-        IM_CHECK(context->ItemExists("Show change diff"));
+        FocusWindow(context, "Diff");
+        IM_CHECK(context->ItemExists("Compare with @"));
+        IM_CHECK(context->ItemIsChecked("Compare with @"));
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
 
         application.SelectRevisionForTest("right");
@@ -1164,6 +1171,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
         application.SelectRevisionForTest("merge-rewritten");
         IM_CHECK(application.CompareToForTest().empty());
+        context->Yield(2);
+        FocusWindow(context, "Diff");
+        IM_CHECK(!context->ItemIsChecked("Compare with @"));
 
         application.SetSnapshotForTest(RichSnapshot());
         IM_CHECK(application.CanNavigateChangedFileForTest(1));
@@ -1594,7 +1604,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
         context->SetRef("ggui dockspace");
-        for (const char* action : {"Move @ earlier", "Move @ later", "Undo", "Redo", "Refresh"})
+        for (const char* action : {"Prev", "Next", "Undo", "Redo", "Refresh"})
             context->ItemClick(action);
 
         context->MenuClick("//##MainMenuBar/Change/Edit");

@@ -1395,8 +1395,8 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_INFO, "Metaedit...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Metaedit);
         if (ActionMenuItem(ICON_MS_EDIT, "Edit", nullptr, !_selected_revision.empty()))
             _engine.Enqueue(Edit{_selected_revision});
-        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
-        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
         if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Rebase);
         if (ActionMenuItem(ICON_MS_MERGE, "Squash...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Squash);
         if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...", nullptr, !_selected_revision.empty())) OpenDialog(Dialog::Split);
@@ -1472,13 +1472,13 @@ void Application::RenderToolbar()
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.122f, 0.161f, 0.216f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.176f, 0.235f, 0.314f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.208f, 0.278f, 0.369f, 1.0f));
-    if (ActionButton(ICON_MS_ARROW_UPWARD, "Move @ earlier")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+    if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Prev")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Move the working copy one change earlier. This modifies the repository and can be undone.");
+        ImGui::SetTooltip("Move the working copy to its parent. This modifies the repository and can be undone.");
     ImGui::SameLine();
-    if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Move @ later")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+    if (ActionButton(ICON_MS_ARROW_UPWARD, "Next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Move the working copy one change later. This modifies the repository and can be undone.");
+        ImGui::SetTooltip("Move the working copy to its child. This modifies the repository and can be undone.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_undo);
     if (ActionButton(ICON_MS_UNDO, "Undo")) _engine.Enqueue(Undo{});
@@ -2143,9 +2143,9 @@ void Application::RenderHistory()
                     ImGui::EndMenu();
                 }
                 ImGui::Separator();
-                if (ActionMenuItem(ICON_MS_EDIT, "Edit")) _engine.Enqueue(Edit{revision.oid});
+                if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E")) _engine.Enqueue(Edit{revision.oid});
                 if (ActionMenuItem(ICON_MS_DIFFERENCE, "Split...")) { SelectRevision(revision.oid); OpenDialog(Dialog::Split); }
-                if (ActionMenuItem(ICON_MS_DELETE, "Abandon...")) RequestAbandon(revision.oid);
+                if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A")) RequestAbandon(revision.oid);
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
@@ -2390,8 +2390,8 @@ void Application::RenderHistory()
     {
         ImGui::BeginDisabled(actions_locked);
         std::optional<DropAction> action;
-        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move before")) action = DropAction::ReorderBefore;
-        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move after")) action = DropAction::ReorderAfter;
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move before")) action = DropAction::ReorderBefore;
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move after")) action = DropAction::ReorderAfter;
         if (ActionMenuItem(ICON_MS_MERGE, "Squash")) action = DropAction::Squash;
         if (ActionMenuItem(ICON_MS_REBASE, "Rebase")) action = DropAction::Rebase;
         if (action.has_value())
@@ -2414,16 +2414,6 @@ void Application::RenderChanges()
     }
     const bool actions_locked = !_active_operation.empty();
     const bool comparing = !_compare_to.empty();
-    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
-        || (!comparing && _selected_revision == _snapshot->working_copy));
-    if (ImGui::SmallButton(comparing ? "Show change diff" : "Compare with @"))
-        ToggleComparison();
-    ImGui::EndDisabled();
-    if (comparing)
-    {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
-    }
     std::string parent;
     std::string child;
     const auto source = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
@@ -2526,12 +2516,12 @@ void Application::RenderChanges()
             }
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked || comparing || parent.empty());
-            if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to parent"))
+            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to parent"))
                 QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
             ImGui::BeginDisabled(actions_locked || comparing || child.empty());
-            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to child"))
+            if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to child"))
                 QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
@@ -2681,6 +2671,17 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
+    bool comparing = !_compare_to.empty();
+    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
+        || (!comparing && _selected_revision == _snapshot->working_copy));
+    if (ImGui::Checkbox("Compare with @", &comparing))
+        ToggleComparison();
+    ImGui::EndDisabled();
+    if (!_compare_to.empty())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
+    }
     if (_diff_loading)
     {
         const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
@@ -2788,6 +2789,8 @@ void Application::RenderDiff()
     if (ImGui::BeginPopupModal("Save Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
         ImGui::TextUnformatted("Save patch to file");
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(FontPx(420.0f));
         ImGui::InputText("Path", patch_save_path, IM_ARRAYSIZE(patch_save_path));
         if (ImGui::Button("Save"))
@@ -2827,6 +2830,8 @@ void Application::RenderDiff()
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
+        if (ImGui::IsWindowAppearing())
+            ImGui::SetKeyboardFocusHere();
         if (ImGui::Button("Cancel"))
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
@@ -3076,8 +3081,6 @@ void Application::RenderDialogs()
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
         ImGui::TextWrapped("and restack its descendants. This remains undoable.");
-        if (focus_first)
-            ImGui::SetKeyboardFocusHere();
         if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary)
             && _input_flag_tertiary)
         {
@@ -3150,6 +3153,8 @@ void Application::RenderDialogs()
     case Dialog::PushTo:
         ImGui::Text("Push bookmark %s", _input_secondary.c_str());
         ImGui::TextUnformatted("Remote");
+        if (focus_first)
+            ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(-1.0f);
         if (ImGui::BeginCombo("###Remote", _input_primary.c_str()))
         {
@@ -3216,7 +3221,9 @@ void Application::RenderDialogs()
     const bool operation_blocks_submit = !_active_operation.empty() && _dialog != Dialog::Credentials;
     const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
-    if (focus_first && (_dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked))
+    const bool focus_submit = _dialog == Dialog::ConfirmDrop;
+    const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked;
+    if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
     const char* submit_label = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm" : "Apply";
@@ -3229,6 +3236,8 @@ void Application::RenderDialogs()
         SubmitDialog();
     ImGui::EndDisabled();
     ImGui::SameLine();
+    if (focus_first && focus_cancel)
+        ImGui::SetKeyboardFocusHere();
     const bool cancel = ImGui::Button("Cancel", ImVec2(110.0f, 0.0f)) || cancel_shortcut;
     ImGui::SameLine();
     ImGui::TextDisabled("Ctrl+Enter apply | Esc cancel");
