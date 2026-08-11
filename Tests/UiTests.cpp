@@ -1397,6 +1397,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Rebase...");
         context->ItemInputValue("Destination", "base");
+        context->ItemCheck("Rebase entire branch");
         context->ItemClick("Apply");
         context->Yield(2);
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Split...");
@@ -1447,6 +1448,35 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "RebaseBranchPreview");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        for (Revision& revision : snapshot.revisions)
+            if (revision.oid == "left")
+            {
+                revision.description = "First source-side change with a deliberately long description line\nbody";
+                revision.pushed = true;
+            }
+        snapshot.revisions.insert(snapshot.revisions.begin(),
+            {"tip", {"left"}, "change-tip", "Current source tip", "Tip Author", 6, false, false, false});
+        application.SetSnapshotForTest(std::move(snapshot));
+        application.SelectRevisionForTest("tip");
+        context->Yield(2);
+
+        ApplyOpenDialog(context, "//##MainMenuBar/Change/Rebase...");
+        IM_CHECK_EQ(application.RebaseSourceForTest(), "tip");
+        context->ItemInputValue("Destination", "right");
+        context->Yield();
+        IM_CHECK_EQ(application.RebaseSourceForTest(), "tip");
+        IM_CHECK(!application.DialogModifiesLockedCommitForTest());
+        context->ItemCheck("Rebase entire branch");
+        context->Yield();
+        IM_CHECK_EQ(application.RebaseSourceForTest(), "left");
+        IM_CHECK(application.DialogModifiesLockedCommitForTest());
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "GraphAndContextMenus");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
@@ -1461,6 +1491,26 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             const ImGuiTestItemInfo next = context->ItemInfo(rows[row + 1]);
             IM_CHECK_LE(current.RectFull.GetHeight(), 36.0f);
             IM_CHECK_LE(std::fabs(current.RectFull.Max.y - next.RectFull.Min.y), 0.01f);
+        }
+        if (rows.size() >= 3)
+        {
+            application.SelectRevisionForTest("left");
+            context->Yield(2);
+            context->SetRef("History");
+            context->ItemClick(rows[2], ImGuiMouseButton_Right);
+            context->Yield();
+            IM_CHECK((context->ItemInfo("**/Rebase...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+            context->ItemClick("**/Rebase...");
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            context->SetRef("ggui action");
+            IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+            IM_CHECK_EQ(application.DialogDestinationForTest(), "right");
+            IM_CHECK(context->ItemExists("Rebase entire branch"));
+            IM_CHECK(!context->ItemIsChecked("Rebase entire branch"));
+            context->ItemCheck("Rebase entire branch");
+            context->ItemClick("Cancel");
+            application.SelectRevisionForTest("merge");
+            context->Yield(2);
         }
         if (rows.size() >= 2)
         {
@@ -1560,7 +1610,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Metaedit...", "Edit", "Rebase...", "Squash...", "Split...", "Restore...",
+            for (const char* action : {"Metaedit...", "Edit", "Squash...", "Split...", "Restore...",
                      "Abandon..."})
             {
                 context->SetRef("History");

@@ -268,6 +268,7 @@ struct Rebase
 {
     std::string source;
     std::string destination;
+    bool entire_branch = false;
 };
 struct Reorder
 {

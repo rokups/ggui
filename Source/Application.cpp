@@ -34,6 +34,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <unordered_set>
 #include <utility>
 
 namespace Ggui
@@ -686,6 +687,89 @@ std::string RepositoryName(const std::string& root)
     const std::filesystem::path path(root);
     const std::filesystem::path name = path.filename().empty() ? path.parent_path().filename() : path.filename();
     return name.empty() ? root : name.string();
+}
+
+const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier)
+{
+    if (identifier.empty())
+        return nullptr;
+    if (identifier == "@")
+        identifier = snapshot.working_copy;
+    bool ambiguous = false;
+    const auto unique_prefix = [&](auto member) {
+        const Revision* result = nullptr;
+        for (const Revision& revision : snapshot.revisions)
+            if ((revision.*member).starts_with(identifier))
+            {
+                if (result != nullptr && result->oid != revision.oid)
+                {
+                    ambiguous = true;
+                    return static_cast<const Revision*>(nullptr);
+                }
+                result = &revision;
+            }
+        return result;
+    };
+    const Revision* change = unique_prefix(&Revision::change_id);
+    if (change != nullptr || ambiguous)
+        return change;
+    for (const NamedRef& ref : snapshot.refs)
+        if ((ref.remote.empty() && ref.name == identifier)
+            || (!ref.remote.empty() && ref.remote + "/" + ref.name == identifier))
+            if (const auto revision = std::ranges::find(snapshot.revisions, ref.target, &Revision::oid);
+                revision != snapshot.revisions.end())
+                return &*revision;
+    return unique_prefix(&Revision::oid);
+}
+
+const Revision* RebaseBranchRoot(
+    const RepoSnapshot& snapshot, std::string_view source, std::string_view destination)
+{
+    const Revision* source_revision = ResolveSnapshotRevision(snapshot, source);
+    const Revision* destination_revision = ResolveSnapshotRevision(snapshot, destination);
+    if (source_revision == nullptr || destination_revision == nullptr)
+        return nullptr;
+    std::unordered_map<std::string_view, const Revision*> by_oid;
+    for (const Revision& revision : snapshot.revisions)
+        by_oid.emplace(revision.oid, &revision);
+    const auto ancestors = [&](const Revision* start) {
+        std::unordered_set<std::string_view> result;
+        std::vector<const Revision*> pending{start};
+        while (!pending.empty())
+        {
+            const Revision* revision = pending.back();
+            pending.pop_back();
+            if (!result.emplace(revision->oid).second)
+                continue;
+            for (const std::string& parent : revision->parents)
+                if (const auto found = by_oid.find(parent); found != by_oid.end())
+                    pending.push_back(found->second);
+        }
+        return result;
+    };
+    std::unordered_set<std::string_view> source_only = ancestors(source_revision);
+    for (std::string_view oid : ancestors(destination_revision))
+        source_only.erase(oid);
+    const Revision* root = nullptr;
+    for (std::string_view oid : source_only)
+    {
+        const Revision* revision = by_oid.at(oid);
+        if (std::ranges::none_of(revision->parents, [&](const std::string& parent) {
+                return source_only.contains(parent);
+            }))
+        {
+            if (root != nullptr)
+                return nullptr;
+            root = revision;
+        }
+    }
+    return root;
+}
+
+std::string LimitedFragment(std::string_view text, std::size_t maximum)
+{
+    return text.size() <= maximum ? std::string(text)
+                                  : std::string(text.substr(0, maximum - 3)) + "...";
 }
 
 } // namespace
@@ -1465,7 +1549,13 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         select();
         _engine.Enqueue(Edit{revision});
     }
-    dialog(ICON_MS_REBASE, "Rebase...", nullptr, Dialog::Rebase);
+    const bool can_rebase = !select_revision || (!_selected_revision.empty() && revision != _selected_revision);
+    if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, enabled && can_rebase))
+    {
+        OpenDialog(Dialog::Rebase);
+        if (select_revision)
+            _input_primary = revision;
+    }
     dialog(ICON_MS_MERGE, "Squash...", nullptr, Dialog::Squash);
     dialog(ICON_MS_DIFFERENCE, "Split...", "S", Dialog::Split);
     dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
@@ -3256,10 +3346,26 @@ void Application::RenderDialogs()
         DialogInput("Author", "Name <email>", &_input_secondary);
         break;
     case Dialog::Rebase:
+    {
         TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         DialogInput("Destination", "change ID, bookmark, or commit ID", &_input_primary, focus_first);
+        ImGui::Checkbox("Rebase entire branch", &_input_flag);
+        const Revision* source = RebaseSource();
+        if (source == nullptr)
+            ImGui::TextDisabled("Rebase source unavailable for these revisions.");
+        else
+        {
+            TextLabelledId("Rebase starts at ", source->oid, RevisionPrefix(source->oid),
+                CommitIdColor(source->working_copy));
+            ImGui::SameLine();
+            const std::string first_line =
+                source->description.empty() ? "(no description)" : FirstLine(source->description);
+            const std::string description = LimitedFragment(first_line, 48);
+            ImGui::TextDisabled("— %s", description.c_str());
+        }
         break;
+    }
     case Dialog::Squash:
         TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
@@ -3460,7 +3566,7 @@ void Application::SubmitDialog()
     case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
     case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Metaedit: _engine.Enqueue(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
-    case Dialog::Rebase: _engine.Enqueue(Rebase{_selected_revision, _input_primary}); break;
+    case Dialog::Rebase: _engine.Enqueue(Rebase{_selected_revision, _input_primary, _input_flag}); break;
     case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
     case Dialog::Split: _engine.Enqueue(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Abandon:
@@ -3672,7 +3778,11 @@ bool Application::DialogModifiesLockedCommit() const
         return std::ranges::any_of(
             revisions, [this](const std::string& revision) { return IsLocked(revision); });
     }
-    case Dialog::Rebase: return IsLocked(_selected_revision) || IsLocked(_input_primary);
+    case Dialog::Rebase:
+    {
+        const Revision* source = RebaseSource();
+        return IsLocked(source == nullptr ? _selected_revision : source->oid);
+    }
     case Dialog::Squash:
     {
         std::string destination = _input_secondary;
@@ -3689,6 +3799,14 @@ bool Application::DialogModifiesLockedCommit() const
     case Dialog::ConfirmLocked: return true;
     default: return false;
     }
+}
+
+const Revision* Application::RebaseSource() const
+{
+    if (_snapshot == nullptr)
+        return nullptr;
+    return _input_flag ? RebaseBranchRoot(*_snapshot, _selected_revision, _input_primary)
+                       : ResolveSnapshotRevision(*_snapshot, _selected_revision);
 }
 
 void Application::QueueCommands(
@@ -4193,6 +4311,22 @@ std::vector<std::string> Application::AbandonRevisionsForTest(const std::string&
 std::vector<std::string> Application::DialogFilesetsForTest() const
 {
     return SplitLines(_input_filesets);
+}
+
+const std::string& Application::DialogDestinationForTest() const
+{
+    return _input_primary;
+}
+
+std::string Application::RebaseSourceForTest() const
+{
+    const Revision* source = RebaseSource();
+    return source == nullptr ? "" : source->oid;
+}
+
+bool Application::DialogModifiesLockedCommitForTest() const
+{
+    return DialogModifiesLockedCommit();
 }
 
 void Application::ApplyEventForTest(Event event)

@@ -922,6 +922,69 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     EXPECT_TRUE(child_after_return->patch.empty());
 }
 
+TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.revisions.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+    const auto base = std::ranges::find(opened->revisions, "base", &Revision::description);
+    ASSERT_NE(base, opened->revisions.end());
+
+    engine.Enqueue(NewChange{"branch root", {base->oid}, {}, {}, false});
+    const auto root_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "branch root";
+               });
+    });
+    ASSERT_NE(root_snapshot, nullptr);
+    const auto root = std::ranges::find(root_snapshot->revisions, "branch root", &Revision::description);
+    ASSERT_NE(root, root_snapshot->revisions.end());
+    const std::string root_change = root->change_id;
+
+    engine.Enqueue(NewChange{"branch tip", {"@"}, {}, {}, false});
+    const auto tip_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > root_snapshot->generation
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "branch tip";
+               });
+    });
+    ASSERT_NE(tip_snapshot, nullptr);
+    const auto tip = std::ranges::find(tip_snapshot->revisions, "branch tip", &Revision::description);
+    ASSERT_NE(tip, tip_snapshot->revisions.end());
+    const std::string tip_change = tip->change_id;
+
+    engine.Enqueue(NewChange{"destination", {base->oid}, {}, {}, false});
+    const auto destination_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > tip_snapshot->generation
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "destination";
+               });
+    });
+    ASSERT_NE(destination_snapshot, nullptr);
+    const auto destination =
+        std::ranges::find(destination_snapshot->revisions, "destination", &Revision::description);
+    ASSERT_NE(destination, destination_snapshot->revisions.end());
+    const std::string destination_change = destination->change_id;
+
+    engine.Enqueue(Rebase{tip_change, destination_change, true});
+    const auto rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= destination_snapshot->generation)
+            return false;
+        const auto rewritten_root = std::ranges::find(snapshot.revisions, root_change, &Revision::change_id);
+        const auto rewritten_tip = std::ranges::find(snapshot.revisions, tip_change, &Revision::change_id);
+        const auto target = std::ranges::find(snapshot.revisions, destination_change, &Revision::change_id);
+        return rewritten_root != snapshot.revisions.end() && rewritten_tip != snapshot.revisions.end()
+            && target != snapshot.revisions.end() && rewritten_root->parents == std::vector{target->oid}
+            && rewritten_tip->parents == std::vector{rewritten_root->oid};
+    });
+    ASSERT_NE(rebased, nullptr);
+}
+
 TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
 {
     TemporaryRepository repository;

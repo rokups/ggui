@@ -69,6 +69,8 @@ the middle to squash, or onto the bottom to rebase. Drop below the final row
 to reorder after it. Right-drag anywhere onto a row to choose the action from
 a popup menu. Every graph drop shows a confirmation preview and remains
 undoable through gg's operation history.
+Right-click **Rebase** rebases the currently selected change onto that row;
+the dialog can instead rebase the entire branch from its divergence point.
 
 Repository and libgit2 handles stay on one worker thread. The UI exchanges
 typed commands and immutable snapshots with that worker. External Git and

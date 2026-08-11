@@ -49,6 +49,9 @@ public:
     void SelectRevisionForTest(const std::string& oid, bool additive = false);
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
+    const std::string& DialogDestinationForTest() const;
+    std::string RebaseSourceForTest() const;
+    bool DialogModifiesLockedCommitForTest() const;
     void ApplyEventForTest(Event event);
     void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
     void ShowWorkspaceRenameForTest();
@@ -175,6 +178,7 @@ private:
         std::string warning);
     bool IsLocked(const std::string& revision) const;
     bool DialogModifiesLockedCommit() const;
+    const Revision* RebaseSource() const;
     static gg_reorder_placement DropPlacement(DropAction action);
     static std::string DropTooltip(DropAction action, std::string_view target);
     bool CanCreateChange() const;

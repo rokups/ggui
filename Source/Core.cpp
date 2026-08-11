@@ -1311,10 +1311,24 @@ struct RepositoryEngine::Impl
                     });
                 },
                 [&](const Rebase& value) {
-                    gg_rebase_options options = GG_REBASE_OPTIONS_INIT;
-                    options.source = value.source.c_str();
-                    options.destination = value.destination.c_str();
                     Mutate("rebase change", [&](auto* out, auto* operation) {
+                        std::string source = value.source;
+                        if (value.entire_branch)
+                        {
+                            git_oid source_oid{}, destination_oid{}, branch_oid{};
+                            Check(gg_repository_resolve(&source_oid, gg, value.source.c_str()),
+                                "resolve rebase source");
+                            Check(gg_repository_resolve(&destination_oid, gg, value.destination.c_str()),
+                                "resolve rebase destination");
+                            const std::string branch = "roots(ancestors(" + OidString(source_oid)
+                                + ") ~ ancestors(" + OidString(destination_oid) + "))";
+                            Check(gg_repository_resolve(&branch_oid, gg, branch.c_str()),
+                                "find rebase branch divergence");
+                            source = OidString(branch_oid);
+                        }
+                        gg_rebase_options options = GG_REBASE_OPTIONS_INIT;
+                        options.source = source.c_str();
+                        options.destination = value.destination.c_str();
                         return gg_repository_rebase(out, gg, &options, operation);
                     });
                 },
