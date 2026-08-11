@@ -119,12 +119,64 @@ CPMAddPackage(
   OPTIONS "JSON_BuildTests OFF"
   EXCLUDE_FROM_ALL TRUE)
 
+set(imgui_color_text_edit_revision fa6fd434d3db973e604653d2147316f41d49ed56)
 CPMAddPackage(
   NAME ImGuiColorTextEdit
   GITHUB_REPOSITORY goossens/ImGuiColorTextEdit
-  GIT_TAG fa6fd434d3db973e604653d2147316f41d49ed56
-  PATCHES cmake/ImGuiColorTextEdit-line-numbers.patch
+  GIT_TAG ${imgui_color_text_edit_revision}
   DOWNLOAD_ONLY YES)
+# CPM patch steps are not safe to rerun over an already-patched FetchContent checkout.
+# Include exact source hashes in the stamp so stale and partially applied caches self-repair.
+set(imgui_color_text_edit_patches
+  ImGuiColorTextEdit-line-numbers.patch
+  ImGuiColorTextEdit-centered-highlights.patch)
+set(imgui_color_text_edit_sources TextDiff.cpp TextDiff.h TextEditor.cpp)
+set(imgui_color_text_edit_patch_state ${imgui_color_text_edit_revision})
+foreach(patch_file IN LISTS imgui_color_text_edit_patches)
+  file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${patch_file}" patch_hash)
+  string(APPEND imgui_color_text_edit_patch_state ";${patch_hash}")
+endforeach()
+set(imgui_color_text_edit_state "${imgui_color_text_edit_patch_state}")
+foreach(source_file IN LISTS imgui_color_text_edit_sources)
+  file(SHA256 "${ImGuiColorTextEdit_SOURCE_DIR}/${source_file}" source_hash)
+  string(APPEND imgui_color_text_edit_state ";${source_hash}")
+endforeach()
+set(imgui_color_text_edit_stamp "${CMAKE_CURRENT_BINARY_DIR}/ImGuiColorTextEdit-patches.stamp")
+set(imgui_color_text_edit_patched FALSE)
+if(EXISTS "${imgui_color_text_edit_stamp}")
+  file(READ "${imgui_color_text_edit_stamp}" stamped_state)
+  if(stamped_state STREQUAL imgui_color_text_edit_state)
+    set(imgui_color_text_edit_patched TRUE)
+  endif()
+endif()
+if(NOT imgui_color_text_edit_patched)
+  find_package(Git REQUIRED)
+  foreach(source_file IN LISTS imgui_color_text_edit_sources)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${ImGuiColorTextEdit_SOURCE_DIR}" show "HEAD:${source_file}"
+      OUTPUT_FILE "${ImGuiColorTextEdit_SOURCE_DIR}/${source_file}"
+      RESULT_VARIABLE restore_result)
+    if(NOT restore_result EQUAL 0)
+      message(FATAL_ERROR "Could not restore ImGuiColorTextEdit ${source_file}")
+    endif()
+  endforeach()
+  foreach(patch_file IN LISTS imgui_color_text_edit_patches)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" apply --unidiff-zero
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${patch_file}"
+      WORKING_DIRECTORY "${ImGuiColorTextEdit_SOURCE_DIR}"
+      RESULT_VARIABLE patch_result)
+    if(NOT patch_result EQUAL 0)
+      message(FATAL_ERROR "Could not apply ${patch_file}")
+    endif()
+  endforeach()
+  set(imgui_color_text_edit_state "${imgui_color_text_edit_patch_state}")
+  foreach(source_file IN LISTS imgui_color_text_edit_sources)
+    file(SHA256 "${ImGuiColorTextEdit_SOURCE_DIR}/${source_file}" source_hash)
+    string(APPEND imgui_color_text_edit_state ";${source_hash}")
+  endforeach()
+  file(WRITE "${imgui_color_text_edit_stamp}" "${imgui_color_text_edit_state}")
+endif()
 add_library(imgui_color_text_edit STATIC EXCLUDE_FROM_ALL
   ${ImGuiColorTextEdit_SOURCE_DIR}/TextEditor.cpp
   ${ImGuiColorTextEdit_SOURCE_DIR}/TextDiff.cpp)
