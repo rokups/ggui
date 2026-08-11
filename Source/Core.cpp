@@ -886,7 +886,8 @@ struct RepositoryEngine::Impl
 
             git_diff* display_diff = diff.get();
             std::unique_ptr<git_diff, decltype(&git_diff_free)> filtered_diff(nullptr, git_diff_free);
-            if (command.options.whitespace_mode != DiffWhitespaceMode::Normal || command.options.context_lines != 3)
+            if (command.options.context_lines >= 0
+                && (command.options.whitespace_mode != DiffWhitespaceMode::Normal || command.options.context_lines != 3))
             {
                 git_diff_options options = GIT_DIFF_OPTIONS_INIT;
                 options.context_lines = static_cast<uint32_t>(std::max(command.options.context_lines, 0));
@@ -903,7 +904,7 @@ struct RepositoryEngine::Impl
             }
 
             const bool submodule = (result.old_mode & 0170000U) == 0160000U || (result.new_mode & 0170000U) == 0160000U;
-            if (!result.binary && !submodule)
+            if (!result.binary && !submodule && command.options.context_lines >= 0)
             {
                 size_t display_index = git_diff_num_deltas(display_diff);
                 for (size_t index = 0; index < git_diff_num_deltas(display_diff); ++index)

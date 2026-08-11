@@ -264,7 +264,7 @@ const TextEditor::Language* DiffLanguage(const std::string& path)
     return nullptr;
 }
 
-constexpr std::array kDiffContextChoices{0, 1, 3, 5, 10, 25};
+constexpr std::array kDiffContextChoices{0, 1, 3, 5, 10, 25, -1};
 
 int WhitespaceModeIndex(DiffWhitespaceMode mode)
 {
@@ -301,7 +301,8 @@ const char* ContextLineChoiceLabel(int index)
     case 3: return "3 lines";
     case 5: return "5 lines";
     case 10: return "10 lines";
-    default: return "25 lines";
+    case 25: return "25 lines";
+    default: return "Full";
     }
 }
 
@@ -2705,6 +2706,11 @@ void Application::RenderDiff()
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Compare only the selected file with the working copy.");
+        if (!_diff_loading && comparing && _diff.selected_status == GIT_DELTA_UNMODIFIED)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("Files are identical");
+        }
     };
     if (_diff_loading)
     {

@@ -703,6 +703,13 @@ TEST(RepositoryEngine, ComparesTwoRevisionTrees)
     EXPECT_EQ(file_comparison->before, "base\n");
     EXPECT_EQ(file_comparison->after, "base\n");
     EXPECT_FALSE(file_comparison->patch.empty());
+
+    engine.Enqueue(LoadDiff{base->oid, "tracked.txt", false, options, base->oid, true});
+    const auto identical = WaitForDiff(engine);
+    ASSERT_TRUE(identical.has_value());
+    EXPECT_EQ(identical->selected_status, GIT_DELTA_UNMODIFIED);
+    EXPECT_EQ(identical->before, identical->after);
+    EXPECT_TRUE(identical->patch.empty());
 }
 
 TEST(RepositoryEngine, ClosesAndReopensWithoutWatcherEvents)
@@ -794,6 +801,26 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
     ASSERT_TRUE(filtered.has_value());
     EXPECT_EQ(filtered->before, "line03\n");
     EXPECT_EQ(filtered->after, "changed\n");
+
+    const auto working_copy = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
+    ASSERT_NE(working_copy, opened->revisions.end());
+    ASSERT_EQ(working_copy->parents.size(), 1U);
+    engine.Enqueue(LoadDiff{working_copy->parents.front(), "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}, opened->working_copy, true});
+    const auto compared = WaitForDiff(engine);
+    ASSERT_TRUE(compared.has_value());
+    EXPECT_TRUE(compared->file_comparison);
+    EXPECT_EQ(compared->before, "line03\nline08\n");
+    EXPECT_EQ(compared->after, "changed\nline 08\n");
+
+    engine.Enqueue(LoadDiff{working_copy->parents.front(), "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}, opened->working_copy, true});
+    const auto full = WaitForDiff(engine);
+    ASSERT_TRUE(full.has_value());
+    EXPECT_EQ(full->before,
+        "line01\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\n");
+    EXPECT_EQ(full->after,
+        "line01\nline02\nchanged\nline04\nline05\nline06\nline07\nline 08\nline09\nline10\n");
 }
 
 TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)

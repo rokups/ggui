@@ -1198,6 +1198,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemIsChecked("Compare with @"));
         IM_CHECK(context->ItemExists("##diff view"));
         IM_CHECK(!context->ItemExists("##file view"));
+        DiffResult identical{1000, "left", "added.txt", "same\n", "same\n", false,
+            RichSnapshot().status, "merge", true};
+        identical.selected_status = GIT_DELTA_UNMODIFIED;
+        application.ApplyEventForTest(DiffReady{std::move(identical)});
+        context->Yield(2);
+        FocusWindow(context, "Diff");
+        IM_CHECK(context->ItemIsChecked("Compare with @"));
         application.ToggleComparisonForTest();
         IM_CHECK(!application.FileComparisonForTest());
         IM_CHECK_EQ(application.CompareToForTest(), "merge");
@@ -1707,6 +1714,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_GT(context->ItemInfo("Compare with @").RectFull.Min.x,
             context->ItemInfo("External Diff").RectFull.Max.x);
         context->SetRef("Diff");
+        context->ItemClick("##context lines");
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Full"));
+        context->KeyPress(ImGuiKey_Escape);
         context->ComboClick("View/Unified");
         context->Yield();
         IM_CHECK(!application.DiffSideBySideForTest());

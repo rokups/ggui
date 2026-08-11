@@ -50,7 +50,8 @@ in Diff compares only the selected file while leaving the normal changed-file
 list intact. Comparisons follow rewritten changes and the latest `@`, keep the
 preferred file selected when possible, and support the same patch export and
 external-diff actions as a normal change diff. File mutations and patch
-application stay disabled until comparison mode is exited.
+application stay disabled until comparison mode is exited. The Diff context
+selector includes **Full** for displaying both complete file versions.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
 navigation respects the active Changes filter and stops at the first and last
