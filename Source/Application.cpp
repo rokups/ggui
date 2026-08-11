@@ -2891,6 +2891,8 @@ void Application::RenderDiff()
     static std::string context_revision;
     static std::string context_path;
     const auto render_move_context = [&](TextEditor& view, bool supports_selection) {
+        ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
+        IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
             const float line_height = std::max(view.GetLineHeight(), 1.0f);
@@ -2956,6 +2958,16 @@ void Application::RenderDiff()
             || IsSymlinkMode(_diff.old_mode)
             || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
             || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
+        if (!unsupported && !context_line.empty() && (linear_child || !parent.empty()))
+        {
+            const float line_height = std::max(view.GetLineHeight(), 1.0f);
+            const float line_y = view_window->DC.CursorStartPos.y + context_row * line_height;
+            view_window->DrawList->PushClipRect(view_window->InnerClipRect.Min, view_window->InnerClipRect.Max, true);
+            view_window->DrawList->AddRectFilled(ImVec2(view_window->InnerClipRect.Min.x, line_y),
+                ImVec2(view_window->InnerClipRect.Max.x, line_y + line_height),
+                ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.28f));
+            view_window->DrawList->PopClipRect();
+        }
         const auto move = [&](std::string_view icon, const char* label, const std::string& destination,
                               const std::vector<DiffLine>& lines, bool target_valid) {
             ImGui::BeginDisabled(unsupported || !target_valid || lines.empty());

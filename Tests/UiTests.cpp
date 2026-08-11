@@ -1826,8 +1826,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield();
             context->SetRef("//$FOCUSED");
         };
+        const auto line_is_highlighted = [&] {
+            ImGuiWindow* window = ImGui::FindWindowByName("Diff");
+            const auto child = std::ranges::find_if(window->DC.ChildWindows,
+                [&](const ImGuiWindow* candidate) { return candidate->ChildId == view.ID; });
+            const ImU32 color = ImGui::GetColorU32(ImGuiCol_NavHighlight, 0.28f);
+            return child != window->DC.ChildWindows.end()
+                && std::ranges::any_of((*child)->DrawList->VtxBuffer,
+                    [&](const ImDrawVert& vertex) { return vertex.col == color; });
+        };
 
         open_line(1);
+        IM_CHECK(line_is_highlighted());
         for (const char* action : {"Move line to child", "Move line to parent", "Move hunk to child",
                  "Move hunk to parent"})
         {
@@ -1840,6 +1850,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
 
         open_line(0);
+        IM_CHECK(!line_is_highlighted());
         IM_CHECK((context->ItemInfo("**/Move line to child").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Move line to parent").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Move hunk to child").ItemFlags & ImGuiItemFlags_Disabled) == 0);
