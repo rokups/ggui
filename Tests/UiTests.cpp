@@ -1753,6 +1753,27 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DiffRemainsVisibleWhileLoading");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false, RichSnapshot().status}});
+        context->Yield(2);
+
+        application.SelectRevisionForTest("right");
+        context->Yield(2);
+        FocusWindow(context, "Diff");
+        IM_CHECK(context->ItemExists("##diff view"));
+
+        application.ApplyEventForTest(DiffReady{{1000, "right", {}, {}, {}, false, {}}});
+        context->Yield(2);
+        FocusWindow(context, "Diff");
+        IM_CHECK(!context->ItemExists("##diff view"));
+        IM_CHECK(application.SelectedFileForTest().empty());
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "DiffOptionsAreGlobal");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

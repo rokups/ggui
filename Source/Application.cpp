@@ -2743,7 +2743,7 @@ void Application::RenderDiff()
             ImGui::TextDisabled("Files are identical");
         }
     };
-    if (_diff_loading)
+    if (_diff_loading && _diff.revision.empty())
     {
         const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
         const int frame = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
