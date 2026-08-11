@@ -107,7 +107,7 @@ float FontPx(float value)
 
 std::string IconLabel(std::string_view icon, std::string_view label)
 {
-    return std::string(icon) + "  " + std::string(label) + "###" + std::string(label);
+    return std::string(icon) + std::string(label) + "###" + std::string(label);
 }
 
 bool ActionMenuItem(std::string_view icon, std::string_view label, const char* shortcut = nullptr,
@@ -1686,7 +1686,7 @@ void Application::RenderToolbar()
         {
             ImGui::SameLine();
             const std::string label = ReferenceLabel(*closest);
-            ImGui::TextDisabled("%s %s", ICON_MS_BOOKMARK, label.c_str());
+            ImGui::TextDisabled("%s%s", ICON_MS_BOOKMARK, label.c_str());
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Closest bookmark to the working copy");
         }
