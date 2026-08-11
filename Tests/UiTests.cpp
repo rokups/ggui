@@ -1800,10 +1800,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}}};
         result.old_mode = result.new_mode = GIT_FILEMODE_BLOB;
         result.lines = {
-            {DiffLineKind::Context, 0, 0, 0},
-            {DiffLineKind::Deletion, 1, -1, 0},
-            {DiffLineKind::Addition, -1, 1, 0},
-            {DiffLineKind::Context, 2, 2, 0},
+            {DiffLineKind::Context, 39, 49, 0},
+            {DiffLineKind::Deletion, 40, -1, 0},
+            {DiffLineKind::Addition, -1, 50, 0},
+            {DiffLineKind::Context, 41, 51, 0},
             {},
         };
         application.ApplyEventForTest(DiffReady{std::move(result)});
@@ -1832,6 +1832,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 [&](const ImGuiWindow* candidate) { return candidate->ChildId == view.ID; });
             return child == window->DC.ChildWindows.end() ? nullptr : *child;
         };
+        const float glyph_width = ImGui::CalcTextSize("#").x;
+        IM_CHECK_GE(diff_view()->ContentSizeExplicit.x, glyph_width * 14.0f);
+        IM_CHECK_LT(diff_view()->ContentSizeExplicit.x, glyph_width * 15.0f);
         const auto line_highlight = [&] {
             ImRect bounds(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
             ImGuiWindow* child = diff_view();

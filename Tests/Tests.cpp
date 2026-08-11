@@ -794,6 +794,11 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
     EXPECT_EQ(normal->before, "line03\nline08\n");
     EXPECT_EQ(normal->after, "changed\nline 08\n");
     EXPECT_FALSE(normal->patch.empty());
+    ASSERT_GE(normal->lines.size(), 4U);
+    EXPECT_EQ(normal->lines[0].old_line, 2);
+    EXPECT_EQ(normal->lines[1].new_line, 2);
+    EXPECT_EQ(normal->lines[2].old_line, 7);
+    EXPECT_EQ(normal->lines[3].new_line, 7);
 
     engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
         DiffOptions{.whitespace_mode = DiffWhitespaceMode::IgnoreAllWhitespace, .context_lines = 0}});

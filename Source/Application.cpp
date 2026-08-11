@@ -2848,17 +2848,22 @@ void Application::RenderDiff()
     static std::string loaded_before;
     static std::string loaded_after;
     static std::string loaded_path;
+    static std::string loaded_revision;
+    static std::string loaded_compare_to;
     static DiffWhitespaceMode loaded_whitespace = DiffWhitespaceMode::Normal;
     static int loaded_context_lines = 3;
     static bool loaded_plain = false;
     static bool dark_palette = !_dark_theme;
     if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
+        || loaded_revision != _diff.revision || loaded_compare_to != _diff.compare_to
         || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
         || loaded_plain != plain)
     {
         loaded_before = _diff.before;
         loaded_after = _diff.after;
         loaded_path = _diff.path;
+        loaded_revision = _diff.revision;
+        loaded_compare_to = _diff.compare_to;
         loaded_whitespace = _diff_whitespace_mode;
         loaded_context_lines = _diff_context_lines;
         loaded_plain = plain;
@@ -2872,6 +2877,11 @@ void Application::RenderDiff()
         {
             diff.SetLanguage(DiffLanguage(_diff.path));
             diff.SetText(loaded_before, loaded_after);
+            std::vector<std::pair<int, int>> line_numbers;
+            line_numbers.reserve(_diff.lines.size());
+            for (const DiffLine& line : _diff.lines)
+                line_numbers.emplace_back(line.old_line + 1, line.new_line + 1);
+            diff.SetLineNumbers(line_numbers);
         }
     }
     if (dark_palette != _dark_theme)

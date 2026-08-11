@@ -123,6 +123,7 @@ CPMAddPackage(
   NAME ImGuiColorTextEdit
   GITHUB_REPOSITORY goossens/ImGuiColorTextEdit
   GIT_TAG fa6fd434d3db973e604653d2147316f41d49ed56
+  PATCHES cmake/ImGuiColorTextEdit-line-numbers.patch
   DOWNLOAD_ONLY YES)
 add_library(imgui_color_text_edit STATIC EXCLUDE_FROM_ALL
   ${ImGuiColorTextEdit_SOURCE_DIR}/TextEditor.cpp
