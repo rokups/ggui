@@ -2690,43 +2690,50 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
-    bool comparing = !_compare_to.empty() && _file_comparison;
-    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
-        || (_compare_to.empty() && _selected_revision == _snapshot->working_copy));
-    if (ImGui::Checkbox("Compare with @", &comparing))
-        ToggleComparison(true);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Compare only the selected file with the working copy.");
-    if (!_compare_to.empty())
+    const auto render_comparison = [this]()
     {
-        ImGui::SameLine();
-        ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
-    }
+        if (!_compare_to.empty())
+        {
+            ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
+            ImGui::SameLine();
+        }
+        bool comparing = !_compare_to.empty() && _file_comparison;
+        ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
+            || (_compare_to.empty() && _selected_revision == _snapshot->working_copy));
+        if (ImGui::Checkbox("Compare with @", &comparing))
+            ToggleComparison(true);
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Compare only the selected file with the working copy.");
+    };
     if (_diff_loading)
     {
         const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
         const int frame = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
         ImGui::Text("%s Loading...", spinner[static_cast<std::size_t>(frame)]);
+        ImGui::SameLine();
+        render_comparison();
         ImGui::End();
         return;
     }
     if (_diff.revision.empty())
     {
         ImGui::TextWrapped("Select a change or file to inspect its diff.");
+        ImGui::SameLine();
+        render_comparison();
         ImGui::End();
         return;
     }
     if (_diff.path.empty())
     {
         ImGui::TextUnformatted("Selected change is empty.");
+        ImGui::SameLine();
+        render_comparison();
         ImGui::End();
         return;
     }
 
-    const auto file = std::ranges::find_if(_diff.files,
-        [this](const StatusEntry& entry) { return entry.path == _diff.path || entry.old_path == _diff.path; });
-    const git_delta_t status = file == _diff.files.end() ? GIT_DELTA_UNMODIFIED : file->status;
+    const git_delta_t status = _diff.selected_status;
     const bool plain = status == GIT_DELTA_ADDED || status == GIT_DELTA_UNTRACKED || status == GIT_DELTA_DELETED;
 
     const auto reload = [this](DiffWhitespaceMode whitespace, int context_lines)
@@ -2736,7 +2743,6 @@ void Application::RenderDiff()
         RequestDiff(false);
     };
 
-    ImGui::SameLine();
     ImGui::SetNextItemWidth(FontPx(145.0f));
     int view_index = _diff_side_by_side ? 1 : 0;
     if (ImGui::Combo("View", &view_index, "Unified\0Side by Side\0"))
@@ -2805,6 +2811,8 @@ void Application::RenderDiff()
         }
     }
     ImGui::EndDisabled();
+    ImGui::SameLine();
+    render_comparison();
     ImGui::Separator();
 
     static char patch_save_path[512] = "patch.diff";

@@ -834,6 +834,8 @@ struct RepositoryEngine::Impl
             const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
             result.files.push_back({old_path, new_path, delta->status, false});
         }
+        if (command.file_comparison)
+            result.selected_status = GIT_DELTA_UNMODIFIED;
         if (command.fallback_to_first
             && std::ranges::none_of(result.files, [&](const StatusEntry& file) { return file.path == result.path; }))
             result.path = result.files.empty() ? "" : result.files.front().path;
@@ -865,6 +867,7 @@ struct RepositoryEngine::Impl
             result.after = BlobText(git.get(), content_new_tree, new_path, result.binary);
             if (selected_delta != nullptr)
             {
+                result.selected_status = selected_delta->status;
                 if (!git_oid_is_zero(&selected_delta->old_file.id))
                     result.old_oid = OidString(selected_delta->old_file.id);
                 if (!git_oid_is_zero(&selected_delta->new_file.id))

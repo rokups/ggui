@@ -122,6 +122,12 @@ struct DiffResult
         , binary(binary)
         , files(std::move(files))
     {
+        for (const StatusEntry& file : this->files)
+            if (file.path == this->path || file.old_path == this->path)
+            {
+                selected_status = file.status;
+                break;
+            }
     }
 
     std::uint64_t generation = 0;
@@ -132,6 +138,7 @@ struct DiffResult
     std::string before;
     std::string after;
     bool binary = false;
+    git_delta_t selected_status = GIT_DELTA_UNMODIFIED;
     std::vector<StatusEntry> files;
     std::string patch;
     std::string old_oid;

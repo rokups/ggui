@@ -1186,14 +1186,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(DiffReady{{1000, "left", "stale.txt", {}, "stale\n", false,
             {{{}, "stale.txt", GIT_DELTA_ADDED, false}}, "merge"}});
         IM_CHECK(application.SelectedFileForTest().empty());
-        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "file compare\n", false,
-            RichSnapshot().status, "merge", true}});
+        DiffResult file_comparison{1000, "left", "added.txt", "old\n", "file compare\n", false,
+            RichSnapshot().status, "merge", true};
+        file_comparison.selected_status = GIT_DELTA_MODIFIED;
+        application.ApplyEventForTest(DiffReady{std::move(file_comparison)});
         context->Yield(2);
         FocusWindow(context, "Changes");
         IM_CHECK(!context->ItemIsChecked("Compare with @"));
         IM_CHECK(context->ItemExists("**/A  added.txt"));
         FocusWindow(context, "Diff");
         IM_CHECK(context->ItemIsChecked("Compare with @"));
+        IM_CHECK(context->ItemExists("##diff view"));
+        IM_CHECK(!context->ItemExists("##file view"));
         application.ToggleComparisonForTest();
         IM_CHECK(!application.FileComparisonForTest());
         IM_CHECK_EQ(application.CompareToForTest(), "merge");
@@ -1700,6 +1704,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_LE(std::fabs(context->ItemInfo("Compare with @").RectFull.GetCenter().y
                             - context->ItemInfo("View").RectFull.GetCenter().y),
             1.0f);
+        IM_CHECK_GT(context->ItemInfo("Compare with @").RectFull.Min.x,
+            context->ItemInfo("External Diff").RectFull.Max.x);
         context->SetRef("Diff");
         context->ComboClick("View/Unified");
         context->Yield();

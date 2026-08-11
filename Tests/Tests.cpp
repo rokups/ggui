@@ -697,6 +697,7 @@ TEST(RepositoryEngine, ComparesTwoRevisionTrees)
     const auto tracked_file = std::ranges::find(file_comparison->files, "tracked.txt", &StatusEntry::path);
     ASSERT_NE(tracked_file, file_comparison->files.end());
     EXPECT_EQ(tracked_file->status, GIT_DELTA_ADDED);
+    EXPECT_EQ(file_comparison->selected_status, GIT_DELTA_RENAMED);
     EXPECT_EQ(std::ranges::find(file_comparison->files, "renamed.txt", &StatusEntry::path),
         file_comparison->files.end());
     EXPECT_EQ(file_comparison->before, "base\n");
