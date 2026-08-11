@@ -104,3 +104,28 @@ index 454714e..03e4d87 100644
 +	std::vector<std::pair<int, int>> lineNumbers;
 @@ -114,0 +118 @@ private:
 +	std::pair<int, int> getLineNumbers(size_t line) const;
+diff --git a/TextDiff.cpp b/TextDiff.cpp
+index 038ee64..c24b771 100644
+--- a/TextDiff.cpp
++++ b/TextDiff.cpp
+@@ -315,0 +316 @@ void TextDiff::renderSideBySideBackground() {
++	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
+@@ -337,2 +338,2 @@ void TextDiff::renderSideBySideBackground() {
+-					ImVec2(rightTextPos, y),
+-					ImVec2(rightTextEnd, y + glyphSize.y),
++					ImVec2(rightTextPos, y - backgroundOffset),
++					ImVec2(rightTextEnd, y + glyphSize.y - backgroundOffset),
+@@ -348,2 +349,2 @@ void TextDiff::renderSideBySideBackground() {
+-					ImVec2(leftTextPos, y),
+-					ImVec2(rightLineNumberPos, y + glyphSize.y),
++					ImVec2(leftTextPos, y - backgroundOffset),
++					ImVec2(rightLineNumberPos, y + glyphSize.y - backgroundOffset),
+diff --git a/TextEditor.cpp b/TextEditor.cpp
+index 2c4d059..0b24e6d 100644
+--- a/TextEditor.cpp
++++ b/TextEditor.cpp
+@@ -307,0 +308 @@ void TextEditor::renderMarkers() {
++		auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
+@@ -312 +313 @@ void TextEditor::renderMarkers() {
+-				auto y = cursorScreenPos.y + line * glyphSize.y;
++				auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;

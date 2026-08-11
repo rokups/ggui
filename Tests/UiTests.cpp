@@ -1856,6 +1856,30 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                         bounds.Add(vertex.pos);
             return bounds;
         };
+        const auto diff_highlight = [&](bool added) {
+            ImRect bounds(FLT_MAX, FLT_MAX, -FLT_MAX, -FLT_MAX);
+            ImGuiWindow* child = diff_view();
+            const std::array colors = added
+                ? std::array{IM_COL32(46, 160, 67, 55), IM_COL32(46, 160, 67, 38)}
+                : std::array{IM_COL32(248, 81, 73, 55), IM_COL32(248, 81, 73, 38)};
+            if (child != nullptr)
+                for (const ImDrawVert& vertex : child->DrawList->VtxBuffer)
+                    if (std::ranges::find(colors, vertex.col) != colors.end())
+                        bounds.Add(vertex.pos);
+            return bounds;
+        };
+        const auto check_diff_highlight = [&](bool added, int row) {
+            const ImRect bounds = diff_highlight(added);
+            IM_CHECK(!bounds.IsInverted());
+            IM_CHECK_LE(std::fabs(bounds.GetHeight() - line_height), 0.01f);
+            IM_CHECK_LE(std::fabs(bounds.GetCenter().y
+                                  - (diff_view()->DC.CursorStartPos.y + row * line_height
+                                      + ImGui::GetTextLineHeight() * 0.5f)),
+                0.01f);
+        };
+
+        check_diff_highlight(false, 1);
+        check_diff_highlight(true, 2);
 
         open_line(1);
         ImRect highlight = line_highlight();
@@ -1902,6 +1926,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Diff");
         context->ComboClick("View/Side by Side");
         context->Yield();
+        check_diff_highlight(false, 1);
+        check_diff_highlight(true, 2);
         open_line(1);
         IM_CHECK(context->ItemExists("**/Move hunk to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
