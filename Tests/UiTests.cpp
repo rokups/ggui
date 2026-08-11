@@ -1146,9 +1146,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "new\n", false,
             RichSnapshot().status, "merge"}});
         context->Yield(2);
+        FocusWindow(context, "Changes");
+        IM_CHECK(context->ItemIsChecked("Compare with @"));
         FocusWindow(context, "Diff");
         IM_CHECK(context->ItemExists("Compare with @"));
-        IM_CHECK(context->ItemIsChecked("Compare with @"));
+        IM_CHECK(!context->ItemIsChecked("Compare with @"));
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
 
         application.SelectRevisionForTest("right");
@@ -1172,8 +1174,29 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SelectRevisionForTest("merge-rewritten");
         IM_CHECK(application.CompareToForTest().empty());
         context->Yield(2);
+        FocusWindow(context, "Changes");
+        IM_CHECK(!context->ItemIsChecked("Compare with @"));
         FocusWindow(context, "Diff");
         IM_CHECK(!context->ItemIsChecked("Compare with @"));
+
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ToggleFileComparisonForTest();
+        IM_CHECK(application.FileComparisonForTest());
+        application.ApplyEventForTest(DiffReady{{1000, "left", "stale.txt", {}, "stale\n", false,
+            {{{}, "stale.txt", GIT_DELTA_ADDED, false}}, "merge"}});
+        IM_CHECK(application.SelectedFileForTest().empty());
+        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "file compare\n", false,
+            RichSnapshot().status, "merge", true}});
+        context->Yield(2);
+        FocusWindow(context, "Changes");
+        IM_CHECK(!context->ItemIsChecked("Compare with @"));
+        IM_CHECK(context->ItemExists("**/A  added.txt"));
+        FocusWindow(context, "Diff");
+        IM_CHECK(context->ItemIsChecked("Compare with @"));
+        application.ToggleComparisonForTest();
+        IM_CHECK(!application.FileComparisonForTest());
+        IM_CHECK_EQ(application.CompareToForTest(), "merge");
 
         application.SetSnapshotForTest(RichSnapshot());
         IM_CHECK(application.CanNavigateChangedFileForTest(1));
@@ -1674,6 +1697,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             DiffReady{{1000, "merge", "first.cpp", "old\n", "new\n", false, RichSnapshot().status}});
         context->Yield(2);
         FocusWindow(context, "Diff");
+        IM_CHECK_LE(std::fabs(context->ItemInfo("Compare with @").RectFull.GetCenter().y
+                            - context->ItemInfo("View").RectFull.GetCenter().y),
+            1.0f);
         context->SetRef("Diff");
         context->ComboClick("View/Unified");
         context->Yield();

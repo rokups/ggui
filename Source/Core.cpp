@@ -788,9 +788,11 @@ struct RepositoryEngine::Impl
             Check(git_commit_tree(&raw_old_tree, parent.get()), "load parent tree");
         }
         std::unique_ptr<git_tree, decltype(&git_tree_free)> old_tree(raw_old_tree, git_tree_free);
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> comparison_tree(nullptr, git_tree_free);
+        git_tree* content_old_tree = old_tree.get();
+        git_tree* content_new_tree = new_tree.get();
         if (!command.compare_to.empty())
         {
-            old_tree = std::move(new_tree);
             git_oid compare_oid{};
             Check(gg_repository_resolve(&compare_oid, gg, command.compare_to.c_str()), "resolve comparison revision");
             git_commit* raw_compare = nullptr;
@@ -798,21 +800,36 @@ struct RepositoryEngine::Impl
             std::unique_ptr<git_commit, decltype(&git_commit_free)> compare(raw_compare, git_commit_free);
             git_tree* raw_compare_tree = nullptr;
             Check(git_commit_tree(&raw_compare_tree, compare.get()), "load comparison tree");
-            new_tree.reset(raw_compare_tree);
+            comparison_tree.reset(raw_compare_tree);
+            content_old_tree = new_tree.get();
+            content_new_tree = comparison_tree.get();
         }
-        git_diff* raw_diff = nullptr;
-        Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_tree.get(), new_tree.get(), nullptr), "create diff");
-        std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
         git_diff_find_options find_options{};
         Check(git_diff_find_options_init(&find_options, GIT_DIFF_FIND_OPTIONS_VERSION),
             "initialize rename detection");
         find_options.flags = GIT_DIFF_FIND_RENAMES;
-        Check(git_diff_find_similar(diff.get(), &find_options), "find renamed files");
-        DiffResult result{generation, command.revision, command.path, {}, {}, false, {}, command.compare_to};
-        result.options = command.options;
-        for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
+        const auto create_diff = [&](git_tree* old_value, git_tree* new_value) {
+            git_diff* raw_diff = nullptr;
+            Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_value, new_value, nullptr), "create diff");
+            std::unique_ptr<git_diff, decltype(&git_diff_free)> value(raw_diff, git_diff_free);
+            Check(git_diff_find_similar(value.get(), &find_options), "find renamed files");
+            return value;
+        };
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> diff =
+            create_diff(content_old_tree, content_new_tree);
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> status_diff(nullptr, git_diff_free);
+        git_diff* files_diff = diff.get();
+        if (command.file_comparison)
         {
-            const git_diff_delta* delta = git_diff_get_delta(diff.get(), index);
+            status_diff = create_diff(old_tree.get(), new_tree.get());
+            files_diff = status_diff.get();
+        }
+        DiffResult result{generation, command.revision, command.path, {}, {}, false, {}, command.compare_to,
+            command.file_comparison};
+        result.options = command.options;
+        for (size_t index = 0; index < git_diff_num_deltas(files_diff); ++index)
+        {
+            const git_diff_delta* delta = git_diff_get_delta(files_diff, index);
             const char* old_path = delta->old_file.path == nullptr ? "" : delta->old_file.path;
             const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
             result.files.push_back({old_path, new_path, delta->status, false});
@@ -822,14 +839,6 @@ struct RepositoryEngine::Impl
             result.path = result.files.empty() ? "" : result.files.front().path;
         if (!result.path.empty())
         {
-            const auto file = std::ranges::find_if(result.files, [&](const StatusEntry& entry) {
-                return entry.path == result.path || entry.old_path == result.path;
-            });
-            const char* old_path = file == result.files.end() ? result.path.c_str() : file->old_path.c_str();
-            const char* new_path = file == result.files.end() ? result.path.c_str() : file->path.c_str();
-            result.before = BlobText(git.get(), old_tree.get(), old_path, result.binary);
-            result.after = BlobText(git.get(), new_tree.get(), new_path, result.binary);
-
             const git_diff_delta* selected_delta = nullptr;
             size_t selected_index = git_diff_num_deltas(diff.get());
             for (size_t index = 0; index < git_diff_num_deltas(diff.get()); ++index)
@@ -846,6 +855,14 @@ struct RepositoryEngine::Impl
                     break;
                 }
             }
+            const char* old_path = selected_delta == nullptr || selected_delta->old_file.path == nullptr
+                ? result.path.c_str()
+                : selected_delta->old_file.path;
+            const char* new_path = selected_delta == nullptr || selected_delta->new_file.path == nullptr
+                ? result.path.c_str()
+                : selected_delta->new_file.path;
+            result.before = BlobText(git.get(), content_old_tree, old_path, result.binary);
+            result.after = BlobText(git.get(), content_new_tree, new_path, result.binary);
             if (selected_delta != nullptr)
             {
                 if (!git_oid_is_zero(&selected_delta->old_file.id))
@@ -875,7 +892,7 @@ struct RepositoryEngine::Impl
                 else if (command.options.whitespace_mode == DiffWhitespaceMode::IgnoreAllWhitespace)
                     options.flags |= GIT_DIFF_IGNORE_WHITESPACE;
                 git_diff* raw_filtered = nullptr;
-                Check(git_diff_tree_to_tree(&raw_filtered, git.get(), old_tree.get(), new_tree.get(), &options),
+                Check(git_diff_tree_to_tree(&raw_filtered, git.get(), content_old_tree, content_new_tree, &options),
                     "create filtered diff");
                 filtered_diff.reset(raw_filtered);
                 Check(git_diff_find_similar(filtered_diff.get(), &find_options), "find filtered renamed files");

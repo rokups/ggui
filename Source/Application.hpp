@@ -40,9 +40,11 @@ public:
     const std::vector<std::string>& SelectedRevisionsForTest() const;
     bool DiffSideBySideForTest() const;
     const std::string& CompareToForTest() const;
+    bool FileComparisonForTest() const;
     bool CanNavigateChangedFileForTest(int direction) const;
     void NavigateChangedFileForTest(int direction);
     void ToggleComparisonForTest();
+    void ToggleFileComparisonForTest();
     void SelectRevisionForTest(const std::string& oid, bool additive = false);
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
@@ -150,7 +152,7 @@ private:
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     void RequestDiff(bool fallback_to_first);
-    void ToggleComparison();
+    void ToggleComparison(bool file_comparison);
     void ResetRepositoryState();
     bool FileMatchesFilter(const StatusEntry& file) const;
     bool CanNavigateChangedFile(int direction) const;
@@ -203,6 +205,7 @@ private:
     std::string _preferred_file;
     std::string _pending_revision;
     std::string _compare_to;
+    bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;
     std::filesystem::path _settings_path;
     std::string _imgui_ini_path;

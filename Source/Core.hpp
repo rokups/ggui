@@ -111,10 +111,11 @@ struct DiffResult
 {
     DiffResult() = default;
     DiffResult(std::uint64_t generation, std::string revision, std::string path, std::string before, std::string after,
-        bool binary, std::vector<StatusEntry> files, std::string compare_to = {})
+        bool binary, std::vector<StatusEntry> files, std::string compare_to = {}, bool file_comparison = false)
         : generation(generation)
         , revision(std::move(revision))
         , compare_to(std::move(compare_to))
+        , file_comparison(file_comparison)
         , path(std::move(path))
         , before(std::move(before))
         , after(std::move(after))
@@ -126,6 +127,7 @@ struct DiffResult
     std::uint64_t generation = 0;
     std::string revision;
     std::string compare_to;
+    bool file_comparison = false;
     std::string path;
     std::string before;
     std::string after;
@@ -182,12 +184,13 @@ struct LoadDiff
 {
     LoadDiff() = default;
     LoadDiff(std::string revision, std::string path, bool fallback_to_first = false, DiffOptions options = {},
-        std::string compare_to = {})
+        std::string compare_to = {}, bool file_comparison = false)
         : revision(std::move(revision))
         , path(std::move(path))
         , fallback_to_first(fallback_to_first)
         , options(options)
         , compare_to(std::move(compare_to))
+        , file_comparison(file_comparison)
     {
     }
 
@@ -196,6 +199,7 @@ struct LoadDiff
     bool fallback_to_first = false;
     DiffOptions options;
     std::string compare_to;
+    bool file_comparison = false;
 };
 struct ApplyPatch
 {

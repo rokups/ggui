@@ -688,6 +688,20 @@ TEST(RepositoryEngine, ComparesTwoRevisionTrees)
     ASSERT_NE(added_file, added->files.end());
     EXPECT_EQ(added_file->status, GIT_DELTA_ADDED);
     EXPECT_NE(added->patch.find("+after"), std::string::npos);
+
+    engine.Enqueue(LoadDiff{base->oid, "tracked.txt", false, options, comparison->oid, true});
+    const auto file_comparison = WaitForDiff(engine);
+    ASSERT_TRUE(file_comparison.has_value());
+    EXPECT_TRUE(file_comparison->file_comparison);
+    EXPECT_EQ(file_comparison->compare_to, comparison->oid);
+    const auto tracked_file = std::ranges::find(file_comparison->files, "tracked.txt", &StatusEntry::path);
+    ASSERT_NE(tracked_file, file_comparison->files.end());
+    EXPECT_EQ(tracked_file->status, GIT_DELTA_ADDED);
+    EXPECT_EQ(std::ranges::find(file_comparison->files, "renamed.txt", &StatusEntry::path),
+        file_comparison->files.end());
+    EXPECT_EQ(file_comparison->before, "base\n");
+    EXPECT_EQ(file_comparison->after, "base\n");
+    EXPECT_FALSE(file_comparison->patch.empty());
 }
 
 TEST(RepositoryEngine, ClosesAndReopensWithoutWatcherEvents)

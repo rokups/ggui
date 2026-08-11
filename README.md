@@ -44,12 +44,13 @@ operation log, bookmarks, tags, workspaces, and sparse-checkout panels. The
 Change menu exposes gg's local change operations. A newly opened plain Git
 repository needs **New** before it has a gg working-copy change.
 
-The Diff window's **Compare with @** checkbox compares any selected change
-directly with the current working-copy snapshot (`@`). The comparison follows
-rewritten changes and the latest `@`, keeps the preferred file selected when
-possible, and supports the same patch export and external-diff actions as a
-normal change diff. File mutations and patch application stay disabled until
-the checkbox exits comparison mode.
+The **Compare with @** checkbox in Changes compares the selected change's
+entire tree with the current working-copy snapshot (`@`); the matching checkbox
+in Diff compares only the selected file while leaving the normal changed-file
+list intact. Comparisons follow rewritten changes and the latest `@`, keep the
+preferred file selected when possible, and support the same patch export and
+external-diff actions as a normal change diff. File mutations and patch
+application stay disabled until comparison mode is exited.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
 navigation respects the active Changes filter and stops at the first and last

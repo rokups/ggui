@@ -448,7 +448,7 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
     const float pad_x = FontPx(7.0f);
     const float pad_top = FontPx(3.0f);
-    const float pad_bottom = FontPx(1.0f);
+    const float pad_bottom = 0.0f;
     const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_top);
     const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
@@ -495,7 +495,7 @@ void DrawElidedBadge(
         return;
     const float pad_x = FontPx(7.0f);
     const float pad_top = FontPx(3.0f);
-    const float pad_bottom = FontPx(1.0f);
+    const float pad_bottom = 0.0f;
     const float text_y = center_y - ImGui::GetTextLineHeight() * 0.5f;
     const ImVec2 minimum(cursor.x, text_y - pad_top);
     const ImVec2 maximum(maximum_x, text_y + ImGui::GetTextLineHeight() + pad_bottom);
@@ -1083,6 +1083,7 @@ void Application::ApplyEvent(Event event)
                     {
                         _preferred_file.clear();
                         _compare_to.clear();
+                        _file_comparison = false;
                     }
                     if (repository_changed)
                     {
@@ -1157,7 +1158,10 @@ void Application::ApplyEvent(Event event)
                     if (!_compare_to.empty())
                     {
                         if (_snapshot->working_copy.empty() || _selected_revision == _snapshot->working_copy)
+                        {
                             _compare_to.clear();
+                            _file_comparison = false;
+                        }
                         else
                             _compare_to = _snapshot->working_copy;
                     }
@@ -1168,6 +1172,7 @@ void Application::ApplyEvent(Event event)
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
                     if (value.diff.revision != _selected_revision || value.diff.compare_to != _compare_to
+                        || value.diff.file_comparison != _file_comparison
                         || value.diff.options.whitespace_mode != _diff_whitespace_mode
                         || value.diff.options.context_lines != _diff_context_lines)
                         return;
@@ -2413,7 +2418,21 @@ void Application::RenderChanges()
         return;
     }
     const bool actions_locked = !_active_operation.empty();
-    const bool comparing = !_compare_to.empty();
+    const bool comparison_active = !_compare_to.empty();
+    bool comparing = comparison_active && !_file_comparison;
+    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
+        || (!comparison_active && _selected_revision == _snapshot->working_copy));
+    if (ImGui::Checkbox("Compare with @", &comparing))
+        ToggleComparison(false);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Compare the entire selected change with the working copy.");
+    if (comparing)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s → @ %s", ShortId(_selected_revision).c_str(), ShortId(_compare_to).c_str());
+    }
+    ImGui::SameLine();
     std::string parent;
     std::string child;
     const auto source = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
@@ -2476,7 +2495,7 @@ void Application::RenderChanges()
         const bool elided = DrawTextWithin(draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
         if (selected)
             SelectFile(file.path);
-        if (!actions_locked && !comparing && ImGui::BeginDragDropSource())
+        if (!actions_locked && !comparison_active && ImGui::BeginDragDropSource())
         {
             std::string payload = _diff.revision;
             payload.push_back('\0');
@@ -2515,12 +2534,12 @@ void Application::RenderChanges()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
-            ImGui::BeginDisabled(actions_locked || comparing || parent.empty());
+            ImGui::BeginDisabled(actions_locked || comparison_active || parent.empty());
             if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to parent"))
                 QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
-            ImGui::BeginDisabled(actions_locked || comparing || child.empty());
+            ImGui::BeginDisabled(actions_locked || comparison_active || child.empty());
             if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to child"))
                 QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
                     "Moving this file will rewrite a locked source or destination commit.");
@@ -2528,7 +2547,7 @@ void Application::RenderChanges()
             if (_selected_revision == _snapshot->working_copy)
             {
                 ImGui::Separator();
-                ImGui::BeginDisabled(actions_locked || comparing);
+                ImGui::BeginDisabled(actions_locked || comparison_active);
                 if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
                 {
                     _selected_file = file.path;
@@ -2671,12 +2690,14 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
-    bool comparing = !_compare_to.empty();
+    bool comparing = !_compare_to.empty() && _file_comparison;
     ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
-        || (!comparing && _selected_revision == _snapshot->working_copy));
+        || (_compare_to.empty() && _selected_revision == _snapshot->working_copy));
     if (ImGui::Checkbox("Compare with @", &comparing))
-        ToggleComparison();
+        ToggleComparison(true);
     ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Compare only the selected file with the working copy.");
     if (!_compare_to.empty())
     {
         ImGui::SameLine();
@@ -2715,6 +2736,7 @@ void Application::RenderDiff()
         RequestDiff(false);
     };
 
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(FontPx(145.0f));
     int view_index = _diff_side_by_side ? 1 : 0;
     if (ImGui::Combo("View", &view_index, "Unified\0Side by Side\0"))
@@ -3328,7 +3350,10 @@ void Application::SubmitDialog()
 void Application::SelectRevision(const std::string& oid, bool additive)
 {
     if (_snapshot != nullptr && oid == _snapshot->working_copy)
+    {
         _compare_to.clear();
+        _file_comparison = false;
+    }
     const auto selected = std::ranges::find(_selected_revisions, oid);
     if (!additive)
         _selected_revisions = {oid};
@@ -3342,7 +3367,10 @@ void Application::SelectRevision(const std::string& oid, bool additive)
         : _selected_revisions.empty() ? ""
                                       : _selected_revisions.back();
     if (_selected_revision.empty())
+    {
         _compare_to.clear();
+        _file_comparison = false;
+    }
     RequestDiff(true);
 }
 
@@ -3360,17 +3388,23 @@ void Application::RequestDiff(bool fallback_to_first)
         _pending_revision = fallback_to_first ? _selected_revision : "";
         _diff_loading = true;
         _engine.Enqueue(LoadDiff{_selected_revision, fallback_to_first ? _preferred_file : _selected_file,
-            fallback_to_first, {_diff_whitespace_mode, _diff_context_lines}, _compare_to});
+            fallback_to_first, {_diff_whitespace_mode, _diff_context_lines}, _compare_to, _file_comparison});
     }
 }
 
-void Application::ToggleComparison()
+void Application::ToggleComparison(bool file_comparison)
 {
-    if (!_compare_to.empty())
+    if (!_compare_to.empty() && _file_comparison == file_comparison)
+    {
         _compare_to.clear();
+        _file_comparison = false;
+    }
     else if (_snapshot != nullptr && !_selected_revision.empty() && !_snapshot->working_copy.empty()
         && _selected_revision != _snapshot->working_copy)
+    {
         _compare_to = _snapshot->working_copy;
+        _file_comparison = file_comparison;
+    }
     RequestDiff(true);
 }
 
@@ -3629,6 +3663,7 @@ void Application::ResetRepositoryState()
     _preferred_file.clear();
     _pending_revision.clear();
     _compare_to.clear();
+    _file_comparison = false;
     _bookmark_filter.clear();
     _tag_filter.clear();
     _changes_filter.clear();
@@ -3887,6 +3922,11 @@ const std::string& Application::CompareToForTest() const
     return _compare_to;
 }
 
+bool Application::FileComparisonForTest() const
+{
+    return _file_comparison;
+}
+
 bool Application::CanNavigateChangedFileForTest(int direction) const
 {
     return CanNavigateChangedFile(direction);
@@ -3899,7 +3939,12 @@ void Application::NavigateChangedFileForTest(int direction)
 
 void Application::ToggleComparisonForTest()
 {
-    ToggleComparison();
+    ToggleComparison(false);
+}
+
+void Application::ToggleFileComparisonForTest()
+{
+    ToggleComparison(true);
 }
 
 void Application::SelectRevisionForTest(const std::string& oid, bool additive)
@@ -3962,6 +4007,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _preferred_file.clear();
     _pending_revision.clear();
     _compare_to.clear();
+    _file_comparison = false;
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
     _diff_loading = false;
     _graph_generation = 0;
