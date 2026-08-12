@@ -226,6 +226,14 @@ add_executable(ggui
   Source/Application.hpp
   "${GGUI_EMBEDDED_FONT_SOURCE}"
   Source/Main.cpp)
+if(WIN32)
+  enable_language(RC)
+  set(GGUI_WINDOWS_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/WindowsResources.rc")
+  configure_file(Source/Platform/Windows/Resources.rc.in "${GGUI_WINDOWS_RESOURCE}" @ONLY)
+  set_property(SOURCE "${GGUI_WINDOWS_RESOURCE}" PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Windows/ggui.ico")
+  target_sources(ggui PRIVATE "${GGUI_WINDOWS_RESOURCE}")
+endif()
 if(GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_sources(ggui PRIVATE Tests/UiTests.cpp)
   target_compile_definitions(ggui PRIVATE IMGUI_BUILD_TESTING=1)
