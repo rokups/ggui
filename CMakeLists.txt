@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.24)
 
 project(ggui VERSION 0.1.0 LANGUAGES C CXX)
 
+set(CMAKE_C_STANDARD 99)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -207,9 +210,21 @@ if(GGUI_ENABLE_COVERAGE OR GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_compile_definitions(ggui_core PUBLIC GGUI_TESTING=1)
 endif()
 
+set(GGUI_EMBEDDED_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedFont.c")
+add_custom_command(
+  OUTPUT "${GGUI_EMBEDDED_FONT_SOURCE}"
+  COMMAND "${CMAKE_COMMAND}"
+    "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/MaterialSymbolsOutlined.ttf"
+    "-DOUTPUT=${GGUI_EMBEDDED_FONT_SOURCE}"
+    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFont.cmake"
+  DEPENDS Assets/Fonts/MaterialSymbolsOutlined.ttf cmake/EmbedFont.cmake
+  COMMENT "Embedding Material Symbols font"
+  VERBATIM)
+
 add_executable(ggui
   Source/Application.cpp
   Source/Application.hpp
+  "${GGUI_EMBEDDED_FONT_SOURCE}"
   Source/Main.cpp)
 if(GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_sources(ggui PRIVATE Tests/UiTests.cpp)
@@ -224,8 +239,6 @@ target_link_libraries(ggui PRIVATE
   nfd::nfd
   nlohmann_json::nlohmann_json
   spdlog::spdlog)
-target_compile_definitions(ggui PRIVATE
-  GGUI_ICON_FONT_PATH="${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/MaterialSymbolsOutlined.ttf")
 if(GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_link_libraries(ggui PRIVATE imgui_test_engine)
 endif()
@@ -254,20 +267,22 @@ if(GGUI_BUILD_TESTS)
 endif()
 
 if(UNIX AND NOT APPLE)
-  set_target_properties(ggui PROPERTIES INSTALL_RPATH "$ORIGIN/../lib")
+  set_target_properties(ggui PROPERTIES INSTALL_RPATH "$ORIGIN")
 endif()
 
-install(TARGETS ggui RUNTIME DESTINATION bin)
-if(UNIX AND NOT APPLE AND gg_FOUND)
-  install(IMPORTED_RUNTIME_ARTIFACTS gg::gg libgit2::libgit2package LIBRARY DESTINATION lib)
-endif()
-install(FILES README.md LICENSE DESTINATION share/ggui)
-install(FILES Assets/Fonts/MaterialSymbolsOutlined.ttf DESTINATION share/ggui/Fonts)
-if(WIN32)
-  set(CPACK_GENERATOR ZIP)
+install(TARGETS ggui RUNTIME DESTINATION .)
+if(gg_FOUND)
+  install(IMPORTED_RUNTIME_ARTIFACTS gg::gg_cli RUNTIME DESTINATION .)
 else()
-  set(CPACK_GENERATOR TGZ)
+  add_dependencies(ggui gg_cli)
+  install(TARGETS gg_cli RUNTIME DESTINATION .)
 endif()
+if(UNIX AND NOT APPLE AND gg_FOUND)
+  install(IMPORTED_RUNTIME_ARTIFACTS gg::gg libgit2::libgit2package LIBRARY DESTINATION .)
+endif()
+install(FILES README.md LICENSE DESTINATION .)
+set(CPACK_GENERATOR ZIP)
+set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
 set(CPACK_PACKAGE_FILE_NAME "ggui-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
 set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 include(CPack)

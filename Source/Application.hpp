@@ -40,6 +40,8 @@ public:
     const std::string& SelectedFileForTest() const;
     const std::vector<std::string>& SelectedRevisionsForTest() const;
     bool DiffSideBySideForTest() const;
+    DiffWhitespaceMode DiffWhitespaceModeForTest() const;
+    int DiffContextLinesForTest() const;
     const std::string& CompareToForTest() const;
     bool FileComparisonForTest() const;
     bool CanNavigateChangedFileForTest(int direction) const;
@@ -50,6 +52,7 @@ public:
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
     const std::string& DialogDestinationForTest() const;
+    const MoveDiffLines& PendingMoveDiffLinesForTest() const;
     std::string RebaseSourceForTest() const;
     bool DialogModifiesLockedCommitForTest() const;
     void ApplyEventForTest(Event event);

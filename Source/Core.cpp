@@ -376,11 +376,11 @@ struct RepositoryEngine::Impl
             OperationProgress{phase == nullptr ? "" : phase, completed, total});
     }
 
-    gg_operation_options OperationOptions()
+    gg_operation_options OperationOptions(bool report_progress = true)
     {
         gg_operation_options options = GG_OPERATION_OPTIONS_INIT;
         options.cancel_cb = CancelCallback;
-        options.progress_cb = ProgressCallback;
+        options.progress_cb = report_progress ? ProgressCallback : nullptr;
         options.payload = this;
         return options;
     }
@@ -686,11 +686,11 @@ struct RepositoryEngine::Impl
             PublishSnapshot();
     }
 
-    void Sync()
+    void Sync(bool report_progress = true)
     {
         if (gg == nullptr)
             return;
-        gg_operation_options options = OperationOptions();
+        gg_operation_options options = OperationOptions(report_progress);
         Check(gg_repository_adopt_git_history(gg, &options), "adopt external Git history");
         int changed = 0;
         Check(gg_repository_snapshot_working_copy(&changed, gg, &options), "snapshot working copy");
@@ -1693,7 +1693,7 @@ struct RepositoryEngine::Impl
             else if (const auto* value = std::get_if<Refresh>(&command))
             {
                 if (value->snapshot_working_copy)
-                    Sync();
+                    Sync(false);
                 PublishSnapshot();
             }
             else if (const auto* value = std::get_if<Fetch>(&command))

@@ -18,5 +18,6 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static libraries" FORCE)
+set(NEED_LIBRT FALSE CACHE INTERNAL "MinGW has clock_gettime without librt" FORCE)
 set(CMAKE_FIND_LIBRARY_SUFFIXES ".a" ".lib")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")

@@ -920,6 +920,19 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         for (int index = 0; index < 12; ++index)
             application.AddRecentForTest("recent-" + std::to_string(index));
         context->Yield(4);
+        context->SetRef("ggui dockspace");
+        const std::string repository_name = Repository().Path().filename().string();
+        const ImGuiTestItemInfo repository_button = context->ItemInfo(repository_name.c_str());
+        const ImGuiTestItemInfo recent_button = context->ItemInfo("Recent repositories");
+        IM_CHECK_GT(recent_button.RectFull.Min.x, repository_button.RectFull.Max.x);
+        IM_CHECK_LT(recent_button.RectFull.GetWidth(), ImGui::CalcTextSize("Recent repositories").x);
+        context->ItemClick("Recent repositories");
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        IM_CHECK(context->ItemExists("**/recent-11"));
+        IM_CHECK((context->ItemInfo("**/recent-11").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("**/recent-11");
+        context->Yield();
         if (std::getenv("GGUI_CAPTURE_MANUAL") != nullptr)
         {
             context->CaptureReset();
@@ -1910,6 +1923,32 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ComboClick("View/Side by Side");
         context->Yield();
         IM_CHECK(application.DiffSideBySideForTest());
+
+        const auto wheel = [&](const char* item, float amount) {
+            context->MouseMove(item);
+            context->MouseWheelY(amount);
+        };
+        wheel("View", -1.0f);
+        IM_CHECK(!application.DiffSideBySideForTest());
+        wheel("View", 1.0f);
+        IM_CHECK(application.DiffSideBySideForTest());
+
+        context->ComboClick("##whitespace mode/Normal");
+        context->Yield();
+        wheel("##whitespace mode", 1.0f);
+        IM_CHECK_EQ(application.DiffWhitespaceModeForTest(), DiffWhitespaceMode::IgnoreAllWhitespace);
+        wheel("##whitespace mode", -1.0f);
+        IM_CHECK_EQ(application.DiffWhitespaceModeForTest(), DiffWhitespaceMode::Normal);
+
+        context->ComboClick("##context lines/Full");
+        context->Yield();
+        wheel("##context lines", -1.0f);
+        IM_CHECK_EQ(application.DiffContextLinesForTest(), 0);
+        wheel("##context lines", 1.0f);
+        IM_CHECK_EQ(application.DiffContextLinesForTest(), -1);
+        context->ComboClick("##context lines/3 lines");
+        context->Yield();
+        IM_CHECK_EQ(application.DiffContextLinesForTest(), 3);
     };
 
     test = IM_REGISTER_TEST(engine, "Interactions", "DiffLineMoveContextMenu");
@@ -2040,6 +2079,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(!context->ItemExists("**/Revert line"));
         IM_CHECK(context->ItemExists("**/Revert hunk"));
         IM_CHECK((context->ItemInfo("**/Revert hunk").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK(!context->ItemExists("**/Move lines to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
@@ -2062,15 +2102,33 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         check_selection_highlight();
         open_line(2);
-        IM_CHECK(context->ItemExists("**/Move selection to child"));
-        IM_CHECK(context->ItemExists("**/Move selection to parent"));
+        IM_CHECK(context->ItemExists("**/Move lines to child"));
+        IM_CHECK(context->ItemExists("**/Move lines to parent"));
+        IM_CHECK(!context->ItemExists("**/Move line to child"));
         IM_CHECK(!context->ItemExists("**/Move hunk to child"));
+        IM_CHECK(!context->ItemExists("**/Move selection to child"));
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::SetClipboardText("unchanged");
         context->ItemClick("**/Copy");
         context->Yield();
         IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
         IM_CHECK(std::string_view(ImGui::GetClipboardText()).find("new") != std::string_view::npos);
+        open_line(2);
+        context->ItemClick("**/Move lines to child");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        const MoveDiffLines& move = application.PendingMoveDiffLinesForTest();
+        IM_CHECK_EQ(move.source, "source");
+        IM_CHECK_EQ(move.destination, "child");
+        IM_CHECK_EQ(move.path, "file.txt");
+        IM_CHECK_EQ(move.lines.size(), 2U);
+        IM_CHECK_EQ(move.lines[0].kind, DiffLineKind::Deletion);
+        IM_CHECK_EQ(move.lines[0].old_line, 40);
+        IM_CHECK_EQ(move.lines[0].new_line, -1);
+        IM_CHECK_EQ(move.lines[1].kind, DiffLineKind::Addition);
+        IM_CHECK_EQ(move.lines[1].old_line, -1);
+        IM_CHECK_EQ(move.lines[1].new_line, 50);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
 
         context->SetRef("Diff");
         context->ComboClick("View/Side by Side");
@@ -2080,6 +2138,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         open_line(1);
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK(context->ItemExists("**/Move hunk to child"));
+        IM_CHECK(!context->ItemExists("**/Move lines to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         highlight = line_highlight();
         const float split_x = diff_view()->DC.CursorStartPos.x + diff_view()->Size.x * 0.5f;
@@ -2104,9 +2163,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         check_selection_highlight();
         open_line(2);
-        IM_CHECK(context->ItemExists("**/Move selection to child"));
-        IM_CHECK(context->ItemExists("**/Move selection to parent"));
+        IM_CHECK(context->ItemExists("**/Move lines to child"));
+        IM_CHECK(context->ItemExists("**/Move lines to parent"));
+        IM_CHECK(!context->ItemExists("**/Move line to child"));
         IM_CHECK(!context->ItemExists("**/Move hunk to child"));
+        IM_CHECK(!context->ItemExists("**/Move selection to child"));
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::SetClipboardText("unchanged");
         context->ItemClick("**/Copy");

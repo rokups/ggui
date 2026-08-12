@@ -19,6 +19,10 @@
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
+#ifdef DeleteFile
+#undef DeleteFile
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -39,6 +43,9 @@
 
 namespace Ggui
 {
+
+extern "C" const unsigned char ggui_icon_font_data[];
+extern "C" const unsigned int ggui_icon_font_data_len;
 
 namespace
 {
@@ -214,14 +221,9 @@ void LoadUiFont()
     icons.PixelSnapH = true;
     icons.GlyphMinAdvanceX = 16.0f;
     icons.GlyphOffset = ImVec2(0.0f, 3.0f);
-    std::vector<std::filesystem::path> icon_paths{GGUI_ICON_FONT_PATH};
-    if (const char* base = SDL_GetBasePath(); base != nullptr)
-        icon_paths.emplace_back(std::filesystem::path(base) / ".." / "share" / "ggui" / "Fonts"
-            / "MaterialSymbolsOutlined.ttf");
-    for (const std::filesystem::path& path : icon_paths)
-        if (std::filesystem::exists(path)
-            && ImGui::GetIO().Fonts->AddFontFromFileTTF(path.string().c_str(), 17.0f, &icons, ranges) != nullptr)
-            break;
+    icons.FontDataOwnedByAtlas = false;
+    ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(ggui_icon_font_data),
+        static_cast<int>(ggui_icon_font_data_len), 17.0f, &icons, ranges);
 }
 
 ImU32 StatusColor(git_delta_t status)
@@ -263,7 +265,43 @@ const TextEditor::Language* DiffLanguage(const std::string& path)
     return nullptr;
 }
 
+constexpr std::array<const char*, 2> kDiffViewChoices{"Unified", "Side by Side"};
+constexpr std::array<const char*, 3> kDiffWhitespaceChoices{
+    "Normal", "Ignore Whitespace", "Ignore All Whitespace"};
 constexpr std::array kDiffContextChoices{0, 1, 3, 5, 10, 25, -1};
+constexpr std::array<const char*, 7> kDiffContextLabels{
+    "0 lines", "1 line", "3 lines", "5 lines", "10 lines", "25 lines", "Full"};
+
+template <std::size_t Size>
+bool DiffCombo(const char* label, int& index, const std::array<const char*, Size>& choices)
+{
+    bool changed = false;
+    const bool open = ImGui::BeginCombo(label, choices[static_cast<std::size_t>(index)]);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::SetItemKeyOwner(ImGuiKey_MouseWheelY);
+    const float wheel = ImGui::GetIO().MouseWheel;
+    if (hovered && wheel != 0.0f)
+    {
+        index = (index + (wheel < 0.0f ? 1 : static_cast<int>(Size) - 1)) % static_cast<int>(Size);
+        changed = true;
+    }
+    if (open)
+    {
+        for (int choice = 0; choice < static_cast<int>(Size); ++choice)
+        {
+            const bool selected = choice == index;
+            if (ImGui::Selectable(choices[static_cast<std::size_t>(choice)], selected))
+            {
+                index = choice;
+                changed = true;
+            }
+            if (selected)
+                ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    return changed;
+}
 
 int WhitespaceModeIndex(DiffWhitespaceMode mode)
 {
@@ -289,20 +327,6 @@ int ContextLineChoiceIndex(int context_lines)
 {
     const auto choice = std::ranges::find(kDiffContextChoices, context_lines);
     return choice == kDiffContextChoices.end() ? 2 : static_cast<int>(choice - kDiffContextChoices.begin());
-}
-
-const char* ContextLineChoiceLabel(int index)
-{
-    switch (kDiffContextChoices[static_cast<std::size_t>(index)])
-    {
-    case 0: return "0 lines";
-    case 1: return "1 line";
-    case 3: return "3 lines";
-    case 5: return "5 lines";
-    case 10: return "10 lines";
-    case 25: return "25 lines";
-    default: return "Full";
-    }
 }
 
 bool IsImagePath(const std::string& path)
@@ -1650,11 +1674,33 @@ void Application::RenderToolbar()
         _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
         _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
+    ImGui::BeginDisabled(!_active_operation.empty() || _recent_repositories.empty());
+    const float dropdown_height = ImGui::GetFrameHeight();
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
+    const bool open_recent = ImGui::Button(ICON_MS_KEYBOARD_ARROW_DOWN "###Recent repositories",
+        ImVec2(0.0f, dropdown_height));
+    ImGui::PopFont();
+    if (open_recent)
+        ImGui::OpenPopup("Recent repositories popup");
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Switch repository");
+    ImGui::SameLine();
     if (ActionButton(ICON_MS_FOLDER, repository_name))
         OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
-    ImGui::PopStyleColor(3);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
+    ImGui::PopStyleColor(3);
+    if (ImGui::BeginPopup("Recent repositories popup"))
+    {
+        for (const std::string& path : _recent_repositories)
+        {
+            const std::string label = IconLabel(ICON_MS_FOLDER, path);
+            if (ImGui::MenuItem(label.c_str(), nullptr, path == _snapshot->root, path != _snapshot->root))
+                _engine.Enqueue(OpenRepository{path});
+        }
+        ImGui::EndPopup();
+    }
     if (!_snapshot->working_copy.empty())
     {
         ImGui::SameLine();
@@ -2962,13 +3008,13 @@ void Application::RenderDiff()
 
     ImGui::SetNextItemWidth(combo_width("Side by Side"));
     int view_index = _diff_side_by_side ? 1 : 0;
-    if (ImGui::Combo("View", &view_index, "Unified\0Side by Side\0"))
+    if (DiffCombo("View", view_index, kDiffViewChoices))
         _diff_side_by_side = view_index == 1;
 
     ImGui::SameLine();
     ImGui::SetNextItemWidth(combo_width("Ignore All Whitespace"));
     int whitespace_index = WhitespaceModeIndex(_diff_whitespace_mode);
-    if (ImGui::Combo("##whitespace mode", &whitespace_index, "Normal\0Ignore Whitespace\0Ignore All Whitespace\0"))
+    if (DiffCombo("##whitespace mode", whitespace_index, kDiffWhitespaceChoices))
         reload(WhitespaceModeFromIndex(whitespace_index), _diff_context_lines);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Choose how whitespace-only changes are displayed.");
@@ -2976,18 +3022,8 @@ void Application::RenderDiff()
     ImGui::SameLine();
     ImGui::SetNextItemWidth(combo_width("25 lines"));
     int context_index = ContextLineChoiceIndex(_diff_context_lines);
-    if (ImGui::BeginCombo("##context lines", ContextLineChoiceLabel(context_index)))
-    {
-        for (int index = 0; index < static_cast<int>(kDiffContextChoices.size()); ++index)
-        {
-            const bool selected = index == context_index;
-            if (ImGui::Selectable(ContextLineChoiceLabel(index), selected))
-                reload(_diff_whitespace_mode, kDiffContextChoices[static_cast<std::size_t>(index)]);
-            if (selected)
-                ImGui::SetItemDefaultFocus();
-        }
-        ImGui::EndCombo();
-    }
+    if (DiffCombo("##context lines", context_index, kDiffContextLabels))
+        reload(_diff_whitespace_mode, kDiffContextChoices[static_cast<std::size_t>(context_index)]);
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Number of unchanged lines shown around each change.");
 
@@ -3218,13 +3254,17 @@ void Application::RenderDiff()
                     "Moving these lines will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
         };
-        move(ICON_MS_ARROW_UPWARD, "Move line to child", child, context_line, linear_child);
-        move(ICON_MS_ARROW_DOWNWARD, "Move line to parent", parent, context_line, !parent.empty());
-        ImGui::Separator();
-        move(ICON_MS_ARROW_UPWARD, context_has_selection ? "Move selection to child" : "Move hunk to child",
-            child, context_region, linear_child);
-        move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move selection to parent" : "Move hunk to parent",
-            parent, context_region, !parent.empty());
+        const auto& move_lines = context_has_selection ? context_region : context_line;
+        move(ICON_MS_ARROW_UPWARD, context_has_selection ? "Move lines to child" : "Move line to child",
+            child, move_lines, linear_child);
+        move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move lines to parent" : "Move line to parent",
+            parent, move_lines, !parent.empty());
+        if (!context_has_selection)
+        {
+            ImGui::Separator();
+            move(ICON_MS_ARROW_UPWARD, "Move hunk to child", child, context_region, linear_child);
+            move(ICON_MS_ARROW_DOWNWARD, "Move hunk to parent", parent, context_region, !parent.empty());
+        }
         if (!stale && _snapshot != nullptr)
         {
             ImGui::Separator();
@@ -4369,6 +4409,16 @@ bool Application::DiffSideBySideForTest() const
     return _diff_side_by_side;
 }
 
+DiffWhitespaceMode Application::DiffWhitespaceModeForTest() const
+{
+    return _diff_whitespace_mode;
+}
+
+int Application::DiffContextLinesForTest() const
+{
+    return _diff_context_lines;
+}
+
 const std::string& Application::CompareToForTest() const
 {
     return _compare_to;
@@ -4422,6 +4472,11 @@ std::vector<std::string> Application::DialogFilesetsForTest() const
 const std::string& Application::DialogDestinationForTest() const
 {
     return _input_primary;
+}
+
+const MoveDiffLines& Application::PendingMoveDiffLinesForTest() const
+{
+    return std::get<MoveDiffLines>(_pending_commands.front());
 }
 
 std::string Application::RebaseSourceForTest() const

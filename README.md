@@ -55,7 +55,7 @@ selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
 the current working-copy change while preserving later edits where the patch
 applies. Working-copy file menus can also delete the file from disk.
-Right-click a text diff to move the clicked line, the active selection, or
+Right-click a text diff to move the clicked line, the selected lines, or
 the containing hunk to an adjacent parent or child change; unavailable targets
 and unsupported diff contexts remain disabled. Unified and side-by-side views
 both support character-level text selection and expose **Copy** in the diff
@@ -88,8 +88,8 @@ the dialog can instead rebase the entire branch from its divergence point.
 
 Repository and libgit2 handles stay on one worker thread. The UI exchanges
 typed commands and immutable snapshots with that worker. External Git and
-working-tree changes are adopted automatically once per second and on window
-focus. Clone credentials are requested on demand and are never persisted.
+working-tree changes are adopted automatically from native filesystem
+notifications. Clone credentials are requested on demand and are never persisted.
 
 Common shortcuts: **Ctrl+O** open repository, **Ctrl+W** close repository,
 **Ctrl+N** new change, **Ctrl+Z/Ctrl+Y** undo/redo, **F5** refresh,

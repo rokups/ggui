@@ -119,7 +119,8 @@ struct RemovePath
 };
 
 std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
-    RepositoryEngine& engine, const std::function<bool(const RepoSnapshot&)>& predicate)
+    RepositoryEngine& engine, const std::function<bool(const RepoSnapshot&)>& predicate,
+    bool* operation_progress = nullptr)
 {
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     std::shared_ptr<const RepoSnapshot> last_snapshot;
@@ -127,6 +128,8 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
     {
         for (const Event& event : engine.PollEvents())
         {
+            if (operation_progress != nullptr && std::holds_alternative<OperationProgress>(event))
+                *operation_progress = true;
             if (const auto* error = std::get_if<ErrorEvent>(&event))
             {
                 ADD_FAILURE() << error->operation << ": " << error->message;
@@ -394,10 +397,12 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_EQ(replacement_change->parents, empty_change->parents);
 
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
+    bool automatic_progress = false;
     const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > replacement->generation && !snapshot.status.empty();
-    });
+    }, &automatic_progress);
     ASSERT_NE(refreshed, nullptr);
+    EXPECT_FALSE(automatic_progress);
     const auto nonempty_change = std::ranges::find(refreshed->revisions, refreshed->working_copy, &Revision::oid);
     ASSERT_NE(nonempty_change, refreshed->revisions.end());
     EXPECT_FALSE(nonempty_change->empty);
