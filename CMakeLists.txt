@@ -196,10 +196,22 @@ add_library(IconFontCppHeaders INTERFACE)
 target_include_directories(IconFontCppHeaders INTERFACE ${IconFontCppHeaders_SOURCE_DIR})
 
 add_library(ggui_core STATIC
-  Source/Core.cpp
-  Source/Core.hpp
-  Source/Graph.cpp
-  Source/Graph.hpp)
+  Source/Core/Model.hpp
+  Source/Core/Commands.hpp
+  Source/Core/Events.hpp
+  Source/Core/RepositoryEngine.hpp
+  Source/Core/RepositoryEngineInternal.hpp
+  Source/Core/RepositorySupport.cpp
+  Source/Core/RepositoryEngine.cpp
+  Source/Core/RepositoryLifecycle.cpp
+  Source/Core/RepositoryRemote.cpp
+  Source/Core/RepositorySnapshot.cpp
+  Source/Core/RepositoryDiff.cpp
+  Source/Core/RepositoryWorkingCopy.cpp
+  Source/Core/RepositoryMutations.cpp
+  Source/Core/RepositoryWorker.cpp
+  Source/Graph/Layout.cpp
+  Source/Graph/Layout.hpp)
 target_include_directories(ggui_core PUBLIC Source)
 target_link_libraries(ggui_core PUBLIC gg::gg PRIVATE efsw-static spdlog::spdlog)
 target_compile_options(ggui_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
@@ -222,8 +234,25 @@ add_custom_command(
   VERBATIM)
 
 add_executable(ggui
-  Source/Application.cpp
-  Source/Application.hpp
+  Source/Application/Application.hpp
+  Source/Application/ApplicationInternal.hpp
+  Source/Application/CommonSupport.cpp
+  Source/Application/DiffSupport.cpp
+  Source/Application/ReferenceSupport.cpp
+  Source/Application/DrawingSupport.cpp
+  Source/Application/TestingSupport.cpp
+  Source/Application/Lifecycle.cpp
+  Source/Application/EngineEvents.cpp
+  Source/Application/Shell.cpp
+  Source/Application/RepositoryPanels.cpp
+  Source/Application/HistoryPanel.cpp
+  Source/Application/ChangesPanel.cpp
+  Source/Application/DiffPanel.cpp
+  Source/Application/OperationsPanel.cpp
+  Source/Application/Dialogs.cpp
+  Source/Application/Actions.cpp
+  Source/Application/Theme.cpp
+  Source/Application/Testing.cpp
   "${GGUI_EMBEDDED_FONT_SOURCE}"
   Source/Main.cpp)
 if(WIN32)

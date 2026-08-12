@@ -1,6 +1,6 @@
 // Copyright (c) 2026-2026 the ggui project.
 // SPDX-License-Identifier: GPL-2.0-only
-#include "Application.hpp"
+#include "Application/Application.hpp"
 
 #include <IconsMaterialSymbols.h>
 #include <imgui.h>

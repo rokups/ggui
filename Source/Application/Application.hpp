@@ -2,10 +2,14 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #pragma once
 
-#include "Core.hpp"
-#include "Graph.hpp"
+#include "Core/RepositoryEngine.hpp"
+#include "Graph/Layout.hpp"
 
 #include <SDL3/SDL.h>
+
+#ifdef DeleteFile
+#undef DeleteFile
+#endif
 
 #include <cstdint>
 #include <filesystem>

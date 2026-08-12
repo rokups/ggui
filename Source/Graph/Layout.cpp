@@ -1,7 +1,7 @@
 // Copyright (c) 2026-2026 the ggui project.
 // SPDX-License-Identifier: GPL-2.0-only
 // Lane assignment adapted from ImGit's GraphBuilder with arbitrary-parent support.
-#include "Graph.hpp"
+#include "Layout.hpp"
 
 #include <algorithm>
 #include <unordered_map>

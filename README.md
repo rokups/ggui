@@ -21,6 +21,18 @@ For a Windows cross-build, install MinGW-w64 and a static Windows build of
 The application operates on one repository at a time. Repository mutations
 are serialized on a worker thread and use libgg's public C API.
 
+## Source layout
+
+- `Source/Application` contains the SDL/ImGui lifecycle, panels, dialogs,
+  actions, presentation helpers, and UI-test adapters.
+- `Source/Core` contains the repository model, typed commands and events, and
+  the worker-side engine split by lifecycle, remote, snapshot, diff,
+  working-copy, and mutation responsibilities.
+- `Source/Graph` contains the independent history graph layout.
+- `Source/Platform/Windows` contains native executable resources.
+- `Assets` retains the source SVG artwork and preconverted platform formats,
+  keeping platform builds independent of image-conversion tools.
+
 ## Software-rendered tests and coverage
 
 The coverage build embeds Dear ImGui Test Engine in the real executable. On
@@ -32,8 +44,9 @@ GGUI_GG_PREFIX=/path/to/gg/prefix ./scripts/run_software_coverage.sh
 ```
 
 The harness also exercises settings recovery and SDL/OpenGL startup failures,
-then enforces 100% line coverage across `Application.cpp`, `Core.cpp`,
-`Graph.cpp`, and `Main.cpp`. Exclusions are limited to marked native-dialog,
+then enforces 100% line coverage across the production `.cpp` files under
+`Source/Application`, `Source/Core`, `Source/Graph`, and `Source/Main.cpp`.
+Exclusions are limited to marked native-dialog,
 external-application, allocator/thread/bootstrap, and impossible dependency
 failure paths; compiler-attributed brace-only lines are ignored.
 

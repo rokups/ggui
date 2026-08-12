@@ -1,7 +1,7 @@
 // Copyright (c) 2026-2026 the ggui project.
 // SPDX-License-Identifier: GPL-2.0-only
-#include "Core.hpp"
-#include "Graph.hpp"
+#include "Core/RepositoryEngine.hpp"
+#include "Graph/Layout.hpp"
 
 #include <gtest/gtest.h>
 

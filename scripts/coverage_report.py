@@ -12,13 +12,20 @@ import subprocess
 import tempfile
 
 
-SOURCES = {
-    "Application.cpp": "CMakeFiles/ggui.dir/Source/Application.cpp.gcno",
-    "Core.cpp": "CMakeFiles/ggui_core.dir/Source/Core.cpp.gcno",
-    "Graph.cpp": "CMakeFiles/ggui_core.dir/Source/Graph.cpp.gcno",
-    "Main.cpp": "CMakeFiles/ggui.dir/Source/Main.cpp.gcno",
-}
 STRUCTURAL_LINES = {"", "{", "}", "};", "},"}
+
+
+def production_sources(root: pathlib.Path) -> list[tuple[pathlib.Path, str]]:
+    source_root = root / "Source"
+    targets = {
+        "Application": "ggui",
+        "Core": "ggui_core",
+        "Graph": "ggui_core",
+    }
+    result = [(source_root / "Main.cpp", "ggui")]
+    for directory, target in targets.items():
+        result.extend((source, target) for source in sorted((source_root / directory).glob("*.cpp")))
+    return result
 
 
 def exclusions(lines: list[str]) -> set[int]:
@@ -65,8 +72,9 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="ggui-gcov-") as temporary:
         output = pathlib.Path(temporary)
-        for name, object_path in SOURCES.items():
-            source = root / "Source" / name
+        for source, target in production_sources(root):
+            name = source.relative_to(root).as_posix()
+            object_path = f"CMakeFiles/{target}.dir/{name}.gcno"
             source_lines = source.read_text(encoding="utf-8").splitlines()
             record = gcov_record(build, source, object_path, output)
             counts: collections.defaultdict[int, int] = collections.defaultdict(int)
