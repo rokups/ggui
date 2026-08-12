@@ -116,7 +116,8 @@ void Application::RenderDialogs()
         "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
-        "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action", "Credentials###ggui action",
+        "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action",
+        "Reconcile bookmark###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action", "Locked commit warning###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
@@ -294,6 +295,20 @@ void Application::RenderDialogs()
             ImGui::EndCombo();
         }
         break;
+    case Dialog::Reconcile:
+        ImGui::Text("Reconcile bookmark %s", _input_primary.c_str());
+        TextLabelledId("Local tip: ", _input_tertiary, RevisionPrefix(_input_tertiary),
+            CommitIdColor(_input_tertiary == _snapshot->working_copy));
+        TextLabelledId(("Remote tip (" + _input_secondary + "): ").c_str(), _input_filesets,
+            RevisionPrefix(_input_filesets), CommitIdColor(_input_filesets == _snapshot->working_copy));
+        ImGui::Spacing();
+        ImGui::TextWrapped("gg will rebase the local-only branch onto the fetched remote tip and move the local "
+                           "bookmark atomically. This rewrites local changes, may produce logical conflicts, and can "
+                           "be undone.");
+        if (_snapshot->generation != _dialog_snapshot_generation)
+            ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+                "Repository changed. Close this dialog and inspect the updated bookmark tips.");
+        break;
     case Dialog::Credentials:
         ImGui::TextWrapped("Credentials requested by %s", _credential_request.url.c_str());
         ImGui::TextUnformatted("Method");
@@ -351,12 +366,14 @@ void Application::RenderDialogs()
     const bool operation_blocks_submit = !_active_operation.empty() && _dialog != Dialog::Credentials;
     const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
-    const bool focus_submit = _dialog == Dialog::ConfirmDrop;
+    const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
-    const char* submit_label = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm" : "Apply";
+    const char* submit_label = _dialog == Dialog::Reconcile ? "Reconcile"
+        : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
+                                                                            : "Apply";
     const bool submit = (modifies_locked ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                          : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -419,6 +436,7 @@ void Application::SubmitDialog()
         break;
     case Dialog::WorkspaceRename: _engine.Enqueue(WorkspaceRename{_input_primary}); break;
     case Dialog::PushTo: _engine.Enqueue(Push{_input_secondary, _input_primary}); break;
+    case Dialog::Reconcile: _engine.Enqueue(Rebase{_input_tertiary, _input_filesets, true}); break;
     case Dialog::Credentials:
     {
         CredentialResponse response;

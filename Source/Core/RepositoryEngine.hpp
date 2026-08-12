@@ -48,4 +48,16 @@ void MarkPushedRevisions(
     std::vector<Revision>& revisions, const std::vector<NamedRef>& refs, git_repository* repository = nullptr);
 std::string FirstLine(const std::string& value);
 
+enum class BookmarkRelation
+{
+    Unavailable,
+    Synchronized,
+    LocalAhead,
+    RemoteAhead,
+    Diverged,
+};
+
+BookmarkRelation ClassifyBookmarkRelation(
+    const RepoSnapshot& snapshot, std::string_view local, std::string_view remote);
+
 } // namespace Ggui

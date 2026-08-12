@@ -1411,12 +1411,57 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK(!context->ItemExists("**/reconcile-origin"));
         context->ItemClick("**/Delete");
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/origin").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->KeyPress(ImGuiKey_Escape);
         context->KeyPress(ImGuiKey_Escape);
+    };
+
+    test = IM_REGISTER_TEST(engine, "Interactions", "DivergedBookmarkReconciliation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.refs.push_back(
+            {"diverged", "upstream", "third", GG_NAMED_REF_REMOTE_BOOKMARK, true, false});
+        IM_CHECK_EQ(
+            ClassifyBookmarkRelation(snapshot, "left", "right"), BookmarkRelation::Diverged);
+        application.SetSnapshotForTest(snapshot);
+        context->Yield(2);
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/diverged", ImGuiMouseButton_Right);
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("**/Push"));
+        IM_CHECK(context->ItemExists("**/reconcile-origin"));
+        IM_CHECK(context->ItemExists("**/reconcile-upstream"));
+        context->ItemClick("**/reconcile-origin");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK((context->ItemInfo("Reconcile").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Reconcile");
+
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/diverged", ImGuiMouseButton_Right);
+        context->Yield(2);
+        context->ItemClick("**/reconcile-origin");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+
+        ++snapshot.generation;
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(snapshot)});
+        context->Yield(2);
+        IM_CHECK((context->ItemInfo("Reconcile").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemClick("Cancel");
+
+        application.ApplyEventForTest(OperationStarted{"busy"});
+        FocusWindow(context, "Bookmarks");
+        context->ItemClick("**/diverged", ImGuiMouseButton_Right);
+        context->Yield(2);
+        IM_CHECK((context->ItemInfo("**/reconcile-origin").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+        application.ApplyEventForTest(OperationFinished{"busy"});
     };
 
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");

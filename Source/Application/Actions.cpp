@@ -175,6 +175,11 @@ bool Application::DialogModifiesLockedCommit() const
         return IsLocked(_selected_revision) || IsLocked(destination);
     }
     case Dialog::Restore: return IsLocked(_selected_revision) || IsLocked(_input_primary);
+    case Dialog::Reconcile:
+    {
+        const Revision* source = RebaseBranchRoot(*_snapshot, _input_tertiary, _input_filesets);
+        return IsLocked(source == nullptr ? _input_tertiary : source->oid);
+    }
     case Dialog::ConfirmDrop: return IsLocked(_pending_drop.source) || IsLocked(_pending_drop.target);
     case Dialog::ConfirmLocked: return true;
     default: return false;
@@ -294,6 +299,19 @@ bool Application::CanSubmitDialog() const
     case Dialog::WorkspaceRename: return HasText(_input_primary);
     case Dialog::RemoteAdd: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::PushTo: return HasText(_input_primary) && HasText(_input_secondary);
+    case Dialog::Reconcile:
+        return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
+            && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
+                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary
+                       && ref.target == _input_tertiary;
+               })
+            && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
+                   return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.tracked
+                       && ref.name == _input_primary && ref.remote == _input_secondary
+                       && ref.target == _input_filesets;
+               })
+            && ClassifyBookmarkRelation(*_snapshot, _input_tertiary, _input_filesets)
+                == BookmarkRelation::Diverged;
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));

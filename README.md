@@ -98,6 +98,10 @@ a popup menu. Every graph drop shows a confirmation preview and remains
 undoable through gg's operation history.
 Right-click **Rebase** rebases the currently selected change onto that row;
 the dialog can instead rebase the entire branch from its divergence point.
+When a tracked local and remote bookmark have both advanced, right-click the
+bookmark and choose **Reconcile with remote/bookmark...** to rebase the local-only
+branch onto the fetched remote tip. Reconciliation remains undoable and any
+logical conflicts use the existing conflict workflow before the next push.
 
 Repository and libgit2 handles stay on one worker thread. The UI exchanges
 typed commands and immutable snapshots with that worker. External Git and

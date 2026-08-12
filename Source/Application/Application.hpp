@@ -107,6 +107,7 @@ private:
         WorkspaceAdd,
         WorkspaceRename,
         PushTo,
+        Reconcile,
         Credentials,
         ConfirmDrop,
         ConfirmLocked,
@@ -237,6 +238,7 @@ private:
     std::vector<Command> _pending_commands;
     std::string _locked_warning;
     bool _pending_change_info_save = false;
+    std::uint64_t _dialog_snapshot_generation = 0;
 
     Dialog _dialog = Dialog::None;
     std::string _input_primary;

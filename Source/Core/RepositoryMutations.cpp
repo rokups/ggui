@@ -207,10 +207,16 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const Undo&) {
-                Mutate("undo", [&](auto* out, auto* operation) { return gg_repository_undo(out, gg, operation); });
+                Mutation mutation;
+                gg_operation_options operation = OperationOptions();
+                Check(gg_repository_undo(&mutation.value, gg, &operation), "undo");
+                PublishSnapshot();
             },
             [&](const Redo&) {
-                Mutate("redo", [&](auto* out, auto* operation) { return gg_repository_redo(out, gg, operation); });
+                Mutation mutation;
+                gg_operation_options operation = OperationOptions();
+                Check(gg_repository_redo(&mutation.value, gg, &operation), "redo");
+                PublishSnapshot();
             },
             [&](const RestoreOperation& value) {
                 Mutate("restore operation", [&](auto* out, auto* operation) {

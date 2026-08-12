@@ -317,6 +317,29 @@ TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
     EXPECT_TRUE(revisions[2].pushed);
 }
 
+TEST(RevisionHelpers, ClassifiesBookmarkRelationshipsConservatively)
+{
+    RepoSnapshot snapshot;
+    const auto revision = [](std::string oid, std::vector<std::string> parents) {
+        Revision result;
+        result.oid = std::move(oid);
+        result.parents = std::move(parents);
+        return result;
+    };
+    snapshot.revisions = {
+        revision("local", {"base"}), revision("remote", {"base"}), revision("local-child", {"local"}),
+        revision("remote-child", {"remote"}), revision("base", {}), revision("incomplete", {"missing"}),
+    };
+
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "local"), BookmarkRelation::Synchronized);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local-child", "local"), BookmarkRelation::LocalAhead);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "remote", "remote-child"), BookmarkRelation::RemoteAhead);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "remote"), BookmarkRelation::Diverged);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "incomplete"), BookmarkRelation::Unavailable);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "absent", "remote"), BookmarkRelation::Unavailable);
+    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "absent", "absent"), BookmarkRelation::Unavailable);
+}
+
 TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
 {
     TemporaryRepository repository;
@@ -555,6 +578,176 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
         return std::ranges::none_of(snapshot.remotes, [](const Remote& candidate) { return candidate.name == "backup"; });
     });
     ASSERT_NE(deleted, nullptr);
+}
+
+TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
+{
+    TemporaryRepository repository;
+    RemovePath remote{repository.path.string() + "-reconcile-bare"};
+    RemovePath peer{repository.path.string() + "-reconcile-peer"};
+    ASSERT_EQ(std::system(("git clone --bare " + Quote(repository.path) + " " + Quote(remote.path)
+                             + " >/dev/null 2>&1")
+                              .c_str()),
+        0);
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path) + " remote set-url origin " + Quote(remote.path)
+                             + " && git -C " + Quote(repository.path) + " fetch origin >/dev/null 2>&1")
+                              .c_str()),
+        0);
+    ASSERT_EQ(std::system(("git clone " + Quote(remote.path) + " " + Quote(peer.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(peer.path)
+                             + " config user.name peer && git -C " + Quote(peer.path)
+                             + " config user.email peer@example.test")
+                              .c_str()),
+        0);
+    std::ofstream(peer.path / "remote.txt") << "remote\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(peer.path) + " add remote.txt && git -C " + Quote(peer.path)
+                             + " commit -m remote >/dev/null 2>&1 && git -C " + Quote(peer.path)
+                             + " push origin main >/dev/null 2>&1")
+                              .c_str()),
+        0);
+    std::ofstream(repository.path / "local.txt") << "local\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path)
+                             + " add local.txt && git -C " + Quote(repository.path)
+                             + " commit -m local >/dev/null 2>&1")
+                              .c_str()),
+        0);
+
+    const auto relation = [](const RepoSnapshot& snapshot) {
+        const auto local = std::ranges::find_if(snapshot.refs, [](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+        });
+        const auto remote_ref = std::ranges::find_if(snapshot.refs, [](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin";
+        });
+        return local == snapshot.refs.end() || remote_ref == snapshot.refs.end()
+            ? BookmarkRelation::Unavailable
+            : ClassifyBookmarkRelation(snapshot, local->target, remote_ref->target);
+    };
+    const auto tips = [](const RepoSnapshot& snapshot) {
+        std::pair<std::string, std::string> result;
+        for (const NamedRef& ref : snapshot.refs)
+        {
+            if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main")
+                result.first = ref.target;
+            if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin")
+                result.second = ref.target;
+        }
+        return result;
+    };
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return relation(snapshot) == BookmarkRelation::LocalAhead;
+    });
+    ASSERT_NE(opened, nullptr);
+    engine.Enqueue(Fetch{"origin", true});
+    const auto diverged = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && relation(snapshot) == BookmarkRelation::Diverged;
+    });
+    ASSERT_NE(diverged, nullptr);
+    const auto [local_tip, remote_tip] = tips(*diverged);
+    ASSERT_FALSE(local_tip.empty());
+    ASSERT_FALSE(remote_tip.empty());
+
+    engine.Enqueue(Rebase{local_tip, remote_tip, true});
+    const auto reconciled = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > diverged->generation && relation(snapshot) == BookmarkRelation::LocalAhead;
+    });
+    ASSERT_NE(reconciled, nullptr);
+    ASSERT_TRUE(reconciled->can_undo);
+
+    engine.Enqueue(Undo{});
+    const auto undone = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > reconciled->generation && relation(snapshot) == BookmarkRelation::Diverged;
+    });
+    ASSERT_NE(undone, nullptr);
+    engine.Enqueue(Redo{});
+    ASSERT_NE(WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > undone->generation && relation(snapshot) == BookmarkRelation::LocalAhead;
+    }), nullptr);
+
+    engine.Enqueue(Push{"main", "origin"});
+    EXPECT_TRUE(WaitForTerminal(engine, "push").finished);
+    git_repository* raw_local = nullptr;
+    git_repository* raw_remote = nullptr;
+    CheckGit(git_repository_open(&raw_local, repository.path.string().c_str()));
+    CheckGit(git_repository_open_bare(&raw_remote, remote.path.string().c_str()));
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> local_repo(raw_local, git_repository_free);
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> remote_repo(raw_remote, git_repository_free);
+    git_oid local_oid{}, remote_oid{};
+    CheckGit(git_reference_name_to_id(&local_oid, local_repo.get(), "refs/heads/main"));
+    CheckGit(git_reference_name_to_id(&remote_oid, remote_repo.get(), "refs/heads/main"));
+    EXPECT_NE(git_oid_equal(&local_oid, &remote_oid), 0);
+}
+
+TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
+{
+    TemporaryRepository repository;
+    RemovePath remote{repository.path.string() + "-conflict-bare"};
+    RemovePath peer{repository.path.string() + "-conflict-peer"};
+    ASSERT_EQ(std::system(("git clone --bare " + Quote(repository.path) + " " + Quote(remote.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(repository.path)
+                             + " remote set-url origin " + Quote(remote.path) + " && git -C "
+                             + Quote(repository.path) + " fetch origin >/dev/null 2>&1 && git clone "
+                             + Quote(remote.path) + " " + Quote(peer.path) + " >/dev/null 2>&1 && git -C "
+                             + Quote(peer.path) + " config user.name peer && git -C " + Quote(peer.path)
+                             + " config user.email peer@example.test")
+                              .c_str()),
+        0);
+    std::ofstream(peer.path / "tracked.txt") << "remote\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(peer.path) + " add tracked.txt && git -C " + Quote(peer.path)
+                             + " commit -m remote >/dev/null 2>&1 && git -C " + Quote(peer.path)
+                             + " push origin main >/dev/null 2>&1")
+                              .c_str()),
+        0);
+    std::ofstream(repository.path / "tracked.txt") << "local\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path)
+                             + " add tracked.txt && git -C " + Quote(repository.path)
+                             + " commit -m local >/dev/null 2>&1")
+                              .c_str()),
+        0);
+
+    const auto refs = [](const RepoSnapshot& snapshot) {
+        std::pair<std::string, std::string> result;
+        for (const NamedRef& ref : snapshot.refs)
+        {
+            if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main")
+                result.first = ref.target;
+            if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin")
+                result.second = ref.target;
+        }
+        return result;
+    };
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        const auto [local, remote_ref] = refs(snapshot);
+        return !local.empty() && !remote_ref.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+    engine.Enqueue(Fetch{"origin", true});
+    const auto diverged = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        const auto [local, remote_ref] = refs(snapshot);
+        return snapshot.generation > opened->generation && !local.empty() && !remote_ref.empty()
+            && ClassifyBookmarkRelation(snapshot, local, remote_ref) == BookmarkRelation::Diverged;
+    });
+    ASSERT_NE(diverged, nullptr);
+    const auto [local_tip, remote_tip] = refs(*diverged);
+
+    engine.Enqueue(Rebase{local_tip, remote_tip, true});
+    const auto conflicted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > diverged->generation
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.conflicted;
+               });
+    });
+    ASSERT_NE(conflicted, nullptr);
+    engine.Enqueue(Push{"main", "origin"});
+    const TerminalEvent push = WaitForTerminal(engine, "push");
+    EXPECT_FALSE(push.finished);
+    EXPECT_NE(push.message.find("conflict"), std::string::npos);
 }
 
 TEST(RepositoryEngine, OpensLinkedWorktree)

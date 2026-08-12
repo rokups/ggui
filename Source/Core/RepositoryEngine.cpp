@@ -6,9 +6,12 @@
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <ranges>
 #include <string>
+#include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -46,6 +49,51 @@ std::vector<Event> RepositoryEngine::PollEvents()
     std::vector<Event> result;
     result.swap(_impl->events);
     return result;
+}
+
+BookmarkRelation ClassifyBookmarkRelation(
+    const RepoSnapshot& snapshot, std::string_view local, std::string_view remote)
+{
+    std::unordered_map<std::string_view, const Revision*> revisions;
+    for (const Revision& revision : snapshot.revisions)
+        revisions.emplace(revision.oid, &revision);
+    if (!revisions.contains(local) || !revisions.contains(remote))
+        return BookmarkRelation::Unavailable;
+    if (local == remote)
+        return BookmarkRelation::Synchronized;
+    const auto is_ancestor = [&](std::string_view ancestor, std::string_view descendant) -> std::optional<bool> {
+        std::vector<std::string_view> pending{descendant};
+        std::unordered_set<std::string_view> visited;
+        bool complete = true;
+        while (!pending.empty())
+        {
+            const std::string_view current = pending.back();
+            pending.pop_back();
+            if (!visited.emplace(current).second)
+                continue;
+            if (current == ancestor)
+                return true;
+            const auto revision = revisions.find(current);
+            if (revision == revisions.end())
+            {
+                complete = false;
+                continue;
+            }
+            for (const std::string& parent : revision->second->parents)
+                pending.push_back(parent);
+        }
+        return complete ? std::optional<bool>{false} : std::nullopt;
+    };
+
+    const std::optional<bool> local_is_ancestor = is_ancestor(local, remote);
+    const std::optional<bool> remote_is_ancestor = is_ancestor(remote, local);
+    if (local_is_ancestor == true)
+        return BookmarkRelation::RemoteAhead;
+    if (remote_is_ancestor == true)
+        return BookmarkRelation::LocalAhead;
+    if (!local_is_ancestor.has_value() || !remote_is_ancestor.has_value())
+        return BookmarkRelation::Unavailable;
+    return BookmarkRelation::Diverged;
 }
 
 void RepositoryEngine::Cancel()

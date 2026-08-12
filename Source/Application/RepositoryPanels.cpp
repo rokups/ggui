@@ -81,6 +81,28 @@ void Application::RenderBookmarks()
                 _input_primary = remote;
                 _input_secondary = name;
             }
+            if (has_local)
+            {
+                for (const NamedRef& candidate : _snapshot->refs)
+                {
+                    if (candidate.kind != GG_NAMED_REF_REMOTE_BOOKMARK || !candidate.tracked
+                        || candidate.name != name || candidate.remote.empty()
+                        || ClassifyBookmarkRelation(*_snapshot, local->target, candidate.target)
+                            != BookmarkRelation::Diverged)
+                        continue;
+                    const std::string label = "Reconcile with " + candidate.remote + "/" + name
+                        + "...###reconcile-" + candidate.remote;
+                    if (ActionMenuItem(ICON_MS_REBASE, label))
+                    {
+                        OpenDialog(Dialog::Reconcile);
+                        _input_primary = name;
+                        _input_secondary = candidate.remote;
+                        _input_tertiary = local->target;
+                        _input_filesets = candidate.target;
+                        _dialog_snapshot_generation = _snapshot->generation;
+                    }
+                }
+            }
             ImGui::Separator();
             if (ActionMenuItem(ICON_MS_EDIT, "Rename...", nullptr, has_local))
             {
