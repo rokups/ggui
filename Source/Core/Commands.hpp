@@ -74,6 +74,7 @@ struct MoveChange
 };
 struct Commit { std::string message; std::vector<std::string> filesets; };
 struct Rebase { std::string source; std::string destination; bool entire_branch = false; };
+struct Duplicate { std::string revision; bool descendants = false; };
 struct Reorder
 {
     std::string source;
@@ -133,7 +134,7 @@ struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; 
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, ApplyPatch, RevertFile, DeleteFile, NewChange, Describe, Metaedit, Edit, MoveChange,
-    Commit, Rebase, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines,
+    Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines,
     RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget,
     WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 

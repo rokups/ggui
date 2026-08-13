@@ -1712,6 +1712,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {ChmodPaths{{"tracked.txt"}, true}, "chmod"},
         {UntrackPaths{{"tracked.txt"}}, "untrack paths"},
         {Rebase{"missing-source", "missing-destination"}, "rebase"},
+        {Duplicate{"missing", true}, "duplicate"},
         {Reorder{"missing-source", "missing-target", GG_REORDER_AFTER}, "reorder"},
         {Split{"missing", "selected", {"tracked.txt"}}, "split"},
         {Squash{"missing-source", "missing-destination", "combined"}, "squash"},

@@ -99,6 +99,14 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                     return gg_repository_rebase(out, gg, &options, operation);
                 });
             },
+            [&](const Duplicate& value) {
+                gg_duplicate_options options = GG_DUPLICATE_OPTIONS_INIT;
+                options.revision = value.revision.c_str();
+                options.descendants = value.descendants;
+                Mutate("duplicate change", [&](auto* out, auto* operation) {
+                    return gg_repository_duplicate(out, gg, &options, operation);
+                });
+            },
             [&](const Reorder& value) {
                 gg_reorder_options options = GG_REORDER_OPTIONS_INIT;
                 options.source = value.source.c_str();
@@ -284,7 +292,8 @@ std::string RepositoryEngine::Impl::CommandName(const Command& command)
             [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
             [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },
             [](const Commit&) { return "commit"; },
-            [](const Rebase&) { return "rebase"; }, [](const Reorder&) { return "reorder"; },
+            [](const Rebase&) { return "rebase"; }, [](const Duplicate&) { return "duplicate"; },
+            [](const Reorder&) { return "reorder"; },
             [](const Split&) { return "split"; }, [](const Squash&) { return "squash"; },
             [](const Abandon&) { return "abandon"; },
             [](const RemoteBookmarkDelete&) { return "delete remote bookmark"; },

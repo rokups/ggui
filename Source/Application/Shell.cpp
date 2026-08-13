@@ -370,6 +370,21 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         select();
         _engine.Enqueue(Edit{revision});
     }
+    const std::string duplicate_label = IconLabel(ICON_MS_CONTENT_COPY, "Duplicate");
+    if (ImGui::BeginMenu(duplicate_label.c_str(), enabled))
+    {
+        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Change"))
+        {
+            select();
+            _engine.Enqueue(Duplicate{revision, false});
+        }
+        if (ActionMenuItem(ICON_MS_ACCOUNT_TREE, "Branch"))
+        {
+            select();
+            _engine.Enqueue(Duplicate{revision, true});
+        }
+        ImGui::EndMenu();
+    }
     const bool can_rebase = !select_revision || (!_selected_revision.empty() && revision != _selected_revision);
     if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, enabled && can_rebase))
     {
