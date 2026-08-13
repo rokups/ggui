@@ -76,6 +76,8 @@ public:
     static unsigned int IdColorForTest(bool working_copy);
     static bool SupportsDiffLanguageForTest(const std::string& path);
     static std::string FileUrlForTest(const std::string& path);
+    static std::vector<std::pair<std::string, std::string>> RecentRepositoryLabelsForTest(
+        const std::vector<std::string>& paths);
     static std::optional<std::filesystem::path> WorkingCopyPathForTest(
         const std::string& root, const std::string& relative);
     static std::string LimitLinesForTest(const std::string& text, std::size_t maximum);
@@ -161,6 +163,7 @@ private:
     void RenderDiff();
     void RenderOperations();
     void RenderDialogs();
+    void RenderRecentRepositories();
     void SetupDockspace();
     void RebuildGraph();
     void RebuildIdPrefixes();
@@ -215,6 +218,7 @@ private:
     std::string _tag_filter;
     std::string _changes_filter;
     std::string _graph_filter;
+    std::string _recent_filter;
     std::string _built_filter;
     std::string _reveal_revision;
     std::unordered_map<std::string, std::size_t> _revision_prefixes;

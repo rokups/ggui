@@ -983,6 +983,49 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "RecentRepositoryMenu");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        const std::vector<std::string> paths{
+            "/north/shared/codex-same", "/south/shared/codex-same",
+            "/east/unique/codex-same", "/secret-parent/visible/codex-solo"};
+        const auto labels = Application::RecentRepositoryLabelsForTest(paths);
+        IM_CHECK_EQ(labels, (std::vector<std::pair<std::string, std::string>>{
+                                {"north/shared/", "codex-same"},
+                                {"south/shared/", "codex-same"},
+                                {"east/unique/", "codex-same"},
+                                {{}, "codex-solo"}}));
+
+        application.SetSnapshotForTest(RichSnapshot());
+        for (const std::string& path : paths) application.AddRecentForTest(path);
+        context->Yield(3);
+        context->SetRef("ggui dockspace");
+        const std::string repository_name = Repository().Path().filename().string();
+        context->ComboClick(("Repository/" + repository_name).c_str());
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        IM_CHECK(context->ItemExists("##recent repository filter"));
+        context->ItemInputValue("##recent repository filter", "secret-parent");
+        context->Yield();
+        IM_CHECK(context->ItemExists("No matching repositories."));
+        context->ItemInputValue("##recent repository filter", "east/unique");
+        context->Yield();
+        IM_CHECK(!context->ItemExists("No matching repositories."));
+        IM_CHECK_EQ(GatherItems(context, "//$FOCUSED", "repository").size(), 1U);
+        context->ItemInputValue("##recent repository filter", "");
+        context->KeyPress(ImGuiKey_Escape);
+
+        context->SetRef("##MainMenuBar");
+        context->ItemClick("Repository");
+        context->Yield();
+        context->ItemClick("**/Recent");
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        IM_CHECK(context->ItemExists("##recent repository filter"));
+        context->KeyPress(ImGuiKey_Escape);
+        context->KeyPress(ImGuiKey_Escape);
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "RichRepositoryStates");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

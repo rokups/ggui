@@ -3,14 +3,109 @@
 #include "ApplicationInternal.hpp"
 
 #include <IconsMaterialSymbols.h>
+#include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <filesystem>
+#include <set>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Ggui
 {
 using namespace ApplicationInternal;
+
+namespace
+{
+struct RecentRepository
+{
+    std::string path;
+    std::vector<std::string> components;
+    std::string parent;
+    std::string name;
+    std::string visible;
+};
+
+std::string RecentSuffix(const RecentRepository& repository, std::size_t count)
+{
+    const std::size_t begin = repository.components.size() > count
+        ? repository.components.size() - count
+        : 0;
+    std::string result;
+    for (std::size_t index = begin; index < repository.components.size(); ++index)
+    {
+        if (!result.empty()) result += '/';
+        result += repository.components[index];
+    }
+    return result;
+}
+
+std::vector<RecentRepository> RecentRepositories(const std::vector<std::string>& paths)
+{
+    std::vector<RecentRepository> result;
+    result.reserve(paths.size());
+    for (const std::string& path : paths)
+    {
+        RecentRepository repository;
+        repository.path = path;
+        const std::filesystem::path normalized = std::filesystem::path(path).lexically_normal();
+        for (const std::filesystem::path& component : normalized)
+        {
+            const std::string value = component.string();
+            if (!value.empty() && value != "." && value != normalized.root_name()
+                && value != normalized.root_directory())
+                repository.components.push_back(value);
+        }
+        if (repository.components.empty()) repository.components.push_back(RepositoryName(path));
+        repository.name = repository.components.back();
+        result.push_back(std::move(repository));
+    }
+
+    for (std::size_t first = 0; first < result.size(); ++first)
+    {
+        std::vector<std::size_t> duplicates;
+        for (std::size_t index = 0; index < result.size(); ++index)
+            if (result[index].name == result[first].name)
+                duplicates.push_back(index);
+        if (duplicates.size() < 2 || duplicates.front() != first)
+            continue;
+
+        std::size_t visible_components = 2;
+        while (true)
+        {
+            std::set<std::string> labels;
+            for (const std::size_t index : duplicates)
+                labels.insert(RecentSuffix(result[index], visible_components));
+            if (labels.size() == duplicates.size()) break;
+            if (std::ranges::none_of(duplicates,
+                    [&](std::size_t index) { return result[index].components.size() > visible_components; }))
+                break;
+            ++visible_components;
+        }
+        for (const std::size_t index : duplicates)
+        {
+            result[index].visible = RecentSuffix(result[index], visible_components);
+            result[index].parent = result[index].visible.substr(
+                0, result[index].visible.size() - result[index].name.size());
+        }
+    }
+    for (RecentRepository& repository : result)
+        if (repository.visible.empty()) repository.visible = repository.name;
+    return result;
+}
+} // namespace
+
+#ifdef IMGUI_BUILD_TESTING
+std::vector<std::pair<std::string, std::string>> Application::RecentRepositoryLabelsForTest(
+    const std::vector<std::string>& paths)
+{
+    std::vector<std::pair<std::string, std::string>> result;
+    for (RecentRepository& repository : RecentRepositories(paths))
+        result.emplace_back(std::move(repository.parent), std::move(repository.name));
+    return result;
+}
+#endif
 
 void Application::RenderFrame()
 {
@@ -137,9 +232,7 @@ void Application::RenderMenuBar()
             OpenDialog(Dialog::Clone);
         if (!_recent_repositories.empty() && ImGui::BeginMenu("Recent"))
         {
-            for (const std::string& path : _recent_repositories)
-                if (ActionMenuItem(ICON_MS_FOLDER, path))
-                    _engine.Enqueue(OpenRepository{path});
+            RenderRecentRepositories();
             ImGui::EndMenu();
         }
         ImGui::Separator();
@@ -219,6 +312,40 @@ void Application::RenderMenuBar()
         ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
+}
+
+void Application::RenderRecentRepositories()
+{
+    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(FontPx(300.0f));
+    ImGui::InputTextWithHint("##recent repository filter", "Filter repositories", &_recent_filter);
+    ImGui::Separator();
+
+    bool any_visible = false;
+    for (const RecentRepository& repository : RecentRepositories(_recent_repositories))
+    {
+        if (!ContainsInsensitive(repository.visible, _recent_filter)) continue;
+        any_visible = true;
+        const bool selected = _snapshot != nullptr && repository.path == _snapshot->root;
+        ImGui::PushID(repository.path.c_str());
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+        const bool open = ImGui::Selectable(
+            (repository.visible + "###repository").c_str(), selected, ImGuiSelectableFlags_SpanAvailWidth);
+        ImGui::PopStyleColor();
+        const ImVec2 minimum = ImGui::GetItemRectMin();
+        const ImVec2 maximum = ImGui::GetItemRectMax();
+        ImVec2 text{minimum.x + ImGui::GetStyle().FramePadding.x,
+            minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f};
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+        draw->AddText(text, ImGui::GetColorU32(ImGuiCol_TextDisabled), repository.parent.c_str());
+        text.x += ImGui::CalcTextSize(repository.parent.c_str()).x;
+        draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), repository.name.c_str());
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", repository.path.c_str());
+        if (open && !selected) _engine.Enqueue(OpenRepository{repository.path});
+        if (selected) ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+    }
+    if (!any_visible) ImGui::TextDisabled("No matching repositories.");
 }
 
 void Application::RenderSelectedChangeActions(const std::string& revision, bool select_revision)
@@ -337,17 +464,7 @@ void Application::RenderToolbar()
     const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
     if (repository_combo_open)
     {
-        for (const std::string& path : _recent_repositories)
-        {
-            const bool selected = path == _snapshot->root;
-            const std::string name = RepositoryName(path);
-            ImGui::PushID(path.c_str());
-            if (ImGui::Selectable(name.c_str(), selected) && !selected)
-                _engine.Enqueue(OpenRepository{path});
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
-            if (selected) ImGui::SetItemDefaultFocus();
-            ImGui::PopID();
-        }
+        RenderRecentRepositories();
         ImGui::EndCombo();
     }
     ImGui::EndDisabled();
