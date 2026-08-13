@@ -330,6 +330,11 @@ void Application::RenderToolbar()
         _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,
         _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
+    if (ActionButton(ICON_MS_FOLDER, repository_name))
+        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
+    ImGui::SameLine();
     ImGui::BeginDisabled(!_active_operation.empty() || _recent_repositories.empty());
     const float dropdown_height = ImGui::GetFrameHeight();
     ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
@@ -341,11 +346,6 @@ void Application::RenderToolbar()
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Switch repository");
-    ImGui::SameLine();
-    if (ActionButton(ICON_MS_FOLDER, repository_name))
-        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
     ImGui::PopStyleColor(3);
     if (ImGui::BeginPopup("Recent repositories popup"))
     {
