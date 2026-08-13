@@ -1,16 +1,17 @@
 # Copyright (c) 2026-2026 the ggui project.
 # SPDX-License-Identifier: GPL-2.0-only
 
-if(NOT DEFINED INPUT OR NOT DEFINED OUTPUT)
-  message(FATAL_ERROR "EmbedFont.cmake requires INPUT and OUTPUT")
+if(NOT DEFINED INPUT OR NOT DEFINED OUTPUT OR NOT DEFINED SYMBOL)
+  message(FATAL_ERROR "EmbedFont.cmake requires INPUT, OUTPUT, and SYMBOL")
 endif()
 
 file(SIZE "${INPUT}" input_size)
+get_filename_component(input_name "${INPUT}" NAME)
 get_filename_component(output_directory "${OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${output_directory}")
 file(WRITE "${OUTPUT}"
-  "/* Generated from MaterialSymbolsOutlined.ttf. */\n\n"
-  "const unsigned char ggui_icon_font_data[] = {\n")
+  "/* Generated from ${input_name}. */\n\n"
+  "const unsigned char ${SYMBOL}[] = {\n")
 
 set(offset 0)
 while(offset LESS input_size)
@@ -26,4 +27,4 @@ while(offset LESS input_size)
 endwhile()
 
 file(APPEND "${OUTPUT}"
-  "};\nconst unsigned int ggui_icon_font_data_len = sizeof ggui_icon_font_data;\n")
+  "};\nconst unsigned int ${SYMBOL}_len = sizeof ${SYMBOL};\n")

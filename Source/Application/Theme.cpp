@@ -8,6 +8,9 @@ using namespace ApplicationInternal;
 
 void Application::ApplyTheme()
 {
+    const float dpi_scale = ImGui::GetStyle().FontScaleDpi;
+    ImGui::GetStyle() = ImGuiStyle{};
+    ImGui::GetStyle().FontScaleDpi = dpi_scale;
     if (_dark_theme)
     {
         ImGui::StyleColorsDark();
@@ -47,9 +50,7 @@ void Application::ApplyTheme()
         colors[ImGuiCol_ResizeGripActive] = ImVec4(0.153f, 0.510f, 0.910f, 0.95f);
         colors[ImGuiCol_Tab] = ImVec4(0.082f, 0.106f, 0.145f, 1.0f);
         colors[ImGuiCol_TabHovered] = ImVec4(0.125f, 0.161f, 0.220f, 1.0f);
-        colors[ImGuiCol_TabActive] = ImVec4(0.098f, 0.129f, 0.176f, 1.0f);
         colors[ImGuiCol_TabUnfocused] = ImVec4(0.074f, 0.094f, 0.129f, 1.0f);
-        colors[ImGuiCol_TabUnfocusedActive] = ImVec4(0.090f, 0.114f, 0.157f, 1.0f);
         colors[ImGuiCol_DockingPreview] = ImVec4(0.153f, 0.510f, 0.910f, 0.35f);
         colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.047f, 0.067f, 0.094f, 1.0f);
         colors[ImGuiCol_TableHeaderBg] = ImVec4(0.082f, 0.106f, 0.145f, 1.0f);
@@ -64,6 +65,8 @@ void Application::ApplyTheme()
     else
         ImGui::StyleColorsLight();
     ImGuiStyle& style = ImGui::GetStyle();
+    style.Colors[ImGuiCol_TabActive] = style.Colors[ImGuiCol_WindowBg];
+    style.Colors[ImGuiCol_TabUnfocusedActive] = style.Colors[ImGuiCol_WindowBg];
     style.WindowRounding = 8.0f;
     style.ChildRounding = 8.0f;
     style.PopupRounding = 8.0f;
@@ -81,6 +84,11 @@ void Application::ApplyTheme()
     style.TabBorderSize = 1.0f;
     style.PopupBorderSize = 1.0f;
     style.WindowMenuButtonPosition = ImGuiDir_None;
+    const float scale = static_cast<float>(_ui_scale_percent) / 100.0f;
+    style.ScaleAllSizes(scale);
+    style.FontSizeBase = 16.0f * scale;
+    style._NextFrameFontSizeBase = style.FontSizeBase;
+    style.FontScaleMain = 1.0f;
 }
 
 } // namespace Ggui

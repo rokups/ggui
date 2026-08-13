@@ -80,6 +80,7 @@ struct RepoSnapshot
     std::uint64_t generation = 0;
     std::string root;
     std::string working_copy;
+    std::string head;
     std::vector<Revision> revisions;
     std::vector<NamedRef> refs;
     std::vector<StatusEntry> status;

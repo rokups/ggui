@@ -21,6 +21,10 @@ namespace Ggui
 
 extern "C" const unsigned char ggui_icon_font_data[];
 extern "C" const unsigned int ggui_icon_font_data_len;
+extern "C" const unsigned char ggui_ui_font_data[];
+extern "C" const unsigned int ggui_ui_font_data_len;
+extern "C" const unsigned char ggui_diff_font_data[];
+extern "C" const unsigned int ggui_diff_font_data_len;
 
 namespace ApplicationInternal
 {
@@ -82,6 +86,7 @@ bool DangerButton(const char* label, const ImVec2& size = {});
 std::string LimitedLines(std::string_view text, std::size_t maximum);
 std::string FormatTimestamp(std::int64_t timestamp);
 void LoadUiFont();
+ImFont* DiffFont();
 ImU32 StatusColor(git_delta_t status);
 const TextEditor::Language* DiffLanguage(const std::string& path);
 
@@ -158,6 +163,7 @@ const char* DeltaName(git_delta_t status);
 bool ContainsInsensitive(std::string_view haystack, std::string_view needle);
 std::string FileUrl(const std::string& path);
 std::string RepositoryName(const std::string& root);
+const std::string& CurrentCommit(const RepoSnapshot& snapshot);
 const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier);
 const Revision* RebaseBranchRoot(
     const RepoSnapshot& snapshot, std::string_view source, std::string_view destination);

@@ -1,6 +1,7 @@
 // Copyright (c) 2026-2026 the ggui project.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Core/RepositoryEngine.hpp"
+#include "Core/Settings.hpp"
 #include "Graph/Layout.hpp"
 
 #include <gtest/gtest.h>
@@ -118,6 +119,32 @@ struct RemovePath
     std::filesystem::path path;
 };
 
+struct TemporaryGlobalConfig
+{
+    TemporaryGlobalConfig()
+    {
+        if (git_libgit2_init() <= 0)
+            throw std::runtime_error("could not initialize libgit2");
+        CheckGit(git_libgit2_opts(GIT_OPT_GET_SEARCH_PATH, GIT_CONFIG_LEVEL_GLOBAL, &previous));
+        path = std::filesystem::temp_directory_path() /
+            ("ggui-config-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        std::filesystem::create_directories(path);
+        std::ofstream(path / ".gitconfig");
+        CheckGit(git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, GIT_CONFIG_LEVEL_GLOBAL, path.string().c_str()));
+    }
+
+    ~TemporaryGlobalConfig()
+    {
+        git_libgit2_opts(GIT_OPT_SET_SEARCH_PATH, GIT_CONFIG_LEVEL_GLOBAL, previous.ptr);
+        git_buf_dispose(&previous);
+        git_libgit2_shutdown();
+        std::filesystem::remove_all(path);
+    }
+
+    git_buf previous = GIT_BUF_INIT;
+    std::filesystem::path path;
+};
+
 std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
     RepositoryEngine& engine, const std::function<bool(const RepoSnapshot&)>& predicate,
     bool* operation_progress = nullptr)
@@ -156,6 +183,64 @@ auto FindRevision(const RepoSnapshot& snapshot, std::string_view id)
     return std::ranges::find_if(snapshot.revisions, [&](const Revision& revision) {
         return revision.oid == id || std::ranges::find(revision.aliases, id) != revision.aliases.end();
     });
+}
+
+TEST(Settings, ParsesFileSizes)
+{
+    EXPECT_EQ(ParseFileSize("0"), 0U);
+    EXPECT_EQ(ParseFileSize("1K"), 1024U);
+    EXPECT_EQ(ParseFileSize("2KB"), 2048U);
+    EXPECT_EQ(ParseFileSize("3KiB"), 3072U);
+    EXPECT_EQ(ParseFileSize("2MiB"), 2U * 1024 * 1024);
+    EXPECT_EQ(ParseFileSize("1GiB"), 1024U * 1024 * 1024);
+    EXPECT_FALSE(ParseFileSize("").has_value());
+    EXPECT_FALSE(ParseFileSize("-1").has_value());
+    EXPECT_FALSE(ParseFileSize("1.5MiB").has_value());
+    EXPECT_FALSE(ParseFileSize("18446744073709551615GiB").has_value());
+}
+
+TEST(Settings, ReadsWritesUnsetsAndResolvesNativeScopes)
+{
+    TemporaryRepository repository;
+    TemporaryGlobalConfig global;
+    const std::optional<std::filesystem::path> path = repository.path;
+    MaxNewFileSizeValues values = ReadMaxNewFileSizeValues(path);
+    EXPECT_FALSE(values[0].has_value());
+    EXPECT_FALSE(values[1].has_value());
+    EXPECT_FALSE(values[2].has_value());
+    EXPECT_EQ(InheritedMaxNewFileSize(values, ConfigScope::User).value, "1MiB");
+    EXPECT_THROW(WriteMaxNewFileSizeValue(path, ConfigScope::User, "invalid"), std::invalid_argument);
+
+    WriteMaxNewFileSizeValue(path, ConfigScope::User, "2MiB");
+    WriteMaxNewFileSizeValue(path, ConfigScope::Repository, "3MiB");
+    WriteMaxNewFileSizeValue(path, ConfigScope::Workspace, "4MiB");
+    values = ReadMaxNewFileSizeValues(path);
+    ASSERT_EQ(values[0], "2MiB");
+    ASSERT_EQ(values[1], "3MiB");
+    ASSERT_EQ(values[2], "4MiB");
+    const InheritedConfigValue repository_inherited =
+        InheritedMaxNewFileSize(values, ConfigScope::Repository);
+    EXPECT_EQ(repository_inherited.value, "2MiB");
+    EXPECT_EQ(repository_inherited.source, ConfigScope::User);
+    const InheritedConfigValue workspace_inherited =
+        InheritedMaxNewFileSize(values, ConfigScope::Workspace);
+    EXPECT_EQ(workspace_inherited.value, "3MiB");
+    EXPECT_EQ(workspace_inherited.source, ConfigScope::Repository);
+
+    git_config* raw_config = nullptr;
+    CheckGit(git_config_open_ondisk(&raw_config, (repository.path / ".git/config").string().c_str()));
+    std::unique_ptr<git_config, decltype(&git_config_free)> config(raw_config, git_config_free);
+    int enabled = 0;
+    CheckGit(git_config_get_bool(&enabled, config.get(), "extensions.worktreeConfig"));
+    EXPECT_EQ(enabled, 1);
+
+    WriteMaxNewFileSizeValue(path, ConfigScope::Workspace, std::nullopt);
+    WriteMaxNewFileSizeValue(path, ConfigScope::Repository, std::nullopt);
+    WriteMaxNewFileSizeValue(path, ConfigScope::User, std::nullopt);
+    values = ReadMaxNewFileSizeValues(path);
+    EXPECT_FALSE(values[0].has_value());
+    EXPECT_FALSE(values[1].has_value());
+    EXPECT_FALSE(values[2].has_value());
 }
 
 struct TerminalEvent
@@ -378,6 +463,8 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
     ASSERT_NE(opened, nullptr);
     EXPECT_EQ(opened->revisions.back().description, "base");
+    EXPECT_TRUE(opened->working_copy.empty());
+    EXPECT_EQ(opened->head, opened->revisions.back().oid);
     EXPECT_EQ(opened->revisions.back().author_email, "ggui@example.test");
     ASSERT_EQ(opened->remotes.size(), 1U);
     EXPECT_EQ(opened->remotes.front().name, "origin");
@@ -1174,9 +1261,43 @@ TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
     ASSERT_NE(destination, destination_snapshot->revisions.end());
     const std::string destination_id = destination->oid;
 
+    engine.Enqueue(Edit{tip_id});
+    const auto checked_out = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > destination_snapshot->generation && snapshot.working_copy == tip_id;
+    });
+    ASSERT_NE(checked_out, nullptr);
+    EXPECT_TRUE(std::ranges::none_of(checked_out->refs, [&](const NamedRef& ref) {
+        return ref.target == checked_out->working_copy;
+    }));
+
+    engine.Enqueue(Rebase{tip_id, destination_id});
+    const auto single_rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= checked_out->generation)
+            return false;
+        const auto unchanged_root = FindRevision(snapshot, root_id);
+        const auto rewritten_tip = FindRevision(snapshot, tip_id);
+        const auto target = FindRevision(snapshot, destination_id);
+        return unchanged_root != snapshot.revisions.end() && rewritten_tip != snapshot.revisions.end()
+            && target != snapshot.revisions.end() && unchanged_root->parents == std::vector{base->oid}
+            && rewritten_tip->parents == std::vector{target->oid};
+    });
+    ASSERT_NE(single_rebased, nullptr);
+
+    engine.Enqueue(Undo{});
+    const auto restored = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= single_rebased->generation)
+            return false;
+        const auto restored_root = FindRevision(snapshot, root_id);
+        const auto restored_tip = FindRevision(snapshot, tip_id);
+        return restored_root != snapshot.revisions.end() && restored_tip != snapshot.revisions.end()
+            && restored_root->parents == std::vector{base->oid}
+            && restored_tip->parents == std::vector{restored_root->oid};
+    });
+    ASSERT_NE(restored, nullptr);
+
     engine.Enqueue(Rebase{tip_id, destination_id, true});
     const auto rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        if (snapshot.generation <= destination_snapshot->generation)
+        if (snapshot.generation <= restored->generation)
             return false;
         const auto rewritten_root = FindRevision(snapshot, root_id);
         const auto rewritten_tip = FindRevision(snapshot, tip_id);

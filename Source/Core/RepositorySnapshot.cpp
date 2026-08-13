@@ -30,6 +30,14 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
     if (gg_repository_working_copy(&working, gg) == GIT_OK)
         result->working_copy = OidString(working);
 
+    git_reference* raw_head = nullptr;
+    if (git_repository_head(&raw_head, git.get()) == GIT_OK)
+    {
+        std::unique_ptr<git_reference, decltype(&git_reference_free)> head(raw_head, git_reference_free);
+        if (const git_oid* target = git_reference_target(head.get()); target != nullptr)
+            result->head = OidString(*target);
+    }
+
     gg_revision_query_options query = GG_REVISION_QUERY_OPTIONS_INIT;
     query.revisions = "all()";
     Revisions revisions;

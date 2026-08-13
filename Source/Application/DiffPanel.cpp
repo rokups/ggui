@@ -362,17 +362,18 @@ void Application::RenderDiff()
     };
 
     const ImVec2 available = ImGui::GetContentRegionAvail();
-    if (plain)
-    {
-        editor.Render("##file view", available, true);
-        render_move_context(editor, false);
-    }
-    else
-    {
+    if (!plain)
         diff.SetSideBySideMode(_diff_side_by_side);
+    ImGui::PushFont(DiffFont(), 0.0f);
+    if (plain)
+        editor.Render("##file view", available, true);
+    else
         diff.Render("##diff view", available, true);
+    ImGui::PopFont();
+    if (plain)
+        render_move_context(editor, false);
+    else
         render_move_context(diff, _diff_side_by_side);
-    }
     ImGui::End();
 }
 

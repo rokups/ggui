@@ -66,6 +66,7 @@ void Application::RenderFrame()
         if (_show_operations) RenderOperations();
     }
     RenderDialogs();
+    if (_show_settings) RenderSettings();
 }
 
 void Application::SetupDockspace()
@@ -155,6 +156,9 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_REFRESH, "Refresh", "F5", _snapshot != nullptr))
             _engine.Enqueue(Refresh{});
         ImGui::EndDisabled();
+        ImGui::Separator();
+        if (ActionMenuItem(ICON_MS_SETTINGS, "Settings..."))
+            OpenSettings();
         if (ActionMenuItem(ICON_MS_CLOSE, "Quit"))
             _running = false; // GCOV_EXCL_LINE: terminating the host aborts an in-process test queue
         ImGui::EndMenu();
@@ -325,58 +329,56 @@ void Application::RenderToolbar()
     ImGui::TextDisabled("REPOSITORY");
     ImGui::SameLine();
     const std::string repository_name = RepositoryName(_snapshot->root);
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
-        _dark_theme ? ImVec4(0.18f, 0.24f, 0.32f, 1.0f) : ImVec4(0.80f, 0.86f, 0.94f, 1.0f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,
-        _dark_theme ? ImVec4(0.21f, 0.28f, 0.37f, 1.0f) : ImVec4(0.74f, 0.82f, 0.92f, 1.0f));
-    if (ActionButton(ICON_MS_FOLDER, repository_name))
-        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s\nClick to open the repository directory.", _snapshot->root.c_str());
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!_active_operation.empty() || _recent_repositories.empty());
-    const float dropdown_height = ImGui::GetFrameHeight();
-    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 1.25f);
-    const bool open_recent = ImGui::Button(ICON_MS_KEYBOARD_ARROW_DOWN "###Recent repositories",
-        ImVec2(0.0f, dropdown_height));
-    ImGui::PopFont();
-    if (open_recent)
-        ImGui::OpenPopup("Recent repositories popup");
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Switch repository");
-    ImGui::PopStyleColor(3);
-    if (ImGui::BeginPopup("Recent repositories popup"))
+    const bool can_switch_repository = std::any_of(_recent_repositories.begin(), _recent_repositories.end(),
+        [&](const std::string& path) { return path != _snapshot->root; });
+    ImGui::BeginDisabled(!_active_operation.empty() || !can_switch_repository);
+    const bool repository_combo_open =
+        ImGui::BeginCombo("###Repository", repository_name.c_str(), ImGuiComboFlags_WidthFitPreview);
+    const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+    if (repository_combo_open)
     {
         for (const std::string& path : _recent_repositories)
         {
-            const std::string label = IconLabel(ICON_MS_FOLDER, path);
-            if (ImGui::MenuItem(label.c_str(), nullptr, path == _snapshot->root, path != _snapshot->root))
+            const bool selected = path == _snapshot->root;
+            const std::string name = RepositoryName(path);
+            ImGui::PushID(path.c_str());
+            if (ImGui::Selectable(name.c_str(), selected) && !selected)
                 _engine.Enqueue(OpenRepository{path});
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", path.c_str());
+            if (selected) ImGui::SetItemDefaultFocus();
+            ImGui::PopID();
         }
-        ImGui::EndPopup();
+        ImGui::EndCombo();
     }
-    if (!_snapshot->working_copy.empty())
+    ImGui::EndDisabled();
+    if (repository_combo_hovered)
+        ImGui::SetTooltip("%s\nSwitch repository.", _snapshot->root.c_str());
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
+        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
+    const std::string& current_commit = CurrentCommit(*_snapshot);
+    if (!current_commit.empty())
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
         ImGui::BeginGroup();
-        TextLabelledId("@ ", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy), CommitIdColor(true));
+        TextLabelledId(_snapshot->working_copy.empty() ? "HEAD " : "@ ", current_commit,
+            RevisionPrefix(current_commit), CommitIdColor(true));
         ImGui::EndGroup();
         ImGui::PopStyleColor();
-        if (ImGui::BeginPopupContextItem("working copy ID context"))
+        if (ImGui::BeginPopupContextItem("current commit ID context"))
         {
-            IdCopyMenuItems("commit ID", _snapshot->working_copy, RevisionPrefix(_snapshot->working_copy));
+            IdCopyMenuItems("commit ID", current_commit, RevisionPrefix(current_commit));
             ImGui::EndPopup();
         }
-        if (const NamedRef* closest = ClosestBookmark(*_snapshot, _snapshot->working_copy); closest != nullptr)
+        if (const NamedRef* closest = ClosestBookmark(*_snapshot, current_commit); closest != nullptr)
         {
             ImGui::SameLine();
             const std::string label = ReferenceLabel(*closest);
             ImGui::TextDisabled("%s%s", ICON_MS_BOOKMARK, label.c_str());
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Closest bookmark to the working copy");
+                ImGui::SetTooltip("Closest bookmark to the current commit");
         }
     }
     if (!_active_operation.empty())

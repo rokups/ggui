@@ -134,12 +134,17 @@ std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name,
     return result;
 }
 
+const std::string& CurrentCommit(const RepoSnapshot& snapshot)
+{
+    return snapshot.working_copy.empty() ? snapshot.head : snapshot.working_copy;
+}
+
 const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier)
 {
     if (identifier.empty())
         return nullptr;
     if (identifier == "@")
-        identifier = snapshot.working_copy;
+        identifier = CurrentCommit(snapshot);
     bool ambiguous = false;
     const Revision* result = nullptr;
     for (const Revision& revision : snapshot.revisions)

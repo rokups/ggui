@@ -46,20 +46,26 @@ void Application::RenderChanges()
     else
         ImGui::TextDisabled("%zu %s file%s", _diff.files.size(), comparing ? "differing" : "changed",
             _diff.files.size() == 1 ? "" : "s");
-    const float navigation_width = FontPx(74.0f);
-    ImGui::SetNextItemWidth(-navigation_width);
+    ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##changes filter", "Filter changed files", &_changes_filter);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!CanNavigateChangedFile(-1));
-    if (ImGui::ArrowButton("Previous changed file", ImGuiDir_Up)) NavigateChangedFile(-1);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Previous changed file (Shift+F6)");
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!CanNavigateChangedFile(1));
-    if (ImGui::ArrowButton("Next changed file", ImGuiDir_Down)) NavigateChangedFile(1);
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Next changed file (F6)");
     ImGui::BeginChild("file list");
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
+        && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const ImGuiID navigation_owner = ImGui::GetID("changes arrow navigation");
+    if (keyboard_navigation)
+    {
+        ImGui::SetKeyOwner(ImGuiKey_UpArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
+        ImGui::SetKeyOwner(ImGuiKey_DownArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
+    }
+    const bool navigate_up = keyboard_navigation
+        && ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat, navigation_owner);
+    const bool navigate_down = keyboard_navigation
+        && ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat, navigation_owner);
+    const std::string previous_file = _selected_file;
+    if (navigate_up || navigate_down)
+        NavigateChangedFile(navigate_down ? 1 : -1);
+    const bool selection_navigated = previous_file != _selected_file;
     const ImVec2 item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
     for (const StatusEntry& file : _diff.files)
@@ -72,6 +78,8 @@ void Application::RenderChanges()
         const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
         const bool selected = ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
+        if (selection_navigated && file.path == _selected_file)
+            ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();

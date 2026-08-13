@@ -36,11 +36,12 @@ void Application::ApplyEvent(Event event)
                 {
                     const bool had_snapshot = _snapshot != nullptr;
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
-                    const std::string old_working = _snapshot == nullptr ? "" : _snapshot->working_copy;
+                    const std::string old_current = _snapshot == nullptr ? "" : CurrentCommit(*_snapshot);
                     const std::string old_selection = _selected_revision;
                     const std::string old_compare_to = _compare_to;
                     const bool had_selection = !_selected_revisions.empty();
                     _snapshot = std::move(value.snapshot);
+                    const std::string& current = CurrentCommit(*_snapshot);
                     SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
                     RebuildIdPrefixes();
                     RememberRepository(_snapshot->root);
@@ -54,31 +55,31 @@ void Application::ApplyEvent(Event event)
                     }
                     if (repository_changed)
                     {
-                        _selected_revision = !_snapshot->working_copy.empty() ? _snapshot->working_copy
-                            : _snapshot->revisions.empty()                    ? ""
-                                                                             : _snapshot->revisions.front().oid;
+                        _selected_revision = !current.empty() ? current
+                            : _snapshot->revisions.empty()    ? ""
+                                                              : _snapshot->revisions.front().oid;
                         _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
                                                                         : std::vector{_selected_revision};
                     }
                     else
                     {
-                        if (old_working.empty() && !_snapshot->working_copy.empty())
+                        if (old_current.empty() && !current.empty())
                         {
-                            _selected_revision = _snapshot->working_copy;
+                            _selected_revision = current;
                             _selected_revisions = {_selected_revision};
                         }
-                        else if (old_working != _snapshot->working_copy)
+                        else if (old_current != current)
                         {
-                            const auto old = std::ranges::find(_selected_revisions, old_working);
+                            const auto old = std::ranges::find(_selected_revisions, old_current);
                             if (old != _selected_revisions.end())
                             {
-                                const auto replacement = std::ranges::find(_selected_revisions, _snapshot->working_copy);
-                                if (_snapshot->working_copy.empty() || replacement != _selected_revisions.end())
+                                const auto replacement = std::ranges::find(_selected_revisions, current);
+                                if (current.empty() || replacement != _selected_revisions.end())
                                     _selected_revisions.erase(old);
                                 else
-                                    *old = _snapshot->working_copy;
-                                if (_selected_revision == old_working)
-                                    _selected_revision = _snapshot->working_copy;
+                                    *old = current;
+                                if (_selected_revision == old_current)
+                                    _selected_revision = current;
                             }
                         }
                         for (std::string& oid : _selected_revisions)
@@ -112,8 +113,8 @@ void Application::ApplyEvent(Event event)
                                 _selected_revision = _selected_revisions.back();
                             else
                             {
-                                _selected_revision = had_selection && !_snapshot->working_copy.empty()
-                                    ? _snapshot->working_copy
+                                _selected_revision = had_selection && !current.empty()
+                                    ? current
                                     : had_selection && !_snapshot->revisions.empty()
                                     ? _snapshot->revisions.front().oid
                                     : "";

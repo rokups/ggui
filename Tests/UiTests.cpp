@@ -157,6 +157,7 @@ RepoSnapshot RichSnapshot()
     snapshot.generation = 1000;
     snapshot.root = Repository().Path().string();
     snapshot.working_copy = "merge";
+    snapshot.head = "left";
     snapshot.revisions = {
         {"merge", {"left", "right", "third"}, {"change-merge"}, "Merge subject\nbody", "Merger", 5, true, true, false},
         {"left", {"base"}, {"change-left"}, "Left", "Left Author", 4, false, false, false},
@@ -367,6 +368,65 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
         context->Yield();
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "SettingsWindow");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.ClearSnapshotForTest();
+        context->Yield(2);
+        context->MenuClick("//##MainMenuBar/Repository/Settings...");
+        IM_CHECK_NE(WaitForWindow(context, "Settings"), nullptr);
+        context->SetRef("Settings");
+        IM_CHECK(context->ItemExists("User"));
+        IM_CHECK(context->ItemExists("##Maximum new file size User"));
+        IM_CHECK(!context->ItemExists("##Maximum new file size Repository"));
+        IM_CHECK((context->ItemInfo("Repository").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("Workspace").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK(context->ItemExists("**/Open a repository to configure Repository and Workspace overrides."));
+
+        const int original_scale = static_cast<int>(std::lround(ImGui::GetStyle().FontSizeBase / 16.0f * 100.0f));
+        context->ItemInputValue("UI scale", 125);
+        context->Yield();
+        IM_CHECK_LE(std::fabs(ImGui::GetStyle().FontSizeBase - 20.0f), 0.001f);
+        IM_CHECK_LE(std::fabs(ImGui::GetStyle().FontScaleMain - 1.0f), 0.001f);
+        IM_CHECK_LE(std::fabs(ImGui::GetFontBaked()->Size - ImGui::GetFontSize()), 0.001f);
+        context->ItemInputValue("UI scale", original_scale);
+        context->ItemInputValue("##Maximum new file size User", "invalid");
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Enter unsigned bytes or a binary size such as 1MiB."));
+        context->WindowClose("Settings");
+        context->Yield();
+        IM_CHECK(!ImGui::FindWindowByName("Settings")->Active);
+
+        OpenTestRepo(context);
+        WriteMaxNewFileSizeValue(Repository().Path(), ConfigScope::Repository, std::nullopt);
+        application.RefreshForTest();
+        context->Yield(3);
+        const std::uint64_t generation = application.SnapshotForTest()->generation;
+        context->MenuClick("//##MainMenuBar/Repository/Settings...");
+        IM_CHECK_NE(WaitForWindow(context, "Settings"), nullptr);
+        context->SetRef("Settings");
+        IM_CHECK(context->ItemExists("##Maximum new file size User"));
+        context->ItemClick("Repository");
+        context->Yield();
+        IM_CHECK(context->ItemExists("##Maximum new file size Repository"));
+        context->ItemInputValue("##Maximum new file size Repository", "2MiB");
+        context->ItemClick("Workspace");
+        for (int frame = 0; frame < 100 && application.SnapshotForTest()->generation <= generation; ++frame)
+            context->Yield();
+        IM_CHECK_GT(application.SnapshotForTest()->generation, generation);
+        const MaxNewFileSizeValues written = ReadMaxNewFileSizeValues(Repository().Path());
+        IM_CHECK_EQ(written[1], "2MiB");
+
+        context->SetRef("Settings");
+        context->ItemClick("Repository");
+        context->Yield();
+        context->ItemInputValue("##Maximum new file size Repository", "");
+        context->ItemClick("User");
+        context->Yield(2);
+        IM_CHECK(!ReadMaxNewFileSizeValues(Repository().Path())[1].has_value());
+        context->WindowClose("Settings");
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "OperationAvailability");
@@ -629,10 +689,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MouseMove("Next");
         context->Yield();
         const std::string repository_name = Repository().Path().filename().string();
-        context->MouseMove(repository_name.c_str());
+        context->MouseMove("Repository");
         context->Yield();
-        const ImGuiTestItemInfo repository_button = context->ItemInfo(repository_name.c_str());
-        IM_CHECK_GT(repository_button.RectFull.GetWidth(), ImGui::CalcTextSize(repository_name.c_str()).x + 12.0f);
+        const ImGuiTestItemInfo repository_combo = context->ItemInfo("Repository");
+        const float expected_repository_width = ImGui::CalcTextSize(repository_name.c_str()).x
+            + ImGui::GetStyle().FramePadding.x * 2.0f + ImGui::GetFrameHeight();
+        IM_CHECK_LE(std::fabs(repository_combo.RectFull.GetWidth() - expected_repository_width), 1.0f);
+        IM_CHECK_GT(context->ItemInfo("Open repository folder").RectFull.Min.x, repository_combo.RectFull.Max.x);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
@@ -782,9 +845,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             revision.working_copy = false;
         application.ApplyEventForTest(
             SnapshotReady{std::make_shared<RepoSnapshot>(std::move(without_working_copy))});
-        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
 
-        application.SelectRevisionForTest("merge", true);
+        application.SelectRevisionForTest("left", true);
         IM_CHECK(application.SelectedRevisionsForTest().empty());
 
         application.SetSnapshotForTest(RichSnapshot());
@@ -808,6 +871,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(RichSnapshot());
         RepoSnapshot empty = RichSnapshot();
         empty.working_copy.clear();
+        empty.head.clear();
         empty.revisions.clear();
         application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(empty))});
         IM_CHECK(application.SelectedRevisionsForTest().empty());
@@ -922,11 +986,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(4);
         context->SetRef("ggui dockspace");
         const std::string repository_name = Repository().Path().filename().string();
-        const ImGuiTestItemInfo repository_button = context->ItemInfo(repository_name.c_str());
-        const ImGuiTestItemInfo recent_button = context->ItemInfo("Recent repositories");
-        IM_CHECK_GT(recent_button.RectFull.Min.x, repository_button.RectFull.Max.x);
-        IM_CHECK_LT(recent_button.RectFull.GetWidth(), ImGui::CalcTextSize("Recent repositories").x);
-        context->ItemClick("Recent repositories");
+        const ImGuiTestItemInfo repository_combo = context->ItemInfo("Repository");
+        const ImGuiTestItemInfo folder_button = context->ItemInfo("Open repository folder");
+        IM_CHECK_GT(folder_button.RectFull.Min.x, repository_combo.RectFull.Max.x);
+        IM_CHECK_LT(folder_button.RectFull.GetWidth(), ImGui::CalcTextSize("Open repository folder").x);
+        IM_CHECK(context->ItemExists("**/merge"));
+        IM_CHECK(context->ItemExists("**/coverage-bookmark"));
+        RepoSnapshot without_working_copy = RichSnapshot();
+        without_working_copy.working_copy.clear();
+        application.SetSnapshotForTest(std::move(without_working_copy));
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("**/left"));
+        IM_CHECK(context->ItemExists("**/feature"));
+        context->ComboClick(("Repository/" + repository_name).c_str());
         context->Yield();
         context->SetRef("//$FOCUSED");
         IM_CHECK(context->ItemExists("**/recent-11"));
@@ -939,8 +1012,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
         }
         application.SetDarkThemeForTest(false);
+        IM_CHECK_EQ(ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_TabActive]),
+            ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_WindowBg]));
         context->Yield(2);
         application.SetDarkThemeForTest(true);
+        IM_CHECK_EQ(ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_TabUnfocusedActive]),
+            ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_WindowBg]));
         context->Yield(2);
 
         context->MenuClick("//##MainMenuBar/Repository/Recent/recent-11");
@@ -1175,6 +1252,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         FocusWindow(context, "Changes");
 
+        IM_CHECK_LE(std::fabs(context->ItemInfo("##changes filter").RectFull.Max.x
+                            - context->ItemInfo("**/A  added.txt").RectFull.Max.x),
+            1.0f);
+
         context->ItemInputValue("##changes filter", "MODIFIED.TXT");
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/M  modified.txt"));
@@ -1271,6 +1352,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
         IM_CHECK(!application.CanNavigateChangedFileForTest(-1));
         FocusWindow(context, "Changes");
+        context->KeyPress(ImGuiKey_DownArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedFileForTest(), "deleted.txt");
+        context->KeyPress(ImGuiKey_UpArrow);
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedFileForTest(), "added.txt");
         context->ItemInputValue("##changes filter", "modified.txt");
         context->Yield(2);
         context->KeyPress(ImGuiKey_F6);
@@ -1554,8 +1641,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             }
         snapshot.revisions.insert(snapshot.revisions.begin(),
             {"tip", {"left"}, {"change-tip"}, "Current source tip", "Tip Author", 6, false, false, false});
+        snapshot.working_copy.clear();
+        snapshot.head = "tip";
+        for (Revision& revision : snapshot.revisions)
+            revision.working_copy = false;
         application.SetSnapshotForTest(std::move(snapshot));
-        application.SelectRevisionForTest("tip");
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"tip"});
         context->Yield(2);
 
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Rebase...");

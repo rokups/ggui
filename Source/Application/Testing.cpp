@@ -193,9 +193,10 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 #endif
     _snapshot = std::make_shared<RepoSnapshot>(std::move(snapshot));
     RebuildIdPrefixes();
-    _selected_revision = _snapshot->working_copy.empty()
+    const std::string& current = CurrentCommit(*_snapshot);
+    _selected_revision = current.empty()
         ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
-        : _snapshot->working_copy;
+        : current;
     _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
                                                      : std::vector{_selected_revision};
     _selected_file.clear();

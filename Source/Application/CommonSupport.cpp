@@ -17,6 +17,10 @@
 
 namespace Ggui::ApplicationInternal
 {
+namespace
+{
+ImFont* diff_font = nullptr;
+}
 
 float FontPx(float value)
 {
@@ -105,28 +109,13 @@ std::string FormatTimestamp(std::int64_t timestamp)
 
 void LoadUiFont()
 {
-#ifdef _WIN32
-    constexpr std::array paths{"C:/Windows/Fonts/consola.ttf", "C:/Windows/Fonts/cour.ttf"};
-#elif defined(__APPLE__)
-    constexpr std::array paths{"/System/Library/Fonts/Monaco.ttf", "/System/Library/Fonts/Menlo.ttc"};
-#else
-    constexpr std::array paths{"/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf"};
-#endif
-    bool loaded = false;
-    for (const char* path : paths)
-    {
-        ImFontConfig config;
-        config.OversampleH = 2;
-        config.OversampleV = 2;
-        if (std::filesystem::exists(path)
-            && ImGui::GetIO().Fonts->AddFontFromFileTTF(path, 16.0f, &config) != nullptr)
-        {
-            loaded = true;
-            break;
-        }
-    }
-    if (!loaded)
+    ImFontConfig config;
+    config.OversampleH = 2;
+    config.OversampleV = 2;
+    config.FontDataOwnedByAtlas = false;
+    ImStrncpy(config.Name, "NotoSansMono.ttf", IM_ARRAYSIZE(config.Name));
+    if (ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(ggui_ui_font_data),
+            static_cast<int>(ggui_ui_font_data_len), 16.0f, &config) == nullptr)
         ImGui::GetIO().Fonts->AddFontDefault();
     static constexpr ImWchar ranges[]{0xe000, 0xf8ff, 0};
     ImFontConfig icons;
@@ -137,6 +126,21 @@ void LoadUiFont()
     icons.FontDataOwnedByAtlas = false;
     ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(ggui_icon_font_data),
         static_cast<int>(ggui_icon_font_data_len), 17.0f, &icons, ranges);
+
+    ImFontConfig diff;
+    diff.OversampleH = 2;
+    diff.OversampleV = 2;
+    diff.FontDataOwnedByAtlas = false;
+    ImStrncpy(diff.Name, "JetBrainsMono.ttf", IM_ARRAYSIZE(diff.Name));
+    diff_font = ImGui::GetIO().Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(ggui_diff_font_data),
+        static_cast<int>(ggui_diff_font_data_len), 16.0f, &diff);
+    if (diff_font == nullptr)
+        diff_font = ImGui::GetIO().Fonts->Fonts.front();
+}
+
+ImFont* DiffFont()
+{
+    return diff_font;
 }
 
 std::vector<std::string> SplitLines(std::string_view text)

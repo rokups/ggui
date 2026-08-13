@@ -132,7 +132,7 @@ bool Application::IsLocked(const std::string& identifier) const
 {
     if (_snapshot == nullptr || identifier.empty())
         return false;
-    std::string oid = identifier == "@" ? _snapshot->working_copy : identifier;
+    std::string oid = identifier == "@" ? CurrentCommit(*_snapshot) : identifier;
     const auto ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
         return candidate.name == oid;
     });

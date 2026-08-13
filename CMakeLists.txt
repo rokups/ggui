@@ -210,6 +210,8 @@ add_library(ggui_core STATIC
   Source/Core/RepositoryWorkingCopy.cpp
   Source/Core/RepositoryMutations.cpp
   Source/Core/RepositoryWorker.cpp
+  Source/Core/Settings.cpp
+  Source/Core/Settings.hpp
   Source/Graph/Layout.cpp
   Source/Graph/Layout.hpp)
 target_include_directories(ggui_core PUBLIC Source)
@@ -222,16 +224,28 @@ if(GGUI_ENABLE_COVERAGE OR GGUI_ENABLE_IMGUI_TEST_ENGINE)
   target_compile_definitions(ggui_core PUBLIC GGUI_TESTING=1)
 endif()
 
-set(GGUI_EMBEDDED_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedFont.c")
-add_custom_command(
-  OUTPUT "${GGUI_EMBEDDED_FONT_SOURCE}"
-  COMMAND "${CMAKE_COMMAND}"
-    "-DINPUT=${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/MaterialSymbolsOutlined.ttf"
-    "-DOUTPUT=${GGUI_EMBEDDED_FONT_SOURCE}"
-    -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFont.cmake"
-  DEPENDS Assets/Fonts/MaterialSymbolsOutlined.ttf cmake/EmbedFont.cmake
-  COMMENT "Embedding Material Symbols font"
-  VERBATIM)
+function(ggui_embed_font output input symbol)
+  add_custom_command(
+    OUTPUT "${output}"
+    COMMAND "${CMAKE_COMMAND}"
+      "-DINPUT=${input}"
+      "-DOUTPUT=${output}"
+      "-DSYMBOL=${symbol}"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFont.cmake"
+    DEPENDS "${input}" cmake/EmbedFont.cmake
+    COMMENT "Embedding ${input}"
+    VERBATIM)
+endfunction()
+
+set(GGUI_EMBEDDED_ICON_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedIconFont.c")
+set(GGUI_EMBEDDED_UI_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedUiFont.c")
+set(GGUI_EMBEDDED_DIFF_FONT_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/EmbeddedDiffFont.c")
+ggui_embed_font("${GGUI_EMBEDDED_ICON_FONT_SOURCE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/MaterialSymbolsOutlined.ttf" ggui_icon_font_data)
+ggui_embed_font("${GGUI_EMBEDDED_UI_FONT_SOURCE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/NotoSansMono.ttf" ggui_ui_font_data)
+ggui_embed_font("${GGUI_EMBEDDED_DIFF_FONT_SOURCE}"
+  "${CMAKE_CURRENT_SOURCE_DIR}/Assets/Fonts/JetBrainsMono.ttf" ggui_diff_font_data)
 
 add_executable(ggui
   Source/Application/Application.hpp
@@ -244,6 +258,7 @@ add_executable(ggui
   Source/Application/Lifecycle.cpp
   Source/Application/EngineEvents.cpp
   Source/Application/Shell.cpp
+  Source/Application/SettingsWindow.cpp
   Source/Application/RepositoryPanels.cpp
   Source/Application/HistoryPanel.cpp
   Source/Application/ChangesPanel.cpp
@@ -253,7 +268,9 @@ add_executable(ggui
   Source/Application/Actions.cpp
   Source/Application/Theme.cpp
   Source/Application/Testing.cpp
-  "${GGUI_EMBEDDED_FONT_SOURCE}"
+  "${GGUI_EMBEDDED_ICON_FONT_SOURCE}"
+  "${GGUI_EMBEDDED_UI_FONT_SOURCE}"
+  "${GGUI_EMBEDDED_DIFF_FONT_SOURCE}"
   Source/Main.cpp)
 if(WIN32)
   enable_language(RC)

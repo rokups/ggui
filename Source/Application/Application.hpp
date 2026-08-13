@@ -3,6 +3,7 @@
 #pragma once
 
 #include "Core/RepositoryEngine.hpp"
+#include "Core/Settings.hpp"
 #include "Graph/Layout.hpp"
 
 #include <SDL3/SDL.h>
@@ -12,6 +13,7 @@
 #endif
 
 #include <cstdint>
+#include <array>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -146,6 +148,9 @@ private:
     void RenderSelectedChangeActions(const std::string& revision, bool select_revision);
     void RenderToolbar();
     void RenderWelcome();
+    void RenderSettings();
+    void OpenSettings();
+    void ReloadNativeSettings();
     void RenderBookmarks();
     void RenderTags();
     void RenderWorkspaces();
@@ -274,6 +279,13 @@ private:
     bool _show_change_info = true;
     bool _show_diff = true;
     bool _show_operations = false;
+    bool _show_settings = false;
+    bool _settings_select_user = false;
+    int _ui_scale_percent = 100;
+    std::string _settings_repository;
+    MaxNewFileSizeValues _max_new_file_size_values;
+    std::array<std::string, 3> _max_new_file_size_inputs;
+    std::array<std::string, 3> _max_new_file_size_errors;
     bool _diff_side_by_side = false;
     DiffWhitespaceMode _diff_whitespace_mode = DiffWhitespaceMode::Normal;
     int _diff_context_lines = 3;

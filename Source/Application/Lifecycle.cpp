@@ -327,6 +327,7 @@ void Application::LoadSettings()
         const int context_lines = json.value("diffContextLines", 3);
         _diff_context_lines =
             std::ranges::find(kDiffContextChoices, context_lines) == kDiffContextChoices.end() ? 3 : context_lines;
+        _ui_scale_percent = std::clamp(json.value("uiScale", 100), 50, 300);
     }
     catch (const std::exception& error)
     {
@@ -343,7 +344,7 @@ void Application::SaveSettings()
         std::filesystem::create_directories(_settings_path.parent_path());
         const nlohmann::json json{{"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout},
             {"diffSideBySide", _diff_side_by_side}, {"diffWhitespaceMode", WhitespaceModeIndex(_diff_whitespace_mode)},
-            {"diffContextLines", _diff_context_lines}};
+            {"diffContextLines", _diff_context_lines}, {"uiScale", _ui_scale_percent}};
         const std::filesystem::path temporary = _settings_path.string() + ".tmp";
         std::ofstream(temporary) << json.dump(2) << '\n';
         std::error_code error;
