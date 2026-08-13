@@ -132,17 +132,20 @@ void Application::RenderFrame()
         if (_snapshot != nullptr && _dialog == Dialog::None && ImGui::IsKeyPressed(ImGuiKey_F6))
             NavigateChangedFile(io.KeyShift ? -1 : 1);
         const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
-        if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty() && plain_key
+        if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty()
             && !_selected_revision.empty())
         {
-            if (ImGui::IsKeyPressed(ImGuiKey_E))
-                _engine.Enqueue(Edit{_selected_revision});
-            if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
-                CreateChange(true);
-            if (ImGui::IsKeyPressed(ImGuiKey_A))
-                RequestAbandon(_selected_revision);
-            if (ImGui::IsKeyPressed(ImGuiKey_S))
-                OpenDialog(Dialog::Split);
+            if (plain_key)
+            {
+                if (ImGui::IsKeyPressed(ImGuiKey_E))
+                    _engine.Enqueue(Edit{_selected_revision});
+                if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
+                    CreateChange(true);
+                if (ImGui::IsKeyPressed(ImGuiKey_A))
+                    RequestAbandon(_selected_revision);
+            }
+            if (!io.KeyCtrl && !io.KeyShift && !io.KeySuper && ImGui::IsKeyPressed(ImGuiKey_S))
+                OpenDialog(io.KeyAlt ? Dialog::Split : Dialog::Squash);
         }
     }
     if (_snapshot == nullptr)
@@ -392,8 +395,8 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         if (select_revision)
             _input_primary = revision;
     }
-    dialog(ICON_MS_MERGE, "Squash...", nullptr, Dialog::Squash);
-    dialog(ICON_MS_DIFFERENCE, "Split...", "S", Dialog::Split);
+    dialog(ICON_MS_MERGE, "Squash...", "S", Dialog::Squash);
+    dialog(ICON_MS_DIFFERENCE, "Split...", "Alt+S", Dialog::Split);
     dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
     if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A", enabled))
     {

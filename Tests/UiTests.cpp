@@ -2459,6 +2459,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_S);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Into"));
+        IM_CHECK(!context->ItemExists("Selected filesets"));
+        context->ItemClick("Cancel");
+
+        context->KeyPress(ImGuiMod_Alt | ImGuiKey_S);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Selected filesets"));
         IM_CHECK(!context->ItemExists("Into"));
         context->ItemClick("Cancel");
