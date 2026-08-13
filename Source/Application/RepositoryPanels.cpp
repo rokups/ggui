@@ -62,6 +62,7 @@ void Application::RenderBookmarks()
         if (ImGui::BeginPopupContextItem("bookmark context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(name.c_str());
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
             const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
@@ -193,6 +194,7 @@ void Application::RenderTags()
         if (ImGui::BeginPopupContextItem("tag context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(name.c_str());
             const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
             if (ImGui::BeginMenu(copy_label.c_str()))
             {
@@ -251,6 +253,8 @@ void Application::RenderWorkspaces()
         {
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
                 OpenExternalPath(workspace.root, "Workspace directory"); // GCOV_EXCL_LINE: external application handoff
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name"))
+                ImGui::SetClipboardText(workspace.name.c_str());
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
                 ImGui::SetClipboardText(workspace.root.c_str());
             ImGui::BeginDisabled(actions_locked);
@@ -303,6 +307,7 @@ void Application::RenderRemotes()
                 push_url, kTextMuted);
         if (ImGui::BeginPopupContextItem("remote context"))
         {
+            if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(remote.name.c_str());
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
             if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});

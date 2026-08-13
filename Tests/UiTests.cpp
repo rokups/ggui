@@ -1469,6 +1469,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Repository/Copy path");
         IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), Repository().Path().string());
 
+        const auto copy_reference_name = [&](const char* panel, const char* item) {
+            FocusWindow(context, panel);
+            context->ItemClick((std::string("**/") + item).c_str(), ImGuiMouseButton_Right);
+            context->Yield();
+            context->ItemClick("**/Copy name");
+            return std::string(ImGui::GetClipboardText());
+        };
+        IM_CHECK_EQ(copy_reference_name("Bookmarks", "coverage-bookmark"), "coverage-bookmark");
+        IM_CHECK_EQ(copy_reference_name("Tags", "coverage-tag"), "coverage-tag");
+        IM_CHECK_EQ(copy_reference_name("Remotes", "origin"), "origin");
+        IM_CHECK_EQ(copy_reference_name("Workspaces", "current"), "current");
+
         FocusWindow(context, "Workspaces");
         context->ItemClick("**/current", ImGuiMouseButton_Right);
         context->Yield();
