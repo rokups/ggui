@@ -19,7 +19,7 @@ struct InitRepository { std::string path; };
 struct CloneRepository { std::string url; std::string path; };
 struct Refresh { bool snapshot_working_copy = true; };
 struct Fetch { std::string remote; bool tracked_only = false; };
-struct Push { std::string bookmark; std::string remote; };
+struct Push { std::string bookmark; std::string remote; bool force = false; };
 struct AddRemote { std::string name; std::string url; };
 struct DeleteRemote { std::string name; };
 

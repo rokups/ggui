@@ -708,6 +708,54 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     ASSERT_NE(deleted, nullptr);
 }
 
+TEST(RepositoryEngine, ForcePushesDivergedBookmark)
+{
+    TemporaryRepository repository;
+    RemovePath remote{repository.path.string() + "-force-bare"};
+    RemovePath peer{repository.path.string() + "-force-peer"};
+    ASSERT_EQ(std::system(("git clone --bare " + Quote(repository.path) + " " + Quote(remote.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(repository.path)
+                             + " remote set-url origin " + Quote(remote.path) + " && git clone "
+                             + Quote(remote.path) + " " + Quote(peer.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(peer.path)
+                             + " config user.name peer && git -C " + Quote(peer.path)
+                             + " config user.email peer@example.test")
+                              .c_str()),
+        0);
+
+    std::ofstream(peer.path / "remote.txt") << "remote\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(peer.path) + " add remote.txt && git -C "
+                             + Quote(peer.path) + " commit -m remote >/dev/null 2>&1 && git -C "
+                             + Quote(peer.path) + " push origin main >/dev/null 2>&1")
+                              .c_str()),
+        0);
+    std::ofstream(repository.path / "local.txt") << "local\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path) + " add local.txt && git -C "
+                             + Quote(repository.path) + " commit -m local >/dev/null 2>&1")
+                              .c_str()),
+        0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+
+    engine.Enqueue(Push{"main", "origin"});
+    EXPECT_FALSE(WaitForTerminal(engine, "push").finished);
+    engine.Enqueue(Push{"main", "origin", true});
+    EXPECT_TRUE(WaitForTerminal(engine, "push").finished);
+
+    git_repository* raw_local = nullptr;
+    git_repository* raw_remote = nullptr;
+    CheckGit(git_repository_open(&raw_local, repository.path.string().c_str()));
+    CheckGit(git_repository_open_bare(&raw_remote, remote.path.string().c_str()));
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> local(raw_local, git_repository_free);
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> bare(raw_remote, git_repository_free);
+    git_oid local_oid{}, remote_oid{};
+    CheckGit(git_reference_name_to_id(&local_oid, local.get(), "refs/heads/main"));
+    CheckGit(git_reference_name_to_id(&remote_oid, bare.get(), "refs/heads/main"));
+    EXPECT_NE(git_oid_equal(&local_oid, &remote_oid), 0);
+}
+
 TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
 {
     TemporaryRepository repository;

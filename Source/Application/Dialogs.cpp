@@ -294,6 +294,13 @@ void Application::RenderDialogs()
                     _input_primary = remote.name;
             ImGui::EndCombo();
         }
+        ImGui::Checkbox("Force push", &_input_flag);
+        if (_input_flag)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+                "Warning: force push can overwrite remote history.");
+            ImGui::TextWrapped("Remote commits that are not in the local bookmark may become unreachable.");
+        }
         break;
     case Dialog::Reconcile:
         ImGui::Text("Reconcile bookmark %s", _input_primary.c_str());
@@ -371,11 +378,13 @@ void Application::RenderDialogs()
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
-    const char* submit_label = _dialog == Dialog::Reconcile ? "Reconcile"
+    const char* submit_label = _dialog == Dialog::PushTo ? "Push"
+        : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
-    const bool submit = (modifies_locked ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
-                                         : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
+    const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag);
+    const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
+                                          : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
     if (!can_submit && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Fill in the required fields before applying.");
@@ -435,7 +444,7 @@ void Application::SubmitDialog()
             _input_tertiary.empty() ? "@" : _input_tertiary, {}});
         break;
     case Dialog::WorkspaceRename: _engine.Enqueue(WorkspaceRename{_input_primary}); break;
-    case Dialog::PushTo: _engine.Enqueue(Push{_input_secondary, _input_primary}); break;
+    case Dialog::PushTo: _engine.Enqueue(Push{_input_secondary, _input_primary, _input_flag}); break;
     case Dialog::Reconcile: _engine.Enqueue(Rebase{_input_tertiary, _input_filesets, true}); break;
     case Dialog::Credentials:
     {

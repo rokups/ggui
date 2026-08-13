@@ -598,6 +598,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(dialog, nullptr);
         context->SetRef("ggui action");
         IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Remote").ID);
+        IM_CHECK(context->ItemExists("Force push"));
+        IM_CHECK(!context->ItemExists("**/Warning: force push can overwrite remote history."));
+        context->ItemClick("Force push");
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Warning: force push can overwrite remote history."));
+        IM_CHECK(context->ItemExists("Push"));
         const float width = dialog->SizeFull.x;
         context->Yield(4);
         dialog = ImGui::FindWindowByName("ggui action");

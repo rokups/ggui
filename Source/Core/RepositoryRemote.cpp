@@ -126,7 +126,8 @@ void RepositoryEngine::Impl::PushBookmark(const Push& command)
     for (std::size_t index = 0; index < plan.value.refspec_count; ++index)
     {
         const gg_refspec& refspec = plan.value.refspecs[index];
-        refspec_storage.push_back(std::string(refspec.source) + ":" + refspec.destination);
+        refspec_storage.push_back(
+            (command.force ? "+" : "") + std::string(refspec.source) + ":" + refspec.destination);
     }
     for (std::string& refspec : refspec_storage)
         refspec_values.push_back(refspec.data());
