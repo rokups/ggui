@@ -45,12 +45,6 @@ bool ActionButton(std::string_view icon, std::string_view label, const ImVec2& s
     return ImGui::Button(decorated.c_str(), size);
 }
 
-bool ActionSmallButton(std::string_view icon, std::string_view label)
-{
-    const std::string decorated = IconLabel(icon, label);
-    return ImGui::SmallButton(decorated.c_str());
-}
-
 void IdCopyMenuItems(std::string_view name, std::string_view id, std::size_t unique_length)
 {
     const std::size_t short_length = std::min(id.size(), std::max<std::size_t>(8, unique_length));

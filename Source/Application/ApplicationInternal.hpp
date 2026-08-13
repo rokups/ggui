@@ -80,7 +80,6 @@ std::string IconLabel(std::string_view icon, std::string_view label);
 bool ActionMenuItem(std::string_view icon, std::string_view label, const char* shortcut = nullptr,
     bool enabled = true);
 bool ActionButton(std::string_view icon, std::string_view label, const ImVec2& size = {});
-bool ActionSmallButton(std::string_view icon, std::string_view label);
 void IdCopyMenuItems(std::string_view name, std::string_view id, std::size_t unique_length);
 bool DangerButton(const char* label, const ImVec2& size = {});
 std::string LimitedLines(std::string_view text, std::size_t maximum);
