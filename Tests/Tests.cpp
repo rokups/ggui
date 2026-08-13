@@ -589,6 +589,47 @@ TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
     EXPECT_NE(std::ranges::find(diff->files, "untracked.txt", &StatusEntry::path), diff->files.end());
 }
 
+TEST(RepositoryEngine, ShowsAndExplicitlyTracksOversizedFiles)
+{
+    TemporaryRepository repository;
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path)
+                             + " config snapshot.max-new-file-size 1")
+                              .c_str()),
+        0);
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+    engine.Enqueue(NewChange{});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); });
+    ASSERT_NE(opened, nullptr);
+
+    std::ofstream(repository.path / "oversized.txt") << "xx";
+    engine.Enqueue(Refresh{});
+    const auto untracked_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                   return entry.path == "oversized.txt" && entry.status == GIT_DELTA_UNTRACKED;
+               });
+    });
+    ASSERT_NE(untracked_snapshot, nullptr);
+
+    engine.Enqueue(LoadDiff{untracked_snapshot->working_copy, "oversized.txt"});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    const auto untracked = std::ranges::find(diff->files, "oversized.txt", &StatusEntry::path);
+    ASSERT_NE(untracked, diff->files.end());
+    EXPECT_EQ(untracked->status, GIT_DELTA_UNTRACKED);
+
+    engine.Enqueue(TrackPaths{{"oversized.txt"}});
+    const auto tracked = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > untracked_snapshot->generation
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                   return entry.path == "oversized.txt" && entry.status == GIT_DELTA_ADDED;
+               });
+    });
+    ASSERT_NE(tracked, nullptr);
+}
+
 TEST(RepositoryEngine, ShowsRenamedFilesAsSingleChange)
 {
     TemporaryRepository repository;

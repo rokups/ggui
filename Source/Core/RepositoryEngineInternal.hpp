@@ -196,12 +196,14 @@ struct RepositoryEngine::Impl
     void RevertFileChange(const RevertFile& command);
     void DeleteWorkingFile(const DeleteFile& command);
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false);
-    template <class Function> void Mutate(std::string_view action, Function function)
+    template <class Function> void Mutate(std::string_view action, Function function, bool snapshot_after = false)
     {
         Sync();
         RepositoryInternal::Mutation mutation;
         gg_operation_options options = OperationOptions();
         RepositoryInternal::Check(function(&mutation.value, &options), action);
+        if (snapshot_after)
+            Sync();
         PublishSnapshot();
     }
     void DispatchMutation(const Command& command);

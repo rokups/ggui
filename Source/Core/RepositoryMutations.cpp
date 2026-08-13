@@ -249,13 +249,13 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 const StringArray paths(value.filesets);
                 Mutate("track paths", [&](auto* out, auto* operation) {
                     return gg_repository_track_paths(out, gg, paths.Get(), value.include_ignored, operation);
-                });
+                }, true);
             },
             [&](const UntrackPaths& value) {
                 const StringArray paths(value.filesets);
                 Mutate("untrack paths", [&](auto* out, auto* operation) {
                     return gg_repository_untrack_paths(out, gg, paths.Get(), operation);
-                });
+                }, true);
             },
             [&](const ChmodPaths& value) {
                 const StringArray paths(value.filesets);

@@ -79,6 +79,26 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
         const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
         result.files.push_back({old_path, new_path, delta->status, false});
     }
+    git_oid working_copy{};
+    if (command.compare_to.empty() && !command.file_comparison
+        && gg_repository_working_copy(&working_copy, gg) == GIT_OK
+        && git_oid_equal(&oid, &working_copy) != 0)
+    {
+        gg_status_options options = GG_STATUS_OPTIONS_INIT;
+        Status status;
+        Check(gg_repository_status(&status.value, gg, &options), "load untracked files");
+        for (size_t index = 0; index < status.value.entry_count; ++index)
+        {
+            const gg_status_entry& entry = status.value.entries[index];
+            const std::string_view path = entry.new_path == nullptr ? "" : entry.new_path;
+            if (entry.status != GIT_DELTA_UNTRACKED || path.empty()
+                || std::ranges::any_of(result.files, [&](const StatusEntry& file) { return file.path == path; }))
+                continue;
+            result.files.push_back({{}, std::string(path), GIT_DELTA_UNTRACKED, false});
+            if (result.path == path)
+                result.selected_status = GIT_DELTA_UNTRACKED;
+        }
+    }
     if (command.file_comparison)
         result.selected_status = GIT_DELTA_UNMODIFIED;
     if (command.fallback_to_first
