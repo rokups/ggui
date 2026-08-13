@@ -13,6 +13,8 @@ void Application::RenderOperations()
         ImGui::End();
         return;
     }
+
+    // Current operation status
     if (!_error_message.empty())
     {
         ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s", _error_message.c_str());
@@ -26,6 +28,8 @@ void Application::RenderOperations()
     }
     if (!_status_message.empty())
         ImGui::TextDisabled("%s", _status_message.c_str());
+
+    // Operation history
     if (ImGui::BeginTable("operation table", 3,
             ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY
                 | ImGuiTableFlags_Resizable))

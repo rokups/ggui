@@ -50,6 +50,7 @@ void Application::OpenDialog(Dialog dialog)
 
 void Application::RenderDialogs()
 {
+    // Save patch dialog
     if (_open_save_patch)
     {
         ImGui::OpenPopup("Save Patch");
@@ -80,6 +81,8 @@ void Application::RenderDialogs()
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
     }
+
+    // Apply patch dialog
     if (_open_apply_patch)
     {
         ImGui::OpenPopup("Apply Patch");
@@ -112,6 +115,8 @@ void Application::RenderDialogs()
     }
     if (_dialog == Dialog::None)
         return;
+
+    // Repository action dialog window
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
         "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
@@ -143,6 +148,7 @@ void Application::RenderDialogs()
     const bool focus_first = ImGui::IsWindowAppearing();
     const float browse_width = ImGui::CalcTextSize("Browse").x + ImGui::GetStyle().FramePadding.x * 2.0f;
 
+    // Action-specific form
     switch (_dialog)
     {
     case Dialog::Clone:
@@ -358,6 +364,7 @@ void Application::RenderDialogs()
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
+    // Locked commit warning
     const bool modifies_locked = DialogModifiesLockedCommit();
     if (modifies_locked && _dialog != Dialog::ConfirmLocked)
     {
@@ -366,6 +373,7 @@ void Application::RenderDialogs()
         ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote.");
     }
 
+    // Submit and cancel actions
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();

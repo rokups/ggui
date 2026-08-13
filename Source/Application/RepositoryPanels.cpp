@@ -21,6 +21,8 @@ void Application::RenderBookmarks()
         ImGui::End();
         return;
     }
+
+    // Create bookmark and filter controls
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
@@ -29,6 +31,8 @@ void Application::RenderBookmarks()
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
+
+    // Unique bookmark names
     std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
     {
@@ -37,6 +41,8 @@ void Application::RenderBookmarks()
             continue;
         names.push_back(ref.name);
     }
+
+    // Bookmark rows
     for (const std::string& name : names)
     {
         if (!ContainsInsensitive(name, _bookmark_filter))
@@ -59,6 +65,8 @@ void Application::RenderBookmarks()
         const ImVec2 maximum = ImGui::GetItemRectMax();
         elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
             maximum.x - 8.0f, remotes, kTextMuted);
+
+        // Bookmark context menu
         if (ImGui::BeginPopupContextItem("bookmark context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
@@ -126,6 +134,8 @@ void Application::RenderBookmarks()
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
+
+        // Elided bookmark details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
@@ -147,6 +157,8 @@ void Application::RenderTags()
         ImGui::End();
         return;
     }
+
+    // Create tag and filter controls
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
@@ -154,6 +166,8 @@ void Application::RenderTags()
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
+
+    // Unique tag names
     std::vector<std::string> names;
     for (const NamedRef& ref : _snapshot->refs)
     {
@@ -162,6 +176,8 @@ void Application::RenderTags()
             continue;
         names.push_back(ref.name);
     }
+
+    // Tag rows
     for (const std::string& name : names)
     {
         if (!ContainsInsensitive(name, _tag_filter))
@@ -191,6 +207,8 @@ void Application::RenderTags()
         }
         elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
             maximum.x - 8.0f, remotes, kTextMuted);
+
+        // Tag context menu
         if (ImGui::BeginPopupContextItem("tag context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
@@ -208,6 +226,8 @@ void Application::RenderTags()
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
+
+        // Elided tag details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
@@ -229,11 +249,15 @@ void Application::RenderWorkspaces()
         ImGui::End();
         return;
     }
+
+    // Add workspace action
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
     if (ImGui::Button("Add workspace", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::WorkspaceAdd);
     ImGui::EndDisabled();
+
+    // Workspace rows
     for (const Workspace& workspace : _snapshot->workspaces)
     {
         ImGui::PushID(&workspace);
@@ -249,6 +273,8 @@ void Application::RenderWorkspaces()
                                                           : std::string_view(workspace.root);
         elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 23.0f),
             maximum.x - 8.0f, location, kTextMuted);
+
+        // Workspace context menu
         if (ImGui::BeginPopupContextItem("workspace context"))
         {
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
@@ -263,6 +289,8 @@ void Application::RenderWorkspaces()
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
+
+        // Elided workspace details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
@@ -284,11 +312,15 @@ void Application::RenderRemotes()
         ImGui::End();
         return;
     }
+
+    // Add remote action
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
     if (ActionButton(ICON_MS_ADD, "Add remote", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::RemoteAdd);
     ImGui::EndDisabled();
+
+    // Remote rows
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
@@ -305,6 +337,8 @@ void Application::RenderRemotes()
         if (separate_push)
             elided |= DrawTextWithin(draw, ImVec2(minimum.x + 12.0f, minimum.y + 39.0f), maximum.x - 8.0f,
                 push_url, kTextMuted);
+
+        // Remote context menu
         if (ImGui::BeginPopupContextItem("remote context"))
         {
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(remote.name.c_str());
@@ -316,6 +350,8 @@ void Application::RenderRemotes()
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
+
+        // Elided remote details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();

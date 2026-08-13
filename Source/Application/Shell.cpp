@@ -109,7 +109,10 @@ std::vector<std::pair<std::string, std::string>> Application::RecentRepositoryLa
 
 void Application::RenderFrame()
 {
+    // Main menu bar
     RenderMenuBar();
+
+    // Global keyboard shortcuts
     ImGuiIO& io = ImGui::GetIO();
     if (_dialog == Dialog::None)
     {
@@ -148,6 +151,8 @@ void Application::RenderFrame()
                 OpenDialog(io.KeyAlt ? Dialog::Split : Dialog::Squash);
         }
     }
+
+    // Repository workspace or welcome screen
     if (_snapshot == nullptr)
         RenderWelcome();
     else
@@ -163,12 +168,15 @@ void Application::RenderFrame()
         if (_show_diff) RenderDiff();
         if (_show_operations) RenderOperations();
     }
+
+    // Modal and settings windows
     RenderDialogs();
     if (_show_settings) RenderSettings();
 }
 
 void Application::SetupDockspace()
 {
+    // Full-viewport dockspace window
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
     ImGui::SetNextWindowSize(viewport->WorkSize);
@@ -182,8 +190,12 @@ void Application::SetupDockspace()
     ImGui::Begin("ggui dockspace", nullptr, flags);
     ImGui::PopStyleVar(3);
     RenderToolbar();
+
+    // Docking area
     const ImGuiID dockspace = ImGui::GetID("ggui main dockspace");
     ImGui::DockSpace(dockspace, {}, ImGuiDockNodeFlags_PassthruCentralNode);
+
+    // Default panel layout
     if (_default_layout && _snapshot != nullptr)
     {
         ImGui::DockBuilderRemoveNode(dockspace);
@@ -223,7 +235,10 @@ void Application::RenderMenuBar()
 {
     if (!ImGui::BeginMainMenuBar())
         return; // GCOV_EXCL_LINE: defensive ImGui frame rejection
+
     const bool actions_locked = !_active_operation.empty();
+
+    // Repository menu
     if (ImGui::BeginMenu("Repository"))
     {
         ImGui::BeginDisabled(actions_locked);
@@ -259,6 +274,8 @@ void Application::RenderMenuBar()
             _running = false; // GCOV_EXCL_LINE: terminating the host aborts an in-process test queue
         ImGui::EndMenu();
     }
+
+    // Change menu
     if (ImGui::BeginMenu("Change", _snapshot != nullptr && !actions_locked))
     {
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
@@ -271,6 +288,8 @@ void Application::RenderMenuBar()
         RenderSelectedChangeActions(_selected_revision, false);
         ImGui::EndMenu();
     }
+
+    // Edit menu
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr && !actions_locked))
     {
         if (ActionMenuItem(ICON_MS_UNDO, "Undo", "Ctrl+Z", _snapshot->can_undo && _active_operation.empty()))
@@ -282,6 +301,8 @@ void Application::RenderMenuBar()
             _open_apply_patch = true;
         ImGui::EndMenu();
     }
+
+    // View menu
     if (ImGui::BeginMenu("View"))
     {
         if (_snapshot != nullptr)
@@ -319,11 +340,13 @@ void Application::RenderMenuBar()
 
 void Application::RenderRecentRepositories()
 {
+    // Repository filter
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(FontPx(300.0f));
     ImGui::InputTextWithHint("##recent repository filter", "Filter repositories", &_recent_filter);
     ImGui::Separator();
 
+    // Repository list
     bool any_visible = false;
     for (const RecentRepository& repository : RecentRepositories(_recent_repositories))
     {
@@ -353,6 +376,7 @@ void Application::RenderRecentRepositories()
 
 void Application::RenderSelectedChangeActions(const std::string& revision, bool select_revision)
 {
+    // Shared change action state
     const bool enabled = !revision.empty();
     const auto select = [&] {
         if (select_revision)
@@ -367,6 +391,7 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         }
     };
 
+    // Change actions
     dialog(ICON_MS_INFO, "Metaedit...", nullptr, Dialog::Metaedit);
     if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E", enabled))
     {
@@ -413,6 +438,7 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
 
 void Application::RenderToolbar()
 {
+    // Change actions
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(!CanCreateChange());
@@ -448,6 +474,8 @@ void Application::RenderToolbar()
     ImGui::EndDisabled();
     ImGui::SameLine();
     if (ActionButton(ICON_MS_REFRESH, "Refresh")) _engine.Enqueue(Refresh{});
+
+    // Remote actions
     const Remote* remote = DefaultRemote(*_snapshot);
     const NamedRef* bookmark = BookmarkAt(*_snapshot, _selected_revision);
     const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
@@ -470,6 +498,8 @@ void Application::RenderToolbar()
     ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
+
+    // Repository selector
     ImGui::SameLine();
     ImGui::TextDisabled("REPOSITORY");
     ImGui::SameLine();
@@ -492,6 +522,8 @@ void Application::RenderToolbar()
     if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
         OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
+
+    // Current commit and bookmark
     const std::string& current_commit = CurrentCommit(*_snapshot);
     if (!current_commit.empty())
     {
@@ -516,6 +548,8 @@ void Application::RenderToolbar()
                 ImGui::SetTooltip("Closest bookmark to the current commit");
         }
     }
+
+    // Active operation progress
     if (!_active_operation.empty())
     {
         ImGui::SameLine();
@@ -529,6 +563,8 @@ void Application::RenderToolbar()
         ImGui::SameLine();
         if (ActionButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
     }
+
+    // Error banner
     if (!_error_message.empty())
     {
         ImGui::SetCursorPosX(10.0f);

@@ -25,6 +25,8 @@ void Application::RenderDiff()
         ImGui::End();
         return;
     }
+
+    // Working-copy comparison control
     const auto render_comparison = [this]()
     {
         if (!_compare_to.empty())
@@ -46,6 +48,8 @@ void Application::RenderDiff()
             ImGui::TextDisabled("Files are identical");
         }
     };
+
+    // Empty and loading states
     if (_diff_loading && _diff.revision.empty())
     {
         const std::array<const char*, 4> spinner{"◐", "◓", "◑", "◒"};
@@ -71,6 +75,7 @@ void Application::RenderDiff()
     const git_delta_t status = _diff.selected_status;
     const bool plain = status == GIT_DELTA_ADDED || status == GIT_DELTA_UNTRACKED || status == GIT_DELTA_DELETED;
 
+    // Diff option helpers
     const auto reload = [this](DiffWhitespaceMode whitespace, int context_lines)
     {
         _diff_whitespace_mode = whitespace;
@@ -82,6 +87,7 @@ void Application::RenderDiff()
             + ImGui::GetFrameHeight();
     };
 
+    // Diff toolbar
     ImGui::SetNextItemWidth(combo_width("Side by Side"));
     int view_index = _diff_side_by_side ? 1 : 0;
     if (DiffCombo("View", view_index, kDiffViewChoices))
@@ -123,6 +129,7 @@ void Application::RenderDiff()
     render_comparison();
     ImGui::Separator();
 
+    // File mode details
     const bool mode_changed = _diff.old_mode != _diff.new_mode;
     const bool special_mode = IsSymlinkMode(_diff.old_mode) || IsSymlinkMode(_diff.new_mode)
         || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode);
@@ -134,6 +141,7 @@ void Application::RenderDiff()
             ModeKind(_diff.new_mode));
     }
 
+    // Unsupported diff previews
     if (IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode))
     {
         ImGui::TextUnformatted("Submodule diff preview is not available.");
@@ -153,6 +161,7 @@ void Application::RenderDiff()
         return;
     }
 
+    // Persistent diff and file viewers
     static TextDiff diff;
     static TextEditor editor;
     static std::string loaded_before;
@@ -164,6 +173,8 @@ void Application::RenderDiff()
     static int loaded_context_lines = 3;
     static bool loaded_plain = false;
     static bool dark_palette = !_dark_theme;
+
+    // Viewer content
     if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
         || loaded_revision != _diff.revision || loaded_compare_to != _diff.compare_to
         || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
@@ -194,6 +205,8 @@ void Application::RenderDiff()
             diff.SetLineNumbers(line_numbers);
         }
     }
+
+    // Viewer palette
     if (dark_palette != _dark_theme)
     {
         dark_palette = _dark_theme;
@@ -206,6 +219,7 @@ void Application::RenderDiff()
             _dark_theme ? IM_COL32(248, 81, 73, 55) : IM_COL32(248, 81, 73, 38));
     }
 
+    // Diff context-menu state
     static int context_row = -1;
     static bool context_has_selection = false;
     static std::vector<DiffLine> context_line;
@@ -213,6 +227,8 @@ void Application::RenderDiff()
     static std::vector<DiffLine> context_hunk;
     static std::string context_revision;
     static std::string context_path;
+
+    // Diff line and hunk context menu
     const auto render_move_context = [&](auto& view, bool side_by_side) {
         ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
         IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
@@ -361,6 +377,7 @@ void Application::RenderDiff()
         ImGui::EndPopup();
     };
 
+    // Diff or plain-file viewer
     const ImVec2 available = ImGui::GetContentRegionAvail();
     if (!plain)
         diff.SetSideBySideMode(_diff_side_by_side);
@@ -370,6 +387,8 @@ void Application::RenderDiff()
     else
         diff.Render("##diff view", available, true);
     ImGui::PopFont();
+
+    // Viewer context menu
     if (plain)
         render_move_context(editor, false);
     else

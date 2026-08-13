@@ -77,6 +77,7 @@ void Application::RenderSettings()
         return;
     }
 
+    // UI scale
     ImGui::SetNextItemWidth(FontPx(260.0f));
     if (ImGui::SliderInt("UI scale", &_ui_scale_percent, 50, 300, "%d%%", ImGuiSliderFlags_AlwaysClamp))
         ApplyTheme();
@@ -84,6 +85,7 @@ void Application::RenderSettings()
         SaveSettings();
     ImGui::Separator();
 
+    // Native configuration scopes
     const bool repository_available = _snapshot != nullptr;
     if (ImGui::BeginTabBar("Settings scopes"))
     {
@@ -99,6 +101,7 @@ void Application::RenderSettings()
                 ImGui::SetTooltip("Open a repository to edit this scope.");
             if (open)
             {
+                // Maximum automatically tracked file size
                 const std::size_t index = ScopeIndex(scope);
                 ImGui::TextUnformatted("Maximum size for automatically tracked new files");
                 ImGui::TextDisabled("Use bytes or binary suffixes (K, KB, KiB, MiB, GiB). 0 means unlimited.");
@@ -111,6 +114,8 @@ void Application::RenderSettings()
                         || ParseFileSize(_max_new_file_size_inputs[index]).has_value()
                         ? "" : "Enter unsigned bytes or a binary size such as 1MiB.";
                 }
+
+                // Persist valid edits
                 if (ImGui::IsItemDeactivatedAfterEdit() && _max_new_file_size_errors[index].empty())
                 {
                     const std::optional<std::string> value = _max_new_file_size_inputs[index].empty()
@@ -129,6 +134,8 @@ void Application::RenderSettings()
                         _error_message = error.what();
                     }
                 }
+
+                // Validation error
                 if (!_max_new_file_size_errors[index].empty())
                     ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s",
                         _max_new_file_size_errors[index].c_str());

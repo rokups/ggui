@@ -22,6 +22,8 @@ void Application::RenderChanges()
         ImGui::End();
         return;
     }
+
+    // Comparison controls and file count
     const bool actions_locked = !_active_operation.empty();
     const bool comparison_active = !_compare_to.empty();
     bool comparing = comparison_active && !_file_comparison;
@@ -46,9 +48,15 @@ void Application::RenderChanges()
     else
         ImGui::TextDisabled("%zu %s file%s", _diff.files.size(), comparing ? "differing" : "changed",
             _diff.files.size() == 1 ? "" : "s");
+
+    // File filter
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##changes filter", "Filter changed files", &_changes_filter);
+
+    // Changed file list
     ImGui::BeginChild("file list");
+
+    // Keyboard file navigation
     const ImGuiIO& io = ImGui::GetIO();
     const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
         && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -66,6 +74,8 @@ void Application::RenderChanges()
     if (navigate_up || navigate_down)
         NavigateChangedFile(navigate_down ? 1 : -1);
     const bool selection_navigated = previous_file != _selected_file;
+
+    // File rows
     const ImVec2 item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
     for (const StatusEntry& file : _diff.files)
@@ -91,6 +101,8 @@ void Application::RenderChanges()
         const bool elided = DrawTextWithin(draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
         if (selected)
             SelectFile(file.path);
+
+        // File drag source
         if (!actions_locked && !comparison_active && ImGui::BeginDragDropSource())
         {
             std::string payload = _diff.revision;
@@ -101,6 +113,8 @@ void Application::RenderChanges()
             ImGui::Text("Move %s", file.path.c_str());
             ImGui::EndDragDropSource();
         }
+
+        // File context menu
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
         if (ImGui::BeginPopupContextItem("file context"))
         {
@@ -198,6 +212,8 @@ void Application::RenderChanges()
             ImGui::EndPopup();
         }
         ImGui::PopStyleVar();
+
+        // Elided file details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
@@ -210,6 +226,8 @@ void Application::RenderChanges()
         ImGui::PopID();
     }
     ImGui::PopStyleVar();
+
+    // Working-copy conflicts
     if (_selected_revision == _snapshot->working_copy && !_snapshot->conflicts.empty())
     {
         ImGui::SeparatorText("Conflicts");
@@ -255,6 +273,7 @@ void Application::RenderChangeInformation()
         _change_info_dirty = false;
     }
 
+    // Author, date, and commit ID
     ImGui::TextUnformatted(revision->author.empty() ? "Unknown author" : revision->author.c_str());
     if (ImGui::IsItemHovered() && !revision->author_email.empty())
         ImGui::SetTooltip("%s", revision->author_email.c_str());
@@ -299,6 +318,8 @@ void Application::RenderChangeInformation()
             ImGui::EndTooltip();
         }
     }
+
+    // Commit message editor
     const float button_height = ImGui::GetFrameHeight();
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
     if (ImGui::InputTextMultiline("##commit message", &_change_info_message, ImVec2(-1.0f, message_height)))
@@ -306,6 +327,8 @@ void Application::RenderChangeInformation()
     ImGui::BeginDisabled(!_change_info_dirty || !_active_operation.empty());
     const bool save = revision->pushed ? DangerButton("Save message") : ImGui::Button("Save message");
     ImGui::EndDisabled();
+
+    // Save message action
     if (save)
     {
         if (revision->pushed)

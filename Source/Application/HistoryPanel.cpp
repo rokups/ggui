@@ -81,6 +81,7 @@ std::size_t Application::OperationPrefix(const std::string& oid) const
 
 void Application::RenderHistory()
 {
+    // History window and filter
     if (!_reveal_revision.empty()) ImGui::SetNextWindowFocus();
     if (!ImGui::Begin("History", &_show_history))
     {
@@ -92,7 +93,11 @@ void Application::RenderHistory()
     ImGui::InputTextWithHint("##graph filter", "Filter changes, IDs, bookmarks, tags", &_graph_filter);
     if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
         RebuildGraph();
+
+    // Scrollable revision graph
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
+
+    // Reveal requested revision
     if (!_reveal_revision.empty())
     {
         const auto target = std::ranges::find_if(_visible_revisions, [&](int index) {
@@ -106,6 +111,8 @@ void Application::RenderHistory()
         }
         _reveal_revision.clear();
     }
+
+    // Keyboard revision navigation
     const ImGuiIO& io = ImGui::GetIO();
     const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
         && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
@@ -140,6 +147,8 @@ void Application::RenderHistory()
                 ImGui::SetScrollY(target_y + kRowHeight - viewport);
         }
     }
+
+    // Visible revision rows
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
     ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -160,6 +169,8 @@ void Application::RenderHistory()
             const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
             const bool hovered = ImGui::IsItemHovered();
             if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
+
+            // Revision drag source
             if (!actions_locked && ImGui::BeginDragDropSource(
                     ImGuiDragDropFlags_SourceAllowNullID | ImGuiDragDropFlags_SourceNoPreviewTooltip))
             {
@@ -168,6 +179,8 @@ void Application::RenderHistory()
                     choose_action ? "GGUI_CHANGE_ACTION" : "GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
                 ImGui::EndDragDropSource();
             }
+
+            // Revision and file drop target
             std::optional<DropAction> hovered_drop;
             ImVec2 drop_zone_minimum{};
             ImVec2 drop_zone_maximum{};
@@ -211,6 +224,8 @@ void Application::RenderHistory()
                 }
                 ImGui::EndDragDropTarget();
             }
+
+            // Revision context menu
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
                 const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
@@ -277,6 +292,8 @@ void Application::RenderHistory()
                 ImGui::EndDisabled();
                 ImGui::EndPopup();
             }
+
+            // Row background and drop feedback
             const ImU32 row_fill = _dark_theme
                 ? selected ? kRowSelected : hovered ? kRowHover : kRowBackground
                 : ImGui::GetColorU32(selected ? ImGuiCol_HeaderActive
@@ -309,6 +326,8 @@ void Application::RenderHistory()
                 _dark_theme ? kGraphBackground : IM_COL32(229, 233, 239, 255), 6.0f, ImDrawFlags_RoundCornersLeft);
             if (hovered_action_drop)
                 draw->AddRectFilled(minimum, maximum, IM_COL32(90, 150, 255, 80), 6.0f);
+
+            // Graph lanes
             const float graph_left = minimum.x + kGraphPadding;
             auto lane_x = [&](int column) { return graph_left + column * kLaneWidth + kLaneWidth * 0.5f; };
             auto color = [](int track) { return kLaneColors[static_cast<std::size_t>(track) % kLaneColors.size()]; };
@@ -357,12 +376,16 @@ void Application::RenderHistory()
                 draw->AddLine(ImVec2(dot_x, center), ImVec2(dot_x, maximum.y), color(row.track), 2.0f);
             if (selected)
                 draw->AddCircle(ImVec2(dot_x, center), kDotRadius + 3.0f, IM_COL32(47, 129, 247, 150), 0, 2.0f);
+
+            // Revision node
             draw->AddCircleFilled(ImVec2(dot_x, center), kDotRadius,
                 revision.conflicted ? kStatusConflict
                     : revision.working_copy ? kStatusAdded
                     : revision.pushed       ? kStatusPushed
                                             : kStatusUnpushed);
             draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
+
+            // Revision summary
             const float content_x = std::min(minimum.x + graph_width + 12.0f, maximum.x - 8.0f);
             const float content_right = maximum.x - 8.0f;
             ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(content_right, maximum.y), true);
@@ -482,6 +505,8 @@ void Application::RenderHistory()
             ImGui::PopID();
         }
     }
+
+    // Drop zone after the final revision
     ImGui::InvisibleButton("move to end", ImVec2(-1.0f, 22.0f));
     const ImVec2 end_minimum = ImGui::GetItemRectMin();
     const ImVec2 end_maximum = ImGui::GetItemRectMax();
@@ -517,6 +542,8 @@ void Application::RenderHistory()
             ImVec2(end_maximum.x - 1.0f, end_maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
             ImDrawFlags_None, 2.0f);
     ImGui::EndChild();
+
+    // Explicit drag-and-drop action picker
     if (_open_drop_actions)
     {
         ImGui::OpenPopup("Drop action");
