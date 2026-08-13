@@ -478,7 +478,8 @@ void Application::OpenExternalDiff(const std::string& path, const std::string& c
 {
     if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
         return;
-    const std::string revision = _diff.revision + "^!";
+    const std::string revision = _diff.revision
+        + (compare_to.empty() && _diff.revision == _snapshot->working_copy ? "^" : "^!");
     std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",
         compare_to.empty() ? revision.c_str() : _diff.revision.c_str()};
     if (!compare_to.empty())
