@@ -394,3 +394,11 @@ index 2c4d059..8ffd58e 100644
 @@ -312 +314 @@ void TextEditor::renderMarkers() {
 -				auto y = cursorScreenPos.y + line * glyphSize.y;
 +				auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;
+@@ -408,0 +411,3 @@ void TextEditor::renderText() {
++	drawList->PushClipRect(
++		ImVec2(ImGui::GetWindowPos().x + textOffset, drawList->GetClipRectMin().y),
++		drawList->GetClipRectMax(), true);
+@@ -457 +462,2 @@ void TextEditor::renderText() {
+-}
++	drawList->PopClipRect();
++}
