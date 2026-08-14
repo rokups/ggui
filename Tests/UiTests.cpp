@@ -301,9 +301,33 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(4);
         IM_CHECK_NE(Application::Instance().SnapshotForTest()->working_copy, previous_working_copy);
         const std::string empty_working_copy = Application::Instance().SnapshotForTest()->working_copy;
+        const auto empty_snapshot = Application::Instance().SnapshotForTest();
+        const auto empty_change =
+            std::ranges::find(empty_snapshot->revisions, empty_working_copy, &Revision::oid);
+        IM_CHECK_NE(empty_change, empty_snapshot->revisions.end());
+        const std::vector<std::string> empty_parents = empty_change->parents;
+        const std::size_t revision_count = empty_snapshot->revisions.size();
         context->MenuClick("//##MainMenuBar/Change/New change");
-        context->Yield(4);
-        IM_CHECK_EQ(Application::Instance().SnapshotForTest()->working_copy, empty_working_copy);
+        std::shared_ptr<const RepoSnapshot> replacement;
+        for (int attempt = 0; attempt < 200 && replacement == nullptr; ++attempt)
+        {
+            context->Yield();
+            const auto snapshot = Application::Instance().SnapshotForTest();
+            if (snapshot != nullptr && snapshot->working_copy != empty_working_copy
+                && std::ranges::none_of(snapshot->revisions,
+                    [&](const Revision& revision) { return revision.oid == empty_working_copy; }))
+                replacement = snapshot;
+            else
+                std::this_thread::sleep_for(5ms);
+        }
+        IM_CHECK_NE(replacement, nullptr);
+        if (replacement == nullptr)
+            return;
+        IM_CHECK_EQ(replacement->revisions.size(), revision_count);
+        const auto replacement_change =
+            std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
+        IM_CHECK_NE(replacement_change, replacement->revisions.end());
+        IM_CHECK_EQ(replacement_change->parents, empty_parents);
 
         Repository().Write("tracked.txt", "changed\n");
         Application::Instance().RefreshForTest();

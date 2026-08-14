@@ -112,7 +112,7 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
-void Application::CreateChange(bool force_child, const std::string& parent)
+void Application::CreateChange(const std::string& parent)
 {
     if (!_active_operation.empty())
         return;
@@ -121,13 +121,14 @@ void Application::CreateChange(bool force_child, const std::string& parent)
         : _selected_revisions.size() == 1              ? _selected_revisions.front()
                                                         : "";
     const auto selected = std::ranges::find(_snapshot->revisions, selected_revision, &Revision::oid);
-    if (!force_child && selected != _snapshot->revisions.end()
-        && selected->oid == _snapshot->working_copy && selected->empty)
+    NewChange create{{}, parent.empty() ? SelectedParentRevisions() : std::vector{parent}, {}, {}, false};
+    if (selected != _snapshot->revisions.end() && selected->empty)
     {
-        _engine.Enqueue(Refresh{});
+        QueueCommands({std::move(create), Abandon{{selected->oid}, true, false, {}}}, {selected->oid},
+            "Creating a new change will rewrite a locked empty parent.");
         return;
     }
-    _engine.Enqueue(NewChange{{}, parent.empty() ? SelectedParentRevisions() : std::vector{parent}, {}, {}, false});
+    _engine.Enqueue(std::move(create));
 }
 
 bool Application::IsLocked(const std::string& identifier) const

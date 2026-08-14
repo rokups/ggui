@@ -432,10 +432,10 @@ void Application::RenderToolbar()
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(current_commit.empty());
-    if (ActionButton(ICON_MS_ADD, "New")) CreateChange(false, "@");
+    if (ActionButton(ICON_MS_ADD, "New")) CreateChange("@");
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip(
-            "Create and edit an empty change on @. An already-empty current change is refreshed.");
+            "Create and edit an empty change on @. An empty current change is replaced.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!_compare_to.empty());

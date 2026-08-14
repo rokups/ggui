@@ -124,7 +124,7 @@ void Application::RenderHistory()
             if (ImGui::IsKeyPressed(ImGuiKey_E))
                 _engine.Enqueue(Edit{_selected_revision});
             if (ImGui::IsKeyPressed(ImGuiKey_N))
-                CreateChange(true, _selected_revision);
+                CreateChange(_selected_revision);
             if (ImGui::IsKeyPressed(ImGuiKey_D))
                 _engine.Enqueue(Duplicate{_selected_revision, false});
             if (ImGui::IsKeyPressed(ImGuiKey_A))
@@ -263,7 +263,7 @@ void Application::RenderHistory()
                 if (ActionMenuItem(ICON_MS_ADD, "New", "N"))
                 {
                     SelectRevision(revision.oid);
-                    CreateChange(true, revision.oid);
+                    CreateChange(revision.oid);
                 }
                 RenderSelectedChangeActions(revision.oid, true);
 
