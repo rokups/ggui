@@ -316,10 +316,12 @@ void Application::RenderChangeInformation()
         {
             ImGui::BeginTooltip();
             for (const std::string& alias : revision->aliases)
-                ImGui::TextUnformatted(alias.c_str());
+                TextHighlightedId(alias, RevisionPrefix(alias), CommitIdColor(revision->working_copy));
             ImGui::EndTooltip();
         }
     }
+    for (const std::string& parent : revision->parents)
+        TextLabelledId("Parent ", parent, RevisionPrefix(parent), CommitIdColor(false));
 
     // Commit message editor
     const float button_height = ImGui::GetFrameHeight();

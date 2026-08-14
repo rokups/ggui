@@ -88,7 +88,7 @@ public:
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
-    static std::string DropTooltipForTest(int action, const std::string& target);
+    static std::string DropTooltipForTest(int action);
     std::vector<std::string> AbandonRevisionsForTest(const std::string& revision) const;
     const std::string& PendingEditorRevisionForTest() const;
     const std::filesystem::path& OpenedEditorPathForTest() const;
@@ -187,6 +187,7 @@ private:
     void OpenFileInEditor(const std::string& path);
     void OpenTemporaryFileInEditor(const FileContentReady& file);
     void OpenEditorPath(const std::filesystem::path& path);
+    void RenderRevisionTooltip(std::string_view label, const std::string& revision);
     void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
     void OpenExternalDiff(const std::string& path, const std::string& compare_to);
     std::vector<std::string> SelectedParentRevisions() const;
@@ -202,7 +203,7 @@ private:
     bool DialogModifiesLockedCommit() const;
     const Revision* RebaseSource() const;
     static gg_reorder_placement DropPlacement(DropAction action);
-    static std::string DropTooltip(DropAction action, std::string_view target);
+    static std::string_view DropTooltip(DropAction action);
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);

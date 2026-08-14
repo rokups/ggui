@@ -919,10 +919,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
         IM_CHECK_EQ(Application::DropPlacementForTest(0), GG_REORDER_AFTER);
         IM_CHECK_EQ(Application::DropPlacementForTest(1), GG_REORDER_BEFORE);
-        IM_CHECK_EQ(Application::DropTooltipForTest(0, "target"), "Move before target");
-        IM_CHECK_EQ(Application::DropTooltipForTest(1, "target"), "Move after target");
-        IM_CHECK_EQ(Application::DropTooltipForTest(2, "target"), "Squash into target");
-        IM_CHECK_EQ(Application::DropTooltipForTest(3, "target"), "Rebase onto target");
+        IM_CHECK_EQ(Application::DropTooltipForTest(0), "Move before");
+        IM_CHECK_EQ(Application::DropTooltipForTest(1), "Move after");
+        IM_CHECK_EQ(Application::DropTooltipForTest(2), "Squash into");
+        IM_CHECK_EQ(Application::DropTooltipForTest(3), "Rebase onto");
         IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
         IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
@@ -999,6 +999,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Change information");
         ImGuiWindow* change_information = ImGui::FindWindowByName("Change information");
         IM_CHECK_NE(change_information, nullptr);
+        ImGuiTestItemList information_items;
+        context->GatherItems(&information_items, "//Change information");
+        int parent_labels = 0;
+        for (int index = 0; index < information_items.GetSize(); ++index)
+            parent_labels += std::string_view(information_items.GetByIndex(index)->DebugLabel) == "Parent ";
+        IM_CHECK_EQ(parent_labels, 3);
         const ImVec2 author_position = change_information->DC.CursorStartPos
             + ImVec2(20.0f, ImGui::GetTextLineHeight() * 0.5f);
         context->MouseMoveToPos(author_position);
@@ -1330,8 +1336,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const std::string workspace = "workspace-" + long_text;
         const std::string remote = "remote-" + long_text;
         const std::string path = "directory/" + long_text + "/file.cpp";
+        const std::string long_revision_id(40, 'a');
         RepoSnapshot snapshot = RichSnapshot();
-        snapshot.refs.push_back({bookmark, {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
+        snapshot.refs.push_back({bookmark, {}, long_revision_id, GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
         snapshot.refs.push_back({tag, {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false});
         snapshot.workspaces.push_back({workspace, "/root/" + long_text, "merge", false});
         snapshot.remotes.push_back({remote, "https://fetch.example/" + long_text,
@@ -1340,14 +1347,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(3);
 
+        const ImGuiWindow* bookmark_tooltip = nullptr;
         const auto check_tooltip = [&](const char* window, const std::string& item) {
             FocusWindow(context, window);
             context->MouseMove(("**/" + item).c_str());
             context->Yield(2);
             const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
             IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
+            if (item == bookmark)
+                bookmark_tooltip = tooltip;
         };
         check_tooltip("Bookmarks", bookmark);
+        IM_CHECK_NE(bookmark_tooltip, nullptr);
+        ImGuiTestItemList tooltip_items;
+        const std::string tooltip_path = std::string("//") + bookmark_tooltip->Name;
+        context->GatherItems(&tooltip_items, tooltip_path.c_str());
+        for (int index = 0; index < tooltip_items.GetSize(); ++index)
+            IM_CHECK_EQ(std::string(tooltip_items.GetByIndex(index)->DebugLabel).find(long_revision_id),
+                std::string::npos);
+        bool colored_id = false;
+        for (const ImDrawVert& vertex : bookmark_tooltip->DrawList->VtxBuffer)
+            colored_id |= vertex.col == IM_COL32(47, 129, 247, 255);
+        IM_CHECK(colored_id);
         check_tooltip("Tags", tag);
         check_tooltip("Workspaces", workspace);
         check_tooltip("Remotes", remote);

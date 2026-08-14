@@ -346,13 +346,12 @@ gg_reorder_placement Application::DropPlacement(DropAction action)
     return action == DropAction::ReorderAfter ? GG_REORDER_BEFORE : GG_REORDER_AFTER;
 }
 
-std::string Application::DropTooltip(DropAction action, std::string_view target)
+std::string_view Application::DropTooltip(DropAction action)
 {
-    const std::string_view verb = action == DropAction::ReorderBefore ? "Move before "
-        : action == DropAction::ReorderAfter                           ? "Move after "
-        : action == DropAction::Squash                                 ? "Squash into "
-                                                                       : "Rebase onto ";
-    return std::string(verb) + std::string(target);
+    return action == DropAction::ReorderBefore ? "Move before"
+        : action == DropAction::ReorderAfter    ? "Move after"
+        : action == DropAction::Squash          ? "Squash into"
+                                                : "Rebase onto";
 }
 
 void Application::SelectFile(const std::string& path)

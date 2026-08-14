@@ -310,9 +310,9 @@ int Application::DropPlacementForTest(int action)
     return DropPlacement(static_cast<DropAction>(std::clamp(action, 0, 3)));
 }
 
-std::string Application::DropTooltipForTest(int action, const std::string& target)
+std::string Application::DropTooltipForTest(int action)
 {
-    return DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), target);
+    return std::string(DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3))));
 }
 
 const std::string& Application::PendingEditorRevisionForTest() const

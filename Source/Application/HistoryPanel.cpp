@@ -224,8 +224,7 @@ void Application::RenderHistory()
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
                         : ratio < 0.8f                  ? DropAction::Squash
                                                       : DropAction::Rebase;
-                    const std::string tooltip = DropTooltip(*hovered_drop, revision.oid);
-                    ImGui::SetTooltip("%s", tooltip.c_str());
+                    RenderRevisionTooltip(DropTooltip(*hovered_drop), revision.oid);
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
@@ -236,7 +235,7 @@ void Application::RenderHistory()
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
                 if (hovered_action_drop)
-                    ImGui::SetTooltip("Choose an action for %s", revision.oid.c_str());
+                    RenderRevisionTooltip("Choose an action for", revision.oid);
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
                 {
                     _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
@@ -509,27 +508,12 @@ void Application::RenderHistory()
                 ImGui::TextUnformatted(message.empty() ? "(no description)" : message.c_str());
                 ImGui::Separator();
                 ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
-                ImGui::Text("Commit: %s", revision.oid.c_str());
-                if (!revision.aliases.empty())
-                {
-                    std::string aliases;
-                    for (const std::string& alias : revision.aliases)
-                    {
-                        if (!aliases.empty()) aliases += ", ";
-                        aliases += alias;
-                    }
-                    ImGui::TextWrapped("Aliases: %s", aliases.c_str());
-                }
-                if (!revision.parents.empty())
-                {
-                    std::string parents;
-                    for (const std::string& parent : revision.parents)
-                    {
-                        if (!parents.empty()) parents += ", ";
-                        parents += parent;
-                    }
-                    ImGui::TextWrapped("Parents: %s", parents.c_str());
-                }
+                TextLabelledId("Commit: ", revision.oid, RevisionPrefix(revision.oid),
+                    CommitIdColor(revision.working_copy));
+                for (const std::string& alias : revision.aliases)
+                    TextLabelledId("Alias: ", alias, RevisionPrefix(alias), CommitIdColor(revision.working_copy));
+                for (const std::string& parent : revision.parents)
+                    TextLabelledId("Parent: ", parent, RevisionPrefix(parent), CommitIdColor(false));
                 std::string refs;
                 for (const NamedRef& ref : _snapshot->refs)
                 {
@@ -568,11 +552,10 @@ void Application::RenderHistory()
             && (dragging->IsDataType("GGUI_CHANGE") || dragging->IsDataType("GGUI_CHANGE_ACTION"));
         if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
         {
-            const std::string tooltip = DropTooltip(DropAction::ReorderAfter, final.oid);
-            ImGui::SetTooltip("%s", tooltip.c_str());
+            RenderRevisionTooltip(DropTooltip(DropAction::ReorderAfter), final.oid);
         }
         else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION"))
-            ImGui::SetTooltip("Choose an action after %s", final.oid.c_str());
+            RenderRevisionTooltip("Choose an action after", final.oid);
         if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
         {
             _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};

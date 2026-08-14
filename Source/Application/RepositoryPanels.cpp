@@ -141,7 +141,8 @@ void Application::RenderBookmarks()
             ImGui::BeginTooltip();
             ImGui::Text("Bookmark: %s", name.c_str());
             ImGui::Text("Remotes: %s", remotes.empty() ? "(local only)" : remotes.c_str());
-            ImGui::Text("Commit: %s", ref.target.c_str());
+            TextLabelledId("Commit: ", ref.target, RevisionPrefix(ref.target),
+                CommitIdColor(ref.target == _snapshot->working_copy));
             ImGui::EndTooltip();
         }
         ImGui::PopID();
@@ -233,7 +234,8 @@ void Application::RenderTags()
             ImGui::BeginTooltip();
             ImGui::Text("Tag: %s", name.c_str());
             ImGui::Text("Remotes: %s", remotes.empty() ? "(local only)" : remotes.c_str());
-            ImGui::Text("Commit: %s", ref.target.c_str());
+            TextLabelledId("Commit: ", ref.target, RevisionPrefix(ref.target),
+                CommitIdColor(ref.target == _snapshot->working_copy));
             ImGui::EndTooltip();
         }
         ImGui::PopID();
@@ -296,7 +298,8 @@ void Application::RenderWorkspaces()
             ImGui::BeginTooltip();
             ImGui::Text("Workspace: %s", workspace.name.c_str());
             ImGui::Text("Directory: %.*s", static_cast<int>(location.size()), location.data());
-            ImGui::Text("Working copy: %s", workspace.working_copy.c_str());
+            TextLabelledId("Working copy: ", workspace.working_copy, RevisionPrefix(workspace.working_copy),
+                CommitIdColor(workspace.working_copy == _snapshot->working_copy));
             ImGui::EndTooltip();
         }
         ImGui::PopID();

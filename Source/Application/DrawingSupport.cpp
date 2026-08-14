@@ -172,3 +172,16 @@ ImU32 CommitIdColor(bool working)
 }
 
 } // namespace Ggui::ApplicationInternal
+
+namespace Ggui
+{
+
+void Application::RenderRevisionTooltip(std::string_view label, const std::string& revision)
+{
+    ImGui::BeginTooltip();
+    ApplicationInternal::TextLabelledId(std::string(label) + " ", revision, RevisionPrefix(revision),
+        ApplicationInternal::CommitIdColor(_snapshot != nullptr && revision == _snapshot->working_copy));
+    ImGui::EndTooltip();
+}
+
+} // namespace Ggui
