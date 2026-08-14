@@ -396,7 +396,8 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         }
         ImGui::EndMenu();
     }
-    const bool can_rebase = !select_revision || (!_selected_revision.empty() && revision != _selected_revision);
+    const std::string& current_commit = CurrentCommit(*_snapshot);
+    const bool can_rebase = !current_commit.empty() && (!select_revision || revision != current_commit);
     if (ActionMenuItem(ICON_MS_REBASE, "Rebase...", nullptr, enabled && can_rebase))
     {
         OpenDialog(Dialog::Rebase);

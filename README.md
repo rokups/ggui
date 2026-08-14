@@ -96,8 +96,8 @@ the middle to squash, or onto the bottom to rebase. Drop below the final row
 to reorder after it. Right-drag anywhere onto a row to choose the action from
 a popup menu. Every graph drop shows a confirmation preview and remains
 undoable through gg's operation history.
-Right-click **Rebase** rebases the currently selected change onto that row;
-the dialog can instead rebase the entire branch from its divergence point.
+Right-click **Rebase** to use that row as the destination for rebasing **@**
+and all of its descendants.
 When a tracked local and remote bookmark have both advanced, right-click the
 bookmark and choose **Reconcile with remote/bookmark...** to rebase the local-only
 branch onto the fetched remote tip. Reconciliation remains undoable and any

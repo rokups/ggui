@@ -169,7 +169,9 @@ void Application::ApplyEventForTest(Event event)
 
 void Application::ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action)
 {
-    _pending_drop = {source, target, static_cast<DropAction>(std::clamp(action, 0, 3))};
+    const DropAction drop_action = static_cast<DropAction>(std::clamp(action, 0, 3));
+    _pending_drop = {drop_action == DropAction::Rebase && _snapshot != nullptr ? CurrentCommit(*_snapshot) : source,
+        target, drop_action};
     OpenDialog(Dialog::ConfirmDrop);
 }
 

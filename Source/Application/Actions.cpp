@@ -163,7 +163,7 @@ bool Application::DialogModifiesLockedCommit() const
     case Dialog::Rebase:
     {
         const Revision* source = RebaseSource();
-        return IsLocked(source == nullptr ? _selected_revision : source->oid);
+        return IsLocked(source == nullptr ? _input_secondary : source->oid);
     }
     case Dialog::Squash:
     {
@@ -192,8 +192,7 @@ const Revision* Application::RebaseSource() const
 {
     if (_snapshot == nullptr)
         return nullptr;
-    return _input_flag ? RebaseBranchRoot(*_snapshot, _selected_revision, _input_primary)
-                       : ResolveSnapshotRevision(*_snapshot, _selected_revision);
+    return ResolveSnapshotRevision(*_snapshot, _input_secondary);
 }
 
 void Application::QueueCommands(
@@ -291,7 +290,10 @@ bool Application::CanSubmitDialog() const
     switch (_dialog)
     {
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
-    case Dialog::Rebase: return HasText(_input_primary);
+    case Dialog::Rebase:
+        return HasText(_input_primary) && _snapshot != nullptr
+            && _snapshot->generation == _dialog_snapshot_generation
+            && CurrentCommit(*_snapshot) == _input_secondary;
     case Dialog::Split: return HasText(_input_filesets);
     case Dialog::Bookmark:
         return HasText(_input_primary);
@@ -324,6 +326,9 @@ bool Application::CanSubmitDialog() const
                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary
                        && ref.target == _input_secondary;
                });
+    case Dialog::ConfirmDrop:
+        return _pending_drop.action != DropAction::Rebase
+            || (_snapshot != nullptr && CurrentCommit(*_snapshot) == _pending_drop.source);
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));

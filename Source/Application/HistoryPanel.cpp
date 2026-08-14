@@ -228,7 +228,9 @@ void Application::RenderHistory()
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
-                    _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop};
+                    const std::string source = *hovered_drop == DropAction::Rebase
+                        ? CurrentCommit(*_snapshot) : static_cast<const char*>(payload->Data);
+                    _pending_drop = {source, revision.oid, *hovered_drop};
                     if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
@@ -603,7 +605,10 @@ void Application::RenderHistory()
         if (action.has_value())
         {
             _pending_drop.action = *action;
-            OpenDialog(Dialog::ConfirmDrop);
+            if (*action == DropAction::Rebase)
+                _pending_drop.source = CurrentCommit(*_snapshot);
+            if (_pending_drop.source != _pending_drop.target)
+                OpenDialog(Dialog::ConfirmDrop);
         }
         ImGui::EndDisabled();
         ImGui::EndPopup();

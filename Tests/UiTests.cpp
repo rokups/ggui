@@ -1664,7 +1664,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Rebase...");
         context->ItemInputValue("Destination", "base");
-        context->ItemCheck("Rebase entire branch");
         context->ItemClick("Apply");
         context->Yield(2);
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Split...");
@@ -1715,7 +1714,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
     };
 
-    test = IM_REGISTER_TEST(engine, "Interactions", "RebaseBranchPreview");
+    test = IM_REGISTER_TEST(engine, "Interactions", "RebaseCurrentPreview");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         RepoSnapshot snapshot = RichSnapshot();
@@ -1741,10 +1740,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK_EQ(application.RebaseSourceForTest(), "tip");
         IM_CHECK(!application.DialogModifiesLockedCommitForTest());
-        context->ItemCheck("Rebase entire branch");
+        IM_CHECK(!context->ItemExists("Rebase entire branch"));
+        application.SelectRevisionForTest("left");
         context->Yield();
-        IM_CHECK_EQ(application.RebaseSourceForTest(), "left");
-        IM_CHECK(application.DialogModifiesLockedCommitForTest());
+        IM_CHECK_EQ(application.RebaseSourceForTest(), "tip");
+        IM_CHECK(!application.DialogModifiesLockedCommitForTest());
         context->ItemClick("Cancel");
     };
 
@@ -1776,9 +1776,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->SetRef("ggui action");
             IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
             IM_CHECK_EQ(application.DialogDestinationForTest(), "right");
-            IM_CHECK(context->ItemExists("Rebase entire branch"));
-            IM_CHECK(!context->ItemIsChecked("Rebase entire branch"));
-            context->ItemCheck("Rebase entire branch");
+            IM_CHECK_EQ(application.RebaseSourceForTest(), "merge");
+            IM_CHECK(!context->ItemExists("Rebase entire branch"));
             context->ItemClick("Cancel");
             application.SelectRevisionForTest("merge");
             context->Yield(2);

@@ -44,6 +44,11 @@ void Application::OpenDialog(Dialog dialog)
     }
     if (dialog == Dialog::Split || dialog == Dialog::Restore)
         _input_filesets = _selected_file;
+    if (dialog == Dialog::Rebase && _snapshot != nullptr)
+    {
+        _input_secondary = CurrentCommit(*_snapshot);
+        _dialog_snapshot_generation = _snapshot->generation;
+    }
     if (dialog == Dialog::Credentials)
         _input_primary = _credential_request.username;
 }
@@ -175,23 +180,23 @@ void Application::RenderDialogs()
         break;
     case Dialog::Rebase:
     {
-        TextLabelledId("Rebase ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Rebase @ ", _input_secondary, RevisionPrefix(_input_secondary),
+            CommitIdColor(_input_secondary == _snapshot->working_copy));
         DialogInput("Destination", "commit ID or bookmark", &_input_primary, focus_first);
-        ImGui::Checkbox("Rebase entire branch", &_input_flag);
         const Revision* source = RebaseSource();
         if (source == nullptr)
-            ImGui::TextDisabled("Rebase source unavailable for these revisions.");
+            ImGui::TextDisabled("The @ change is unavailable.");
         else
         {
-            TextLabelledId("Rebase starts at ", source->oid, RevisionPrefix(source->oid),
-                CommitIdColor(source->working_copy));
-            ImGui::SameLine();
             const std::string first_line =
                 source->description.empty() ? "(no description)" : FirstLine(source->description);
             const std::string description = LimitedFragment(first_line, 48);
-            ImGui::TextDisabled("— %s", description.c_str());
+            ImGui::TextDisabled("@ — %s", description.c_str());
         }
+        ImGui::TextWrapped("The @ change and all of its descendants will be rebased onto the destination.");
+        if (_snapshot->generation != _dialog_snapshot_generation || CurrentCommit(*_snapshot) != _input_secondary)
+            ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+                "Repository changed. Close this dialog and inspect @ again.");
         break;
     }
     case Dialog::Squash:
@@ -355,6 +360,9 @@ void Application::RenderDialogs()
             refs += ref.target == _pending_drop.source || ref.target == _pending_drop.target;
         ImGui::TextWrapped("gg will restack affected descendants and move associated refs atomically. Direct children: %d; refs on source/target: %d. Conflicts remain editable and this operation can be undone.",
             affected, refs);
+        if (_pending_drop.action == DropAction::Rebase && CurrentCommit(*_snapshot) != _pending_drop.source)
+            ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+                "The @ change moved. Close this dialog and inspect @ again.");
         break;
     }
     case Dialog::ConfirmLocked:
@@ -437,7 +445,7 @@ void Application::SubmitDialog()
     case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
     case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Metaedit: _engine.Enqueue(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
-    case Dialog::Rebase: _engine.Enqueue(Rebase{_selected_revision, _input_primary, _input_flag}); break;
+    case Dialog::Rebase: _engine.Enqueue(Rebase{_input_secondary, _input_primary}); break;
     case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
     case Dialog::Split: _engine.Enqueue(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Abandon:
