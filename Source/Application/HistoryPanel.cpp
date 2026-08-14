@@ -195,6 +195,7 @@ void Application::RenderHistory()
             const ImVec2 maximum = ImGui::GetItemRectMax();
             const float center = (minimum.y + maximum.y) * 0.5f;
             const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
+            const bool current = revision.oid == CurrentCommit(*_snapshot);
             const bool hovered = ImGui::IsItemHovered();
             if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
 
@@ -339,15 +340,18 @@ void Application::RenderHistory()
             }
 
             // Row background and drop feedback
+            const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
             const ImU32 row_fill = _dark_theme
-                ? selected ? kRowSelected : hovered ? kRowHover : kRowBackground
-                : ImGui::GetColorU32(selected ? ImGuiCol_HeaderActive
-                                             : hovered ? ImGuiCol_HeaderHovered : ImGuiCol_WindowBg);
-            draw->AddRectFilled(minimum, maximum, row_fill, 6.0f);
-            draw->AddRect(minimum, maximum, _dark_theme ? kRowBorder : ImGui::GetColorU32(ImGuiCol_Border), 6.0f);
+                ? hovered ? kRowHover : kRowBackground
+                : ImGui::GetColorU32(hovered ? ImGuiCol_HeaderHovered : ImGuiCol_WindowBg);
+            const ImVec2 row_maximum(selected ? draw->GetClipRectMax().x + 6.0f : maximum.x, maximum.y);
+            const ImDrawFlags row_corners = selected ? ImDrawFlags_RoundCornersLeft : ImDrawFlags_RoundCornersAll;
+            draw->AddRectFilled(minimum, row_maximum, row_fill, 6.0f, row_corners);
             if (selected)
-                draw->AddRectFilled(minimum, ImVec2(minimum.x + 4.0f, maximum.y), kBadgeBookmark, 6.0f,
-                    ImDrawFlags_RoundCornersLeft);
+                draw->AddRectFilled(ImVec2(minimum.x + graph_width, minimum.y), row_maximum,
+                    _dark_theme ? kRowSelected : ImGui::GetColorU32(ImGuiCol_HeaderActive));
+            draw->AddRect(minimum, row_maximum,
+                _dark_theme ? kRowBorder : ImGui::GetColorU32(ImGuiCol_Border), 6.0f, row_corners);
             if (hovered_drop.has_value())
             {
                 const ImU32 zone_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 80)
@@ -366,7 +370,6 @@ void Application::RenderHistory()
                 drop_zone_maximum = ImVec2(maximum.x, zone_bottom);
                 draw->AddRectFilled(drop_zone_minimum, drop_zone_maximum, zone_color);
             }
-            const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
             draw->AddRectFilled(minimum, ImVec2(minimum.x + graph_width, maximum.y),
                 _dark_theme ? kGraphBackground : IM_COL32(229, 233, 239, 255), 6.0f, ImDrawFlags_RoundCornersLeft);
             if (hovered_action_drop)
@@ -425,7 +428,7 @@ void Application::RenderHistory()
             // Revision node
             draw->AddCircleFilled(ImVec2(dot_x, center), kDotRadius,
                 revision.conflicted ? kStatusConflict
-                    : revision.working_copy ? kStatusAdded
+                    : current         ? kWorkingCommitId
                     : revision.pushed       ? kStatusPushed
                                             : kStatusUnpushed);
             draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
