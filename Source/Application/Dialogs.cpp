@@ -415,7 +415,7 @@ void Application::RenderDialogs()
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
-        || _dialog == Dialog::ConfirmBookmarkMove;
+        || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBookmarkMove;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
