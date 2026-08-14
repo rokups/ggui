@@ -472,6 +472,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(std::filesystem::weakly_canonical(working_path),
             std::filesystem::weakly_canonical(Repository().Path() / "modified.txt"));
 
+        RepoSnapshot changed_snapshot = RichSnapshot();
+        changed_snapshot.revisions.front().parents = {"left"};
+        application.SetSnapshotForTest(std::move(changed_snapshot));
         application.SelectRevisionForTest("left");
         application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "historical\n", false,
             RichSnapshot().status}});
@@ -485,6 +488,22 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         std::ifstream input(historical_path, std::ios::binary);
         const std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
         IM_CHECK_EQ(contents, "historical\n");
+
+        RepoSnapshot unchanged_snapshot = RichSnapshot();
+        unchanged_snapshot.revisions.front().parents = {"left"};
+        std::erase_if(unchanged_snapshot.status, [](const StatusEntry& file) {
+            return file.path == "modified.txt";
+        });
+        application.SetSnapshotForTest(std::move(unchanged_snapshot));
+        application.SelectRevisionForTest("left");
+        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "historical\n", false,
+            RichSnapshot().status}});
+        context->Yield(3);
+        FocusWindow(context, "Changes");
+        context->ItemDoubleClick("**/M  modified.txt");
+        IM_CHECK(application.PendingEditorRevisionForTest().empty());
+        IM_CHECK_EQ(std::filesystem::weakly_canonical(application.OpenedEditorPathForTest()),
+            std::filesystem::weakly_canonical(working_path));
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "OperationAvailability");

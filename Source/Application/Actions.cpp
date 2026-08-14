@@ -491,13 +491,22 @@ void Application::OpenFileInEditor(const std::string& path)
 {
     if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
         return;
-    if (_diff.revision != _snapshot->working_copy)
+    const auto current = std::ranges::find(_snapshot->revisions, _snapshot->working_copy, &Revision::oid);
+    const bool direct_parent = current != _snapshot->revisions.end() && current->parents.size() == 1
+        && current->parents.front() == _diff.revision;
+    const bool changed_in_working_copy = std::ranges::any_of(_snapshot->status, [&](const StatusEntry& file) {
+        return file.status != GIT_DELTA_UNMODIFIED && file.status != GIT_DELTA_IGNORED
+            && (file.path == path || file.old_path == path);
+    });
+    if (_diff.revision != _snapshot->working_copy && (!direct_parent || changed_in_working_copy))
     {
         _pending_editor_revision = _diff.revision;
         _pending_editor_path = path;
         _engine.Enqueue(LoadFileContent{_diff.revision, path});
         return;
     }
+    _pending_editor_revision.clear();
+    _pending_editor_path.clear();
     const std::optional<std::filesystem::path> absolute = WorkingCopyPath(_snapshot->root, path);
     std::error_code error;
     if (!absolute.has_value() || !std::filesystem::is_regular_file(*absolute, error) || error)
