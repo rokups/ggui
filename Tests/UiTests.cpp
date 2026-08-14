@@ -2153,6 +2153,112 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.DiffContextLinesForTest(), 3);
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DiffGapExpansion");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("merge");
+        const int edge = std::max(application.DiffContextLinesForTest(), 1);
+        const int hidden = edge * 2 + 100;
+        constexpr int tail = 200;
+        constexpr int compact = tail + 14;
+        const int second = 6 + hidden;
+        const auto make_diff = [&] {
+            std::string before;
+            std::string after;
+            for (int line = 0; line < second + tail + 4; ++line)
+            {
+                const std::string unchanged = "line" + std::to_string(line) + "\n";
+                before += line == 2 ? "old-first\n" : line == second + 3 ? "old-second\n" : unchanged;
+                after += line == 2 ? "new-first\n" : line == second + 3 ? "new-second\n" : unchanged;
+            }
+            DiffResult result{1000, "merge", "modified.txt", {}, {}, false, RichSnapshot().status};
+            result.options = {application.DiffWhitespaceModeForTest(), application.DiffContextLinesForTest()};
+            result.full_before = std::move(before);
+            result.full_after = std::move(after);
+            for (int line : {0, 1})
+                result.lines.push_back({DiffLineKind::Context, line, line, 0});
+            result.lines.push_back({DiffLineKind::Deletion, 2, -1, 0});
+            result.lines.push_back({DiffLineKind::Addition, -1, 2, 0});
+            for (int line : {3, 4, 5})
+                result.lines.push_back({DiffLineKind::Context, line, line, 0});
+            for (int line : {second, second + 1, second + 2})
+                result.lines.push_back({DiffLineKind::Context, line, line, 1});
+            result.lines.push_back({DiffLineKind::Deletion, second + 3, -1, 1});
+            result.lines.push_back({DiffLineKind::Addition, -1, second + 3, 1});
+            for (int line = second + 4; line < second + tail + 4; ++line)
+                result.lines.push_back({DiffLineKind::Context, line, line, 1});
+            return result;
+        };
+        application.ApplyEventForTest(DiffReady{make_diff()});
+        context->Yield(3);
+        FocusWindow(context, "Diff");
+        const auto diff_view = [&]() -> ImGuiWindow* {
+            const ImGuiTestItemInfo view = context->ItemInfo("##diff view");
+            ImGuiWindow* window = ImGui::FindWindowByName("Diff");
+            const auto child = std::ranges::find_if(window->DC.ChildWindows,
+                [&](const ImGuiWindow* candidate) { return candidate->ChildId == view.ID; });
+            return child == window->DC.ChildWindows.end() ? nullptr : *child;
+        };
+        const auto click_gap = [&](int row, int count, bool shift) {
+            if (shift)
+            {
+                context->KeyDown(ImGuiMod_Shift);
+                context->Yield();
+            }
+            ImGuiWindow* view = diff_view();
+            const float line_height = ImGui::GetTextLineHeightWithSpacing();
+            const std::string info = std::to_string(count) + " lines hidden";
+            const std::string action = "Reveal "
+                + std::to_string(shift ? count : std::min(count, edge * 2));
+            const float spacing = ImGui::GetStyle().ItemSpacing.x;
+            const float info_width = ImGui::CalcTextSize(info.c_str()).x;
+            const float button_width = ImGui::CalcTextSize(action.c_str()).x
+                + ImGui::GetStyle().FramePadding.x * 2.0f;
+            const float left = view->InnerClipRect.GetCenter().x
+                - (info_width + spacing + button_width) * 0.5f;
+            context->MouseMoveToPos(ImVec2(left + info_width + spacing + button_width * 0.5f,
+                view->DC.CursorStartPos.y + (row + 0.5f) * line_height));
+            context->MouseClick();
+            if (shift)
+                context->KeyUp(ImGuiMod_Shift);
+            context->Yield(2);
+        };
+        const float line_height = ImGui::GetTextLineHeightWithSpacing();
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - compact * line_height), 0.01f);
+        ImGui::SetScrollY(diff_view(), 3.5f * line_height);
+        context->Yield(2);
+        const float initial_scroll = diff_view()->Scroll.y;
+        IM_CHECK_GT(initial_scroll, 0.0f);
+        IM_CHECK_GT(std::fmod(initial_scroll, line_height), 0.01f);
+        click_gap(7, hidden, true);
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - (compact - 1.0f + hidden) * line_height), 0.01f);
+        IM_CHECK_LE(std::fabs(diff_view()->Scroll.y - initial_scroll), 0.01f);
+
+        application.NavigateChangedFileForTest(-1);
+        context->Yield(2);
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - compact * line_height), 0.01f);
+        application.NavigateChangedFileForTest(1);
+        application.ApplyEventForTest(DiffReady{make_diff()});
+        context->Yield(3);
+        FocusWindow(context, "Diff");
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - compact * line_height), 0.01f);
+
+        click_gap(7, hidden, false);
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - (compact + edge * 2.0f) * line_height), 0.01f);
+        click_gap(7 + edge, hidden - edge * 2, true);
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - (compact - 1.0f + hidden) * line_height), 0.01f);
+
+        application.NavigateChangedFileForTest(-1);
+        context->Yield(2);
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - compact * line_height), 0.01f);
+        application.NavigateChangedFileForTest(1);
+        application.ApplyEventForTest(DiffReady{make_diff()});
+        context->Yield(3);
+        FocusWindow(context, "Diff");
+        IM_CHECK_LE(std::fabs(diff_view()->ContentSizeExplicit.y - compact * line_height), 0.01f);
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "DiffLineMoveContextMenu");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

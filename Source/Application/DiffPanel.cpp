@@ -18,6 +18,167 @@ namespace Ggui
 {
 using namespace ApplicationInternal;
 
+namespace
+{
+class DiffViewer : public TextDiff
+{
+public:
+    void PreserveScrollY(float y)
+    {
+        ensureCursorIsVisible = false;
+        scrollToLineNumber = -1;
+        ImGui::SetNextWindowScroll(ImVec2(-1.0f, y));
+    }
+};
+
+struct DiffGap
+{
+    int row = 0;
+    int old_line = 0;
+    int new_line = 0;
+    int count = 0;
+};
+
+struct DiffRange
+{
+    int old_line = 0;
+    int new_line = 0;
+    int count = 0;
+};
+
+struct DiffView
+{
+    std::string before;
+    std::string after;
+    std::vector<DiffLine> lines;
+    std::vector<DiffGap> gaps;
+};
+
+std::vector<std::string_view> TextLines(const std::string& text)
+{
+    std::vector<std::string_view> result;
+    std::size_t begin = 0;
+    for (std::size_t end = 0; (end = text.find('\n', begin)) != std::string::npos; begin = end + 1)
+        result.emplace_back(text.data() + begin, end - begin);
+    result.emplace_back(text.data() + begin, text.size() - begin);
+    return result;
+}
+
+DiffView BuildDiffView(const DiffResult& source, const std::vector<DiffRange>& revealed)
+{
+    DiffView result;
+    if ((source.full_before.empty() && source.full_after.empty()) || source.lines.empty())
+    {
+        result.before = source.before;
+        result.after = source.after;
+        result.lines = source.lines;
+        return result;
+    }
+
+    const std::vector<std::string_view> before = TextLines(source.full_before);
+    const std::vector<std::string_view> after = TextLines(source.full_after);
+    const int before_count = source.full_before.empty() ? 0
+        : static_cast<int>(before.size() - (source.full_before.ends_with('\n') ? 1U : 0U));
+    const int after_count = source.full_after.empty() ? 0
+        : static_cast<int>(after.size() - (source.full_after.ends_with('\n') ? 1U : 0U));
+    bool first_before = true;
+    bool first_after = true;
+    const auto append = [](std::string& text, bool& first, std::string_view line) {
+        if (!first)
+            text += '\n';
+        text += line;
+        first = false;
+    };
+    const auto line_at = [](const std::vector<std::string_view>& lines, int line) {
+        return line >= 0 && line < static_cast<int>(lines.size())
+            ? lines[static_cast<std::size_t>(line)] : std::string_view{};
+    };
+    const auto append_context = [&](int old_line, int new_line, int hunk = -1) {
+        const std::string_view text = old_line >= 0 ? line_at(before, old_line) : line_at(after, new_line);
+        append(result.before, first_before, text);
+        append(result.after, first_after, text);
+        result.lines.push_back({DiffLineKind::Context, old_line, new_line, hunk});
+    };
+    const auto append_omission = [&](int old_line, int new_line, int count) {
+        const auto is_revealed = [&](int offset) {
+            return std::ranges::any_of(revealed, [&](const DiffRange& range) {
+                const int range_offset = old_line + offset - range.old_line;
+                return range_offset >= 0 && range_offset < range.count
+                    && new_line + offset == range.new_line + range_offset;
+            });
+        };
+        for (int offset = 0; offset < count;)
+        {
+            if (is_revealed(offset))
+            {
+                append_context(old_line + offset, new_line + offset);
+                ++offset;
+                continue;
+            }
+            const int first = offset;
+            while (offset < count && !is_revealed(offset))
+                ++offset;
+            result.gaps.push_back({static_cast<int>(result.lines.size()), old_line + first,
+                new_line + first, offset - first});
+            append(result.before, first_before, {});
+            append(result.after, first_after, {});
+            result.lines.push_back({});
+        }
+    };
+
+    int next_old = 0;
+    int next_new = 0;
+    for (const DiffLine& line : source.lines)
+    {
+        if (line.old_line < 0 && line.new_line < 0)
+            continue;
+        int omitted = -1;
+        if (line.old_line >= 0)
+            omitted = std::max(line.old_line - next_old, 0);
+        if (line.new_line >= 0)
+        {
+            const int new_omitted = std::max(line.new_line - next_new, 0);
+            omitted = omitted < 0 ? new_omitted : std::min(omitted, new_omitted);
+        }
+        omitted = std::min({std::max(omitted, 0), before_count - next_old, after_count - next_new});
+        if (omitted > 0)
+        {
+            append_omission(next_old, next_new, omitted);
+            next_old += omitted;
+            next_new += omitted;
+        }
+
+        if (line.kind == DiffLineKind::Context)
+            append_context(line.old_line, line.new_line, line.hunk);
+        else if (line.kind == DiffLineKind::Deletion)
+        {
+            append(result.before, first_before, line_at(before, line.old_line));
+            result.lines.push_back(line);
+        }
+        else
+        {
+            append(result.after, first_after, line_at(after, line.new_line));
+            result.lines.push_back(line);
+        }
+        if (line.old_line >= 0)
+            next_old = line.old_line + 1;
+        if (line.new_line >= 0)
+            next_new = line.new_line + 1;
+    }
+
+    const int trailing = std::min(before_count - next_old, after_count - next_new);
+    if (trailing > 0)
+        append_omission(next_old, next_new, trailing);
+    if (source.full_before.ends_with('\n') && source.full_after.ends_with('\n'))
+    {
+        append(result.before, first_before, {});
+        append(result.after, first_after, {});
+        result.lines.push_back({});
+    }
+    return result;
+}
+}
+
 void Application::RenderDiff()
 {
     if (!ImGui::Begin("Diff", &_show_diff))
@@ -162,10 +323,12 @@ void Application::RenderDiff()
     }
 
     // Persistent diff and file viewers
-    static TextDiff diff;
+    static DiffViewer diff;
     static TextEditor editor;
     static std::string loaded_before;
     static std::string loaded_after;
+    static std::string loaded_full_before;
+    static std::string loaded_full_after;
     static std::string loaded_path;
     static std::string loaded_revision;
     static std::string loaded_compare_to;
@@ -173,15 +336,35 @@ void Application::RenderDiff()
     static int loaded_context_lines = 3;
     static bool loaded_plain = false;
     static bool dark_palette = !_dark_theme;
+    static bool viewer_dirty = false;
+    static float reveal_scroll_y = -1.0f;
+    static std::vector<DiffRange> revealed_context;
+    static std::vector<DiffLine> viewer_lines;
+    static std::vector<DiffGap> viewer_gaps;
 
     // Viewer content
+    const bool visit_changed = loaded_path != _diff.path || loaded_revision != _diff.revision
+        || loaded_compare_to != _diff.compare_to;
+    const bool options_changed = loaded_whitespace != _diff_whitespace_mode
+        || loaded_context_lines != _diff_context_lines;
+    if (loaded_path != _selected_file && !revealed_context.empty())
+    {
+        revealed_context.clear();
+        viewer_dirty = true;
+    }
     if (loaded_before != _diff.before || loaded_after != _diff.after || loaded_path != _diff.path
+        || loaded_full_before != _diff.full_before || loaded_full_after != _diff.full_after
         || loaded_revision != _diff.revision || loaded_compare_to != _diff.compare_to
         || loaded_whitespace != _diff_whitespace_mode || loaded_context_lines != _diff_context_lines
-        || loaded_plain != plain)
+        || loaded_plain != plain || viewer_dirty)
     {
+        if (visit_changed || options_changed || loaded_plain != plain)
+            revealed_context.clear();
+        viewer_dirty = false;
         loaded_before = _diff.before;
         loaded_after = _diff.after;
+        loaded_full_before = _diff.full_before;
+        loaded_full_after = _diff.full_after;
         loaded_path = _diff.path;
         loaded_revision = _diff.revision;
         loaded_compare_to = _diff.compare_to;
@@ -190,19 +373,29 @@ void Application::RenderDiff()
         loaded_plain = plain;
         if (plain)
         {
+            viewer_lines = _diff.lines;
+            viewer_gaps.clear();
             editor.SetLanguage(DiffLanguage(_diff.path));
             editor.SetText(status == GIT_DELTA_DELETED ? loaded_before : loaded_after);
             editor.SetReadOnlyEnabled(true);
         }
         else
         {
+            DiffView view = BuildDiffView(_diff, revealed_context);
+            viewer_lines = std::move(view.lines);
+            viewer_gaps = std::move(view.gaps);
             diff.SetLanguage(DiffLanguage(_diff.path));
-            diff.SetText(loaded_before, loaded_after);
+            diff.SetText(view.before, view.after);
             std::vector<std::pair<int, int>> line_numbers;
-            line_numbers.reserve(_diff.lines.size());
-            for (const DiffLine& line : _diff.lines)
+            line_numbers.reserve(viewer_lines.size());
+            for (const DiffLine& line : viewer_lines)
                 line_numbers.emplace_back(line.old_line + 1, line.new_line + 1);
             diff.SetLineNumbers(line_numbers);
+            if (reveal_scroll_y >= 0.0f)
+            {
+                diff.PreserveScrollY(reveal_scroll_y);
+                reveal_scroll_y = -1.0f;
+            }
         }
     }
 
@@ -242,7 +435,7 @@ void Application::RenderDiff()
         const auto mouse_row = [&] {
             return std::clamp(view.GetFirstVisibleLine()
                     + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height),
-                0, std::max(0, static_cast<int>(_diff.lines.size()) - 1));
+                0, std::max(0, static_cast<int>(viewer_lines.size()) - 1));
         };
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
@@ -253,9 +446,9 @@ void Application::RenderDiff()
             context_region.clear();
             context_hunk.clear();
             context_has_selection = false;
-            if (context_row >= 0 && context_row < static_cast<int>(_diff.lines.size()))
+            if (context_row >= 0 && context_row < static_cast<int>(viewer_lines.size()))
             {
-                const DiffLine& clicked = _diff.lines[static_cast<std::size_t>(context_row)];
+                const DiffLine& clicked = viewer_lines[static_cast<std::size_t>(context_row)];
                 if (clicked.kind != DiffLineKind::Context)
                     context_line.push_back(clicked);
 
@@ -273,19 +466,19 @@ void Application::RenderDiff()
                 if (!context_has_selection)
                 {
                     first = 0;
-                    last = static_cast<int>(_diff.lines.size()) - 1;
+                    last = static_cast<int>(viewer_lines.size()) - 1;
                 }
                 const int hunk = clicked.hunk;
                 for (int row = std::max(first, 0);
-                     row <= last && row < static_cast<int>(_diff.lines.size()); ++row)
+                     row <= last && row < static_cast<int>(viewer_lines.size()); ++row)
                 {
-                    const DiffLine& line = _diff.lines[static_cast<std::size_t>(row)];
+                    const DiffLine& line = viewer_lines[static_cast<std::size_t>(row)];
                     if (line.kind != DiffLineKind::Context
                         && (context_has_selection || (hunk >= 0 && line.hunk == hunk)))
                         context_region.push_back(line);
                 }
                 if (hunk >= 0)
-                    std::ranges::copy_if(_diff.lines, std::back_inserter(context_hunk), [&](const DiffLine& line) {
+                    std::ranges::copy_if(viewer_lines, std::back_inserter(context_hunk), [&](const DiffLine& line) {
                         return line.kind != DiffLineKind::Context && line.hunk == hunk;
                     });
             }
@@ -381,11 +574,65 @@ void Application::RenderDiff()
     const ImVec2 available = ImGui::GetContentRegionAvail();
     if (!plain)
         diff.SetSideBySideMode(_diff_side_by_side);
+    int hovered_gap = -1;
+    int clicked_gap = -1;
+    bool reveal_all = false;
     ImGui::PushFont(DiffFont(), 0.0f);
     if (plain)
         editor.Render("##file view", available, true);
     else
+    {
         diff.Render("##diff view", available, true);
+        ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
+        IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
+        const float line_height = std::max(diff.GetLineHeight(), 1.0f);
+        const int edge = std::max(_diff_context_lines, 1);
+        const bool reveal_all_modifier = ImGui::GetIO().KeyShift;
+        const bool view_hovered = ImGui::IsItemHovered();
+        ImDrawList* draw = view_window->DrawList;
+        draw->PushClipRect(view_window->InnerClipRect.Min, view_window->InnerClipRect.Max, true);
+        for (int index = 0; index < static_cast<int>(viewer_gaps.size()); ++index)
+        {
+            const DiffGap& gap = viewer_gaps[static_cast<std::size_t>(index)];
+            const float y = view_window->DC.CursorStartPos.y + gap.row * line_height;
+            if (y + line_height < view_window->InnerClipRect.Min.y || y > view_window->InnerClipRect.Max.y)
+                continue;
+
+            const ImU32 muted = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            const std::string info = std::to_string(gap.count)
+                + (gap.count == 1 ? " line hidden" : " lines hidden");
+            const int reveal_count = reveal_all_modifier ? gap.count : std::min(gap.count, edge * 2);
+            const std::string action = "Reveal " + std::to_string(reveal_count);
+            const ImVec2 info_size = ImGui::CalcTextSize(info.c_str());
+            const ImVec2 action_size = ImGui::CalcTextSize(action.c_str());
+            const ImVec2 padding = ImGui::GetStyle().FramePadding;
+            const float spacing = ImGui::GetStyle().ItemSpacing.x;
+            const float button_width = action_size.x + padding.x * 2.0f;
+            const float total_width = info_size.x + spacing + button_width;
+            const float left = view_window->InnerClipRect.GetCenter().x - total_width * 0.5f;
+            const ImRect button(ImVec2(left + info_size.x + spacing, y + 1.0f),
+                ImVec2(left + total_width, y + line_height - 1.0f));
+            const bool hovered = view_hovered && button.Contains(ImGui::GetMousePos());
+            draw->AddText(ImVec2(left, y + (line_height - info_size.y) * 0.5f), muted, info.c_str());
+            draw->AddRectFilled(button.Min, button.Max,
+                ImGui::GetColorU32(hovered ? ImGuiCol_ButtonHovered : ImGuiCol_Button),
+                ImGui::GetStyle().FrameRounding);
+            draw->AddText(ImVec2(button.Min.x + padding.x, y + (line_height - action_size.y) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text), action.c_str());
+            if (hovered)
+            {
+                hovered_gap = index;
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                {
+                    clicked_gap = index;
+                    reveal_all = reveal_all_modifier;
+                    reveal_scroll_y = view_window->Scroll.y;
+                }
+            }
+        }
+        draw->PopClipRect();
+    }
     ImGui::PopFont();
 
     // Viewer context menu
@@ -393,6 +640,23 @@ void Application::RenderDiff()
         render_move_context(editor, false);
     else
         render_move_context(diff, _diff_side_by_side);
+    if (hovered_gap >= 0)
+        ImGui::SetTooltip("Reveal surrounding context. Hold Shift while clicking to reveal the entire section.");
+    if (clicked_gap >= 0)
+    {
+        const DiffGap gap = viewer_gaps[static_cast<std::size_t>(clicked_gap)];
+        const int edge = std::max(_diff_context_lines, 1);
+        const int first_end = reveal_all ? gap.count : std::min(edge, gap.count);
+        const int last_begin = reveal_all ? 0 : std::max(first_end, gap.count - edge);
+        if (reveal_all)
+            revealed_context.push_back({gap.old_line, gap.new_line, gap.count});
+        else if (first_end > 0)
+            revealed_context.push_back({gap.old_line, gap.new_line, first_end});
+        if (!reveal_all && last_begin < gap.count)
+            revealed_context.push_back({gap.old_line + last_begin, gap.new_line + last_begin,
+                gap.count - last_begin});
+        viewer_dirty = true;
+    }
     ImGui::End();
 }
 

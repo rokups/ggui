@@ -1176,6 +1176,10 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
     ASSERT_TRUE(normal.has_value());
     EXPECT_EQ(normal->before, "line03\nline08\n");
     EXPECT_EQ(normal->after, "changed\nline 08\n");
+    EXPECT_EQ(normal->full_before,
+        "line01\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\n");
+    EXPECT_EQ(normal->full_after,
+        "line01\nline02\nchanged\nline04\nline05\nline06\nline07\nline 08\nline09\nline10\n");
     EXPECT_FALSE(normal->patch.empty());
     ASSERT_GE(normal->lines.size(), 4U);
     EXPECT_EQ(normal->lines[0].old_line, 2);

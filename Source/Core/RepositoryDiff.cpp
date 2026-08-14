@@ -224,6 +224,12 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
                 result.lines.push_back({});
             if (command.options.context_lines >= 0)
             {
+                if (result.selected_status != GIT_DELTA_ADDED && result.selected_status != GIT_DELTA_UNTRACKED
+                    && result.selected_status != GIT_DELTA_DELETED)
+                {
+                    result.full_before = result.before;
+                    result.full_after = result.after;
+                }
                 if (display_before.empty() && display_after.empty())
                     display_before = display_after = result.after.empty() ? result.before : result.after;
                 result.before = std::move(display_before);

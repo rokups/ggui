@@ -150,6 +150,8 @@ struct DiffResult
     std::string path;
     std::string before;
     std::string after;
+    std::string full_before;
+    std::string full_after;
     bool binary = false;
     git_delta_t selected_status = GIT_DELTA_UNMODIFIED;
     std::vector<StatusEntry> files;
