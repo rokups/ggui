@@ -90,6 +90,9 @@ the author row's context menu supports copying or editing its identity.
 History rows show each change's current Git commit ID. IDs retained from prior
 rewrites remain searchable, keep selections attached across refreshes, and are
 available from the change-information and copy menus as aliases.
+Fetching updates remote bookmarks and shows their commits in History without
+moving local bookmarks. Pulling additionally fast-forwards eligible tracked
+local bookmarks, which can also be moved explicitly from a History row.
 
 Left-drag a graph row onto the top of another row to reorder before it, onto
 the middle to squash, or onto the bottom to rebase. Drop below the final row

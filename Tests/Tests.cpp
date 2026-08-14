@@ -755,6 +755,77 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     ASSERT_NE(deleted, nullptr);
 }
 
+TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
+{
+    TemporaryRepository repository;
+    RemovePath remote{repository.path.string() + "-fetch-bare"};
+    RemovePath peer{repository.path.string() + "-fetch-peer"};
+    ASSERT_EQ(std::system(("git clone --bare " + Quote(repository.path) + " " + Quote(remote.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(repository.path)
+                             + " remote set-url origin " + Quote(remote.path) + " && git clone "
+                             + Quote(remote.path) + " " + Quote(peer.path)
+                             + " >/dev/null 2>&1 && git -C " + Quote(peer.path)
+                             + " config user.name peer && git -C " + Quote(peer.path)
+                             + " config user.email peer@example.test")
+                              .c_str()),
+        0);
+
+    std::ofstream(peer.path / "remote.txt") << "remote\n";
+    ASSERT_EQ(std::system(("git -C " + Quote(peer.path) + " add remote.txt && git -C "
+                             + Quote(peer.path) + " commit -m remote >/dev/null 2>&1 && git -C "
+                             + Quote(peer.path) + " push origin main >/dev/null 2>&1")
+                              .c_str()),
+        0);
+
+    const auto bookmark_target = [](const RepoSnapshot& snapshot, gg_named_ref_kind kind) {
+        const auto ref = std::ranges::find_if(snapshot.refs, [&](const NamedRef& candidate) {
+            return candidate.kind == kind && candidate.name == "main"
+                && (kind != GG_NAMED_REF_REMOTE_BOOKMARK || candidate.remote == "origin");
+        });
+        return ref == snapshot.refs.end() ? std::string{} : ref->target;
+    };
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.revisions.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+    const std::string local_before = bookmark_target(*opened, GG_NAMED_REF_LOCAL_BOOKMARK);
+    ASSERT_FALSE(local_before.empty());
+    EXPECT_TRUE(std::ranges::none_of(
+        opened->revisions, [](const Revision& revision) { return revision.description == "remote"; }));
+
+    engine.Enqueue(Fetch{"origin", false});
+    const auto fetched = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        const std::string remote_target = bookmark_target(snapshot, GG_NAMED_REF_REMOTE_BOOKMARK);
+        return snapshot.generation > opened->generation && !remote_target.empty()
+            && std::ranges::any_of(snapshot.revisions,
+                [&](const Revision& revision) { return revision.oid == remote_target; });
+    });
+    ASSERT_NE(fetched, nullptr);
+    EXPECT_EQ(bookmark_target(*fetched, GG_NAMED_REF_LOCAL_BOOKMARK), local_before);
+    const std::string remote_after_fetch = bookmark_target(*fetched, GG_NAMED_REF_REMOTE_BOOKMARK);
+    EXPECT_NE(remote_after_fetch, local_before);
+
+    engine.Enqueue(Tag{GG_TAG_SET, {"after-fetch"}, local_before});
+    const auto synchronized = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > fetched->generation
+            && std::ranges::any_of(snapshot.refs, [](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_TAG && ref.name == "after-fetch";
+            });
+    });
+    ASSERT_NE(synchronized, nullptr);
+    EXPECT_EQ(bookmark_target(*synchronized, GG_NAMED_REF_LOCAL_BOOKMARK), local_before);
+
+    engine.Enqueue(Fetch{"origin", true});
+    const auto pulled = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > synchronized->generation
+            && bookmark_target(snapshot, GG_NAMED_REF_LOCAL_BOOKMARK) == remote_after_fetch;
+    });
+    ASSERT_NE(pulled, nullptr);
+}
+
 TEST(RepositoryEngine, ForcePushesDivergedBookmark)
 {
     TemporaryRepository repository;

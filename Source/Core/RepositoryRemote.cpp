@@ -100,7 +100,9 @@ void RepositoryEngine::Impl::FetchRemote(const Fetch& command)
         command.tracked_only ? "pull remote" : "fetch remote");
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
-    Check(gg_repository_complete_fetch(&mutation.value, gg, &plan.value, &operation), "complete fetch");
+    Check(gg_repository_complete_fetch_ex(
+              &mutation.value, gg, &plan.value, command.tracked_only, &operation),
+        "complete fetch");
     PublishSnapshot();
 }
 

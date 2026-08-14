@@ -14,7 +14,7 @@ void RepositoryEngine::Impl::Sync(bool report_progress)
     if (gg == nullptr)
         return;
     gg_operation_options options = OperationOptions(report_progress);
-    Check(gg_repository_adopt_git_history(gg, &options), "adopt external Git history");
+    Check(gg_repository_adopt_git_history_ex(gg, false, &options), "adopt external Git history");
     int changed = 0;
     Check(gg_repository_snapshot_working_copy(&changed, gg, &options), "snapshot working copy");
 }
@@ -39,7 +39,7 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
     }
 
     gg_revision_query_options query = GG_REVISION_QUERY_OPTIONS_INIT;
-    query.revisions = "all()";
+    query.revisions = "ancestors(all() | remote_bookmarks())";
     Revisions revisions;
     Check(gg_repository_revisions(&revisions.value, gg, &query), "load revisions");
     result->revisions.reserve(revisions.value.count);
