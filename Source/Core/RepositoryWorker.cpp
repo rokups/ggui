@@ -19,7 +19,8 @@ using namespace RepositoryInternal;
 void RepositoryEngine::Impl::Execute(const Command& command)
 {
     const std::string name = CommandName(command);
-    const bool quiet = std::holds_alternative<Refresh>(command) || std::holds_alternative<LoadDiff>(command);
+    const bool quiet = std::holds_alternative<Refresh>(command) || std::holds_alternative<LoadDiff>(command)
+        || std::holds_alternative<LoadFileContent>(command);
     if (!quiet)
         Post(OperationStarted{name});
     cancel_requested = false;
@@ -36,13 +37,15 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             {
                 std::lock_guard lock(queue_mutex);
                 std::erase_if(commands, [](const Command& queued) {
-                    return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<Refresh>(queued);
+                    return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<LoadFileContent>(queued)
+                        || std::holds_alternative<Refresh>(queued);
                 });
             }
             {
                 std::lock_guard lock(event_mutex);
                 std::erase_if(events, [](const Event& queued) {
-                    return std::holds_alternative<SnapshotReady>(queued) || std::holds_alternative<DiffReady>(queued);
+                    return std::holds_alternative<SnapshotReady>(queued) || std::holds_alternative<DiffReady>(queued)
+                        || std::holds_alternative<FileContentReady>(queued);
                 });
             }
         }
@@ -62,6 +65,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             PushBookmark(*value);
         else if (const auto* value = std::get_if<LoadDiff>(&command))
             LoadPatch(*value);
+        else if (const auto* value = std::get_if<LoadFileContent>(&command))
+            LoadFile(*value);
         else if (const auto* value = std::get_if<ApplyPatch>(&command))
             ApplyPatchText(*value);
         else if (const auto* value = std::get_if<RevertFile>(&command))

@@ -404,6 +404,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Settings");
         IM_CHECK(context->ItemExists("User"));
         IM_CHECK(context->ItemExists("##Maximum new file size User"));
+        IM_CHECK(context->ItemExists("##GUI editor User"));
         IM_CHECK(!context->ItemExists("##Maximum new file size Repository"));
         IM_CHECK((context->ItemInfo("Repository").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("Workspace").ItemFlags & ImGuiItemFlags_Disabled) != 0);
@@ -435,22 +436,55 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Repository");
         context->Yield();
         IM_CHECK(context->ItemExists("##Maximum new file size Repository"));
+        IM_CHECK(context->ItemExists("##GUI editor Repository"));
         context->ItemInputValue("##Maximum new file size Repository", "2MiB");
+        context->ItemInputValue("##GUI editor Repository", "code --wait");
         context->ItemClick("Workspace");
         for (int frame = 0; frame < 100 && application.SnapshotForTest()->generation <= generation; ++frame)
             context->Yield();
         IM_CHECK_GT(application.SnapshotForTest()->generation, generation);
         const MaxNewFileSizeValues written = ReadMaxNewFileSizeValues(Repository().Path());
         IM_CHECK_EQ(written[1], "2MiB");
+        IM_CHECK_EQ(ReadEditorValues(Repository().Path())[1], "code --wait");
 
         context->SetRef("Settings");
         context->ItemClick("Repository");
         context->Yield();
         context->ItemInputValue("##Maximum new file size Repository", "");
+        context->ItemInputValue("##GUI editor Repository", "");
         context->ItemClick("User");
         context->Yield(2);
         IM_CHECK(!ReadMaxNewFileSizeValues(Repository().Path())[1].has_value());
+        IM_CHECK(!ReadEditorValues(Repository().Path())[1].has_value());
         context->WindowClose("Settings");
+    };
+
+    test = IM_REGISTER_TEST(engine, "Interactions", "ChangedFileDoubleClickOpensEditor");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        Repository().Write("modified.txt", "working copy\n");
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(3);
+
+        FocusWindow(context, "Changes");
+        context->ItemDoubleClick("**/M  modified.txt");
+        const std::filesystem::path working_path = application.OpenedEditorPathForTest();
+        IM_CHECK_EQ(std::filesystem::weakly_canonical(working_path),
+            std::filesystem::weakly_canonical(Repository().Path() / "modified.txt"));
+
+        application.SelectRevisionForTest("left");
+        application.ApplyEventForTest(DiffReady{{1000, "left", "modified.txt", "old\n", "historical\n", false,
+            RichSnapshot().status}});
+        context->Yield(3);
+        FocusWindow(context, "Changes");
+        context->ItemDoubleClick("**/M  modified.txt");
+        IM_CHECK_EQ(application.PendingEditorRevisionForTest(), "left");
+        application.ApplyEventForTest(FileContentReady{"left", "modified.txt", "historical\n"});
+        const std::filesystem::path historical_path = application.OpenedEditorPathForTest();
+        IM_CHECK_NE(historical_path, working_path);
+        std::ifstream input(historical_path, std::ios::binary);
+        const std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+        IM_CHECK_EQ(contents, "historical\n");
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "OperationAvailability");

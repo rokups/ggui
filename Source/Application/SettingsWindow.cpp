@@ -21,10 +21,10 @@ std::size_t ScopeIndex(ConfigScope scope)
     return static_cast<std::size_t>(scope);
 }
 
-std::string InheritedHint(const MaxNewFileSizeValues& values, ConfigScope scope)
+std::string InheritedHint(const InheritedConfigValue& inherited)
 {
-    const InheritedConfigValue inherited = InheritedMaxNewFileSize(values, scope);
-    return inherited.value + " (" + (inherited.source.has_value()
+    return (inherited.value.empty() ? "Not configured" : inherited.value) + std::string(" (")
+        + (inherited.source.has_value()
         ? ConfigScopeName(*inherited.source) : "Default") + ")";
 }
 
@@ -50,12 +50,14 @@ void Application::ReloadNativeSettings()
     try
     {
         _max_new_file_size_values = ReadMaxNewFileSizeValues(repository);
+        _editor_values = ReadEditorValues(repository);
         for (std::size_t index = 0; index < _max_new_file_size_inputs.size(); ++index)
         {
             _max_new_file_size_inputs[index] = _max_new_file_size_values[index].value_or("");
             _max_new_file_size_errors[index] = _max_new_file_size_inputs[index].empty()
                 || ParseFileSize(_max_new_file_size_inputs[index]).has_value()
                 ? "" : "Enter unsigned bytes or a binary size such as 1MiB.";
+            _editor_inputs[index] = _editor_values[index].value_or("");
         }
     }
     catch (const std::exception& error)
@@ -105,7 +107,7 @@ void Application::RenderSettings()
                 const std::size_t index = ScopeIndex(scope);
                 ImGui::TextUnformatted("Maximum size for automatically tracked new files");
                 ImGui::TextDisabled("Use bytes or binary suffixes (K, KB, KiB, MiB, GiB). 0 means unlimited.");
-                const std::string hint = InheritedHint(_max_new_file_size_values, scope);
+                const std::string hint = InheritedHint(InheritedMaxNewFileSize(_max_new_file_size_values, scope));
                 ImGui::SetNextItemWidth(-1.0f);
                 const std::string label = "##Maximum new file size " + std::string(ConfigScopeName(scope));
                 if (ImGui::InputTextWithHint(label.c_str(), hint.c_str(), &_max_new_file_size_inputs[index]))
@@ -139,6 +141,32 @@ void Application::RenderSettings()
                 if (!_max_new_file_size_errors[index].empty())
                     ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f), "%s",
                         _max_new_file_size_errors[index].c_str());
+
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::TextUnformatted("GUI editor command");
+                ImGui::TextDisabled("Sets Git core.editor. Include command-line options when needed.");
+                const std::string editor_hint = InheritedHint(InheritedEditor(_editor_values, scope));
+                ImGui::SetNextItemWidth(-1.0f);
+                const std::string editor_label = "##GUI editor " + std::string(ConfigScopeName(scope));
+                ImGui::InputTextWithHint(
+                    editor_label.c_str(), editor_hint.c_str(), &_editor_inputs[index]);
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                {
+                    const std::optional<std::string> value = _editor_inputs[index].empty()
+                        ? std::nullopt : std::optional(_editor_inputs[index]);
+                    try
+                    {
+                        WriteEditorValue(_snapshot == nullptr
+                                ? std::nullopt : std::optional<std::filesystem::path>(_snapshot->root),
+                            scope, value);
+                        _editor_values[index] = value;
+                    }
+                    catch (const std::exception& error)
+                    {
+                        _error_message = error.what();
+                    }
+                }
                 ImGui::EndTabItem();
             }
             ImGui::EndDisabled();

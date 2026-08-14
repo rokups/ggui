@@ -243,6 +243,32 @@ TEST(Settings, ReadsWritesUnsetsAndResolvesNativeScopes)
     EXPECT_FALSE(values[2].has_value());
 }
 
+TEST(Settings, ReadsWritesAndResolvesEditorScopes)
+{
+    TemporaryRepository repository;
+    TemporaryGlobalConfig global;
+    const std::optional<std::filesystem::path> path = repository.path;
+    EditorValues values = ReadEditorValues(path);
+    EXPECT_TRUE(EffectiveEditor(values).empty());
+    EXPECT_TRUE(InheritedEditor(values, ConfigScope::User).value.empty());
+
+    WriteEditorValue(path, ConfigScope::User, "code --wait");
+    WriteEditorValue(path, ConfigScope::Repository, "zed --wait");
+    WriteEditorValue(path, ConfigScope::Workspace, "cursor --wait");
+    values = ReadEditorValues(path);
+    EXPECT_EQ(values[0], "code --wait");
+    EXPECT_EQ(values[1], "zed --wait");
+    EXPECT_EQ(values[2], "cursor --wait");
+    EXPECT_EQ(InheritedEditor(values, ConfigScope::Repository).value, "code --wait");
+    EXPECT_EQ(InheritedEditor(values, ConfigScope::Workspace).value, "zed --wait");
+    EXPECT_EQ(EffectiveEditor(values), "cursor --wait");
+
+    WriteEditorValue(path, ConfigScope::Workspace, std::nullopt);
+    WriteEditorValue(path, ConfigScope::Repository, std::nullopt);
+    WriteEditorValue(path, ConfigScope::User, std::nullopt);
+    EXPECT_TRUE(EffectiveEditor(ReadEditorValues(path)).empty());
+}
+
 struct TerminalEvent
 {
     bool finished = false;
@@ -302,6 +328,27 @@ std::optional<DiffResult> WaitForDiff(RepositoryEngine& engine)
         std::this_thread::sleep_for(5ms);
     }
     ADD_FAILURE() << "timed out waiting for diff";
+    return std::nullopt;
+}
+
+std::optional<FileContentReady> WaitForFileContent(RepositoryEngine& engine)
+{
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        for (const Event& event : engine.PollEvents())
+        {
+            if (const auto* file = std::get_if<FileContentReady>(&event))
+                return *file;
+            if (const auto* error = std::get_if<ErrorEvent>(&event))
+            {
+                ADD_FAILURE() << error->operation << ": " << error->message;
+                return std::nullopt;
+            }
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    ADD_FAILURE() << "timed out waiting for file contents";
     return std::nullopt;
 }
 
@@ -1021,6 +1068,25 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     ASSERT_TRUE(binary.has_value());
     EXPECT_TRUE(binary->after.empty());
     EXPECT_TRUE(binary->binary);
+}
+
+TEST(RepositoryEngine, LoadsFileContentFromARevision)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return !value.revisions.empty();
+    });
+    ASSERT_NE(snapshot, nullptr);
+    const Revision& root = snapshot->revisions.back();
+
+    engine.Enqueue(LoadFileContent{root.oid, "tracked.txt"});
+    const std::optional<FileContentReady> file = WaitForFileContent(engine);
+    ASSERT_TRUE(file.has_value());
+    EXPECT_EQ(file->revision, root.oid);
+    EXPECT_EQ(file->path, "tracked.txt");
+    EXPECT_EQ(file->contents, "base\n");
 }
 
 TEST(RepositoryEngine, ComparesTwoRevisionTrees)

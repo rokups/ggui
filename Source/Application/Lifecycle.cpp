@@ -287,6 +287,11 @@ void Application::WindowSettingsWriteAll(
 void Application::Shutdown()
 {
     SaveSettings();
+    if (!_editor_temp_directory.empty())
+    {
+        std::error_code error;
+        std::filesystem::remove_all(_editor_temp_directory, error);
+    }
 #ifdef IMGUI_BUILD_TESTING
     if (_test_engine != nullptr)
         ImGuiTestEngine_Stop(_test_engine);

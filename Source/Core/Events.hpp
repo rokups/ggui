@@ -13,6 +13,7 @@ namespace Ggui
 
 struct SnapshotReady { std::shared_ptr<const RepoSnapshot> snapshot; };
 struct DiffReady { DiffResult diff; };
+struct FileContentReady { std::string revision; std::string path; std::string contents; };
 struct OperationStarted { std::string name; };
 struct OperationProgress
 {
@@ -29,8 +30,8 @@ struct CredentialRequest
     unsigned int allowed_types = 0;
 };
 
-using Event = std::variant<SnapshotReady, DiffReady, OperationStarted, OperationProgress, OperationFinished, ErrorEvent,
-    CredentialRequest>;
+using Event = std::variant<SnapshotReady, DiffReady, FileContentReady, OperationStarted, OperationProgress,
+    OperationFinished, ErrorEvent, CredentialRequest>;
 
 struct CredentialResponse
 {

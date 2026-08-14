@@ -90,6 +90,8 @@ public:
     static int DropPlacementForTest(int action);
     static std::string DropTooltipForTest(int action, const std::string& target);
     std::vector<std::string> AbandonRevisionsForTest(const std::string& revision) const;
+    const std::string& PendingEditorRevisionForTest() const;
+    const std::filesystem::path& OpenedEditorPathForTest() const;
 #endif
 
 private:
@@ -182,6 +184,9 @@ private:
     void NavigateChangedFile(int direction);
     static std::optional<std::filesystem::path> WorkingCopyPath(
         const std::string& root, const std::string& relative);
+    void OpenFileInEditor(const std::string& path);
+    void OpenTemporaryFileInEditor(const FileContentReady& file);
+    void OpenEditorPath(const std::filesystem::path& path);
     void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
     void OpenExternalDiff(const std::string& path, const std::string& compare_to);
     std::vector<std::string> SelectedParentRevisions() const;
@@ -229,6 +234,9 @@ private:
     std::string _selected_file;
     std::string _preferred_file;
     std::string _pending_revision;
+    std::string _pending_editor_revision;
+    std::string _pending_editor_path;
+    std::filesystem::path _editor_temp_directory;
     std::string _compare_to;
     bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;
@@ -291,6 +299,8 @@ private:
     MaxNewFileSizeValues _max_new_file_size_values;
     std::array<std::string, 3> _max_new_file_size_inputs;
     std::array<std::string, 3> _max_new_file_size_errors;
+    EditorValues _editor_values;
+    std::array<std::string, 3> _editor_inputs;
     bool _diff_side_by_side = false;
     DiffWhitespaceMode _diff_whitespace_mode = DiffWhitespaceMode::Normal;
     int _diff_context_lines = 3;
@@ -301,6 +311,7 @@ private:
     bool _test_snapshot_mode = false;
     bool _smoke_mode = false;
     int _test_result = 1;
+    std::filesystem::path _opened_editor_path_for_test;
 #endif
 };
 

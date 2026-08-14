@@ -159,6 +159,8 @@ void Application::ApplyEvent(Event event)
                         _diff_loading = false;
                     }
                 }
+                else if constexpr (std::is_same_v<T, FileContentReady>)
+                    OpenTemporaryFileInEditor(value);
                 else if constexpr (std::is_same_v<T, OperationStarted>)
                 {
                     _active_operation = value.name;

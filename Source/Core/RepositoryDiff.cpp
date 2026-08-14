@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <git2/sys/errors.h>
+
 #include <algorithm>
 #include <limits>
 #include <memory>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,6 +16,35 @@
 namespace Ggui
 {
 using namespace RepositoryInternal;
+
+void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
+{
+    git_oid oid{};
+    Check(gg_repository_resolve(&oid, gg, command.revision.c_str()), "resolve file revision");
+    git_commit* raw_commit = nullptr;
+    Check(git_commit_lookup(&raw_commit, git.get(), &oid), "load file revision");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+    git_tree* raw_tree = nullptr;
+    Check(git_commit_tree(&raw_tree, commit.get()), "load file revision tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
+    git_tree_entry* raw_entry = nullptr;
+    const int found = git_tree_entry_bypath(&raw_entry, tree.get(), command.path.c_str());
+    if (found == GIT_ENOTFOUND)
+    {
+        git_error_clear();
+        throw std::runtime_error("file does not exist in the selected change");
+    }
+    Check(found, "load file entry");
+    std::unique_ptr<git_tree_entry, decltype(&git_tree_entry_free)> entry(raw_entry, git_tree_entry_free);
+    if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
+        throw std::runtime_error("selected path is not a file");
+    git_blob* raw_blob = nullptr;
+    Check(git_blob_lookup(&raw_blob, git.get(), git_tree_entry_id(entry.get())), "load file contents");
+    std::unique_ptr<git_blob, decltype(&git_blob_free)> blob(raw_blob, git_blob_free);
+    const char* contents = static_cast<const char*>(git_blob_rawcontent(blob.get()));
+    Post(FileContentReady{command.revision, command.path,
+        std::string(contents == nullptr ? "" : contents, static_cast<std::size_t>(git_blob_rawsize(blob.get())))});
+}
 
 void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
 {

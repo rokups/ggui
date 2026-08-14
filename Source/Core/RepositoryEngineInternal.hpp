@@ -192,6 +192,7 @@ struct RepositoryEngine::Impl
     std::shared_ptr<RepoSnapshot> ReadSnapshot();
     void PublishSnapshot();
     void LoadPatch(const LoadDiff& command);
+    void LoadFile(const LoadFileContent& command);
     void ApplyPatchText(const ApplyPatch& command);
     void RevertFileChange(const RevertFile& command);
     void DeleteWorkingFile(const DeleteFile& command);

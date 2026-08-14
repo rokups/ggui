@@ -204,6 +204,9 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _selected_file.clear();
     _preferred_file.clear();
     _pending_revision.clear();
+    _pending_editor_revision.clear();
+    _pending_editor_path.clear();
+    _opened_editor_path_for_test.clear();
     _compare_to.clear();
     _file_comparison = false;
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
@@ -310,6 +313,16 @@ int Application::DropPlacementForTest(int action)
 std::string Application::DropTooltipForTest(int action, const std::string& target)
 {
     return DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), target);
+}
+
+const std::string& Application::PendingEditorRevisionForTest() const
+{
+    return _pending_editor_revision;
+}
+
+const std::filesystem::path& Application::OpenedEditorPathForTest() const
+{
+    return _opened_editor_path_for_test;
 }
 #endif
 

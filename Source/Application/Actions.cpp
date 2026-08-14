@@ -4,10 +4,13 @@
 
 #include <nfd.h>
 
+#include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <optional>
 #include <ranges>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -401,6 +404,8 @@ void Application::ResetRepositoryState()
     _selected_file.clear();
     _preferred_file.clear();
     _pending_revision.clear();
+    _pending_editor_revision.clear();
+    _pending_editor_path.clear();
     _compare_to.clear();
     _file_comparison = false;
     _open_save_patch = false;
@@ -482,7 +487,106 @@ std::optional<std::filesystem::path> Application::WorkingCopyPath(
     return candidate;
 }
 
+void Application::OpenFileInEditor(const std::string& path)
+{
+    if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
+        return;
+    if (_diff.revision != _snapshot->working_copy)
+    {
+        _pending_editor_revision = _diff.revision;
+        _pending_editor_path = path;
+        _engine.Enqueue(LoadFileContent{_diff.revision, path});
+        return;
+    }
+    const std::optional<std::filesystem::path> absolute = WorkingCopyPath(_snapshot->root, path);
+    std::error_code error;
+    if (!absolute.has_value() || !std::filesystem::is_regular_file(*absolute, error) || error)
+    {
+        _error_message = "File is unavailable in the working copy";
+        return;
+    }
+    OpenEditorPath(*absolute);
+}
+
+void Application::OpenTemporaryFileInEditor(const FileContentReady& file)
+{
+    if (file.revision != _pending_editor_revision || file.path != _pending_editor_path)
+        return;
+    _pending_editor_revision.clear();
+    _pending_editor_path.clear();
+    try
+    {
+        if (_editor_temp_directory.empty())
+        {
+            _editor_temp_directory = std::filesystem::temp_directory_path()
+                / ("ggui-editor-" + std::to_string(
+                    std::chrono::steady_clock::now().time_since_epoch().count()));
+            std::filesystem::create_directories(_editor_temp_directory);
+        }
+        const std::string relative = (std::filesystem::path(ShortId(file.revision)) / file.path).generic_string();
+        const std::optional<std::filesystem::path> temporary =
+            WorkingCopyPath(_editor_temp_directory.string(), relative);
+        if (!temporary.has_value())
+            throw std::runtime_error("temporary editor path is invalid");
+        std::filesystem::create_directories(temporary->parent_path());
+        std::ofstream output(*temporary, std::ios::binary | std::ios::trunc);
+        output.write(file.contents.data(), static_cast<std::streamsize>(file.contents.size()));
+        output.close();
+        if (!output)
+            throw std::runtime_error("could not write temporary editor file");
+        OpenEditorPath(*temporary);
+    }
+    catch (const std::exception& error)
+    {
+        _error_message = error.what();
+    }
+}
+
 // GCOV_EXCL_START: OS-default file handlers are platform integrations
+
+void Application::OpenEditorPath(const std::filesystem::path& path)
+{
+#ifdef IMGUI_BUILD_TESTING
+    if (_test_mode)
+    {
+        _opened_editor_path_for_test = path;
+        _status_message = "File opened in editor";
+        return;
+    }
+#endif
+    std::string editor;
+    try
+    {
+        editor = EffectiveEditor(ReadEditorValues(_snapshot == nullptr
+            ? std::nullopt : std::optional<std::filesystem::path>(_snapshot->root)));
+    }
+    catch (const std::exception& error)
+    {
+        _error_message = error.what();
+        return;
+    }
+    if (editor.empty())
+    {
+        _error_message = "Configure a GUI editor in Settings";
+        return;
+    }
+    const std::string path_text = path.string();
+#ifdef _WIN32
+    const std::string command = editor + " \"" + path_text + "\"";
+    const char* arguments[]{"cmd.exe", "/D", "/S", "/C", command.c_str(), nullptr};
+#else
+    const std::string command = editor + " \"$1\"";
+    const char* arguments[]{"/bin/sh", "-c", command.c_str(), "ggui-editor", path_text.c_str(), nullptr};
+#endif
+    SDL_Process* process = SDL_CreateProcess(arguments, false); // GCOV_EXCL_LINE: external application handoff
+    if (process == nullptr)
+        _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
+    else
+    {
+        SDL_DestroyProcess(process); // GCOV_EXCL_LINE: external process owns its lifetime
+        _status_message = "File opened in editor";
+    }
+}
 
 void Application::OpenExternalPath(const std::filesystem::path& path, std::string_view description)
 {

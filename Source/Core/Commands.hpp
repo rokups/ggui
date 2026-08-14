@@ -44,6 +44,7 @@ struct LoadDiff
     std::string compare_to;
     bool file_comparison = false;
 };
+struct LoadFileContent { std::string revision; std::string path; };
 
 struct ApplyPatch { std::string text; std::string path; };
 struct RevertFile
@@ -134,9 +135,9 @@ struct UntrackPaths { std::vector<std::string> filesets; };
 struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; };
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, ApplyPatch, RevertFile, DeleteFile, NewChange, Describe, Metaedit, Edit, MoveChange,
-    Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore, MoveFiles, MoveDiffLines,
-    RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation, WorkspaceAdd, WorkspaceForget,
-    WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
+    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, RevertFile, DeleteFile, NewChange, Describe, Metaedit,
+    Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
+    MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
+    WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 
 } // namespace Ggui

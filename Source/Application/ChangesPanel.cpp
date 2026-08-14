@@ -101,6 +101,8 @@ void Application::RenderChanges()
         const bool elided = DrawTextWithin(draw, text, maximum.x - 8.0f, file.path, ImGui::GetColorU32(ImGuiCol_Text));
         if (selected)
             SelectFile(file.path);
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+            OpenFileInEditor(file.path);
 
         // File drag source
         if (!actions_locked && !comparison_active && ImGui::BeginDragDropSource())
