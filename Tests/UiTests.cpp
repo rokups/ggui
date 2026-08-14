@@ -1876,7 +1876,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK(!context->ItemExists("**/Describe..."));
             IM_CHECK(!context->ItemExists("**/Metaedit..."));
             constexpr std::array change_actions{"Edit", "Duplicate", "Rebase...", "Squash...", "Split...",
-                "Restore...", "Abandon...", "Abandon branch...", "Simplify parents"};
+                "Restore...", "Abandon...", "Simplify parents"};
             float previous_y = -FLT_MAX;
             for (const char* action : change_actions)
             {
@@ -1885,6 +1885,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 IM_CHECK_GT(item.RectFull.Min.y, previous_y);
                 previous_y = item.RectFull.Min.y;
             }
+            IM_CHECK(!context->ItemExists("**/Abandon branch..."));
+            context->KeyDown(ImGuiMod_Shift);
+            context->Yield();
+            IM_CHECK(!context->ItemExists("**/Abandon..."));
+            IM_CHECK(context->ItemExists("**/Abandon branch..."));
+            context->KeyUp(ImGuiMod_Shift);
+            context->Yield();
             IM_CHECK_LT(context->ItemInfo("**/Simplify parents").RectFull.Min.y,
                 context->ItemInfo("**/Create bookmark...").RectFull.Min.y);
             IM_CHECK_LT(context->ItemInfo("**/Delete bookmark").RectFull.Min.y,
@@ -1913,8 +1920,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Edit", "Squash...", "Split...", "Restore...",
-                     "Abandon...", "Abandon branch..."})
+            for (const char* action : {"Edit", "Squash...", "Split...", "Restore...", "Abandon..."})
             {
                 context->SetRef("History");
                 context->ItemClick(rows[0], ImGuiMouseButton_Right);
@@ -1929,6 +1935,19 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 }
                 context->Yield(2);
             }
+
+            context->SetRef("History");
+            context->KeyDown(ImGuiMod_Shift);
+            context->ItemClick(rows[0], ImGuiMouseButton_Right);
+            context->Yield();
+            IM_CHECK(!context->ItemExists("**/Abandon..."));
+            context->ItemClick("**/Abandon branch...");
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            context->SetRef("ggui action");
+            IM_CHECK(context->ItemIsChecked("Also abandon all descendants (full branch)"));
+            context->ItemClick("Cancel");
+            context->KeyUp(ImGuiMod_Shift);
+            context->Yield(2);
 
             context->SetRef("History");
             context->ItemClick(rows[0], ImGuiMouseButton_Right);

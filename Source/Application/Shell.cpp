@@ -407,12 +407,14 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     dialog(ICON_MS_MERGE, "Squash...", "Shift+S", Dialog::Squash);
     dialog(ICON_MS_DIFFERENCE, "Split...", "Alt+S", Dialog::Split);
     dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
-    if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A", enabled))
+    const bool abandon_branch = select_revision && ImGui::GetIO().KeyShift;
+    if (ActionMenuItem(ICON_MS_DELETE, abandon_branch ? "Abandon branch..." : "Abandon...",
+            abandon_branch ? "Shift+A" : "A", enabled))
     {
         select();
-        RequestAbandon(revision);
+        RequestAbandon(revision, abandon_branch);
     }
-    if (ActionMenuItem(ICON_MS_DELETE, "Abandon branch...", "Shift+A", enabled))
+    if (!select_revision && ActionMenuItem(ICON_MS_DELETE, "Abandon branch...", "Shift+A", enabled))
     {
         select();
         RequestAbandon(revision, true);
