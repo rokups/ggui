@@ -151,6 +151,7 @@ float DrawHighlightedId(
 bool DrawHighlightedIdWithin(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view id,
     std::size_t unique_length, ImU32 prefix_color);
 void TextHighlightedId(std::string_view id, std::size_t unique_length, ImU32 prefix_color);
+bool HighlightedIdButton(std::string_view id, std::size_t unique_length, ImU32 prefix_color);
 void TextLabelledId(std::string_view label, std::string_view id, std::size_t unique_length, ImU32 prefix_color);
 void DialogInput(const char* label, const char* hint, std::string* value, bool focus = false,
     ImGuiInputTextFlags flags = 0);

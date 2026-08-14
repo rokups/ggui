@@ -999,12 +999,22 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Change information");
         ImGuiWindow* change_information = ImGui::FindWindowByName("Change information");
         IM_CHECK_NE(change_information, nullptr);
-        ImGuiTestItemList information_items;
-        context->GatherItems(&information_items, "//Change information");
-        int parent_labels = 0;
-        for (int index = 0; index < information_items.GetSize(); ++index)
-            parent_labels += std::string_view(information_items.GetByIndex(index)->DebugLabel) == "Parent ";
-        IM_CHECK_EQ(parent_labels, 3);
+        const float metadata_y = context->ItemInfo("**/Merger").RectFull.Min.y;
+        for (const char* parent : {"left", "right", "third"})
+            IM_CHECK_LE(std::fabs(context->ItemInfo((std::string("**/") + parent).c_str()).RectFull.Min.y
+                - metadata_y), 1.0f);
+        context->ItemClick("**/left", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Short commit ID"));
+        IM_CHECK(context->ItemExists("**/Full commit ID"));
+        context->ItemClick("**/Short commit ID");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "left");
+        context->SetRef("Change information");
+        context->ItemClick("**/left");
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+        application.SelectRevisionForTest("merge");
+        context->Yield(2);
+        FocusWindow(context, "Change information");
         const ImVec2 author_position = change_information->DC.CursorStartPos
             + ImVec2(20.0f, ImGui::GetTextLineHeight() * 0.5f);
         context->MouseMoveToPos(author_position);

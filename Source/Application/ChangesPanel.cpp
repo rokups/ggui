@@ -320,8 +320,26 @@ void Application::RenderChangeInformation()
             ImGui::EndTooltip();
         }
     }
-    for (const std::string& parent : revision->parents)
-        TextLabelledId("Parent ", parent, RevisionPrefix(parent), CommitIdColor(false));
+    if (!revision->parents.empty())
+    {
+        ImGui::SameLine(0.0f, 12.0f);
+        ImGui::TextUnformatted(revision->parents.size() == 1 ? "Parent" : "Parents");
+        ImGui::PushID("parents");
+        for (const std::string& parent : revision->parents)
+        {
+            ImGui::SameLine(0.0f, 6.0f);
+            if (HighlightedIdButton(parent, RevisionPrefix(parent), CommitIdColor(false)))
+                RevealRevision(parent);
+            if (ImGui::IsItemHovered())
+                RenderRevisionTooltip("Select", parent);
+            if (ImGui::BeginPopupContextItem())
+            {
+                IdCopyMenuItems("commit ID", parent, RevisionPrefix(parent));
+                ImGui::EndPopup();
+            }
+        }
+        ImGui::PopID();
+    }
 
     // Commit message editor
     const float button_height = ImGui::GetFrameHeight();

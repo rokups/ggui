@@ -139,6 +139,18 @@ void TextHighlightedId(std::string_view id, std::size_t unique_length, ImU32 pre
     }
 }
 
+bool HighlightedIdButton(std::string_view id, std::size_t unique_length, ImU32 prefix_color)
+{
+    const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
+    const ImVec2 size = ImGui::CalcTextSize(id.data(), id.data() + shown);
+    const std::string item_id(id);
+    const bool clicked = ImGui::InvisibleButton(item_id.c_str(), size);
+    DrawHighlightedId(ImGui::GetWindowDrawList(), ImGui::GetItemRectMin(), id, unique_length, prefix_color);
+    if (ImGui::IsItemHovered())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    return clicked;
+}
+
 void TextLabelledId(std::string_view label, std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     ImGui::TextUnformatted(label.data(), label.data() + label.size());
