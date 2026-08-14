@@ -199,6 +199,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 options.action = value.action;
                 options.names = array.Get();
                 options.revision = value.revision.c_str();
+                options.allow_backwards = value.allow_backwards;
                 Mutate("update bookmark", [&](auto* out, auto* operation) {
                     return gg_repository_bookmark(out, gg, &options, operation);
                 });

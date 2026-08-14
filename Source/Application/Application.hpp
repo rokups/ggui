@@ -115,6 +115,7 @@ private:
         Credentials,
         ConfirmDrop,
         ConfirmLocked,
+        ConfirmBookmarkMove,
     };
 
     enum class DropAction

@@ -275,7 +275,20 @@ void Application::RenderHistory()
                     for (const NamedRef& ref : _snapshot->refs)
                         if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
                             && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
-                            _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
+                        {
+                            const BookmarkRelation relation =
+                                ClassifyBookmarkRelation(*_snapshot, ref.target, revision.oid);
+                            if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
+                            {
+                                OpenDialog(Dialog::ConfirmBookmarkMove);
+                                _input_primary = ref.name;
+                                _input_secondary = ref.target;
+                                _input_tertiary = revision.oid;
+                                _dialog_snapshot_generation = _snapshot->generation;
+                            }
+                            else
+                                _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
+                        }
                     ImGui::EndMenu();
                 }
                 const std::string delete_bookmark = IconLabel(ICON_MS_DELETE, "Delete bookmark");

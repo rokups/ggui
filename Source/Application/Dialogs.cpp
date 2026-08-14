@@ -123,7 +123,8 @@ void Application::RenderDialogs()
         "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
         "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action",
         "Reconcile bookmark###ggui action", "Credentials###ggui action",
-        "Confirm operation###ggui action", "Locked commit warning###ggui action"};
+        "Confirm operation###ggui action", "Locked commit warning###ggui action",
+        "Force bookmark move###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
@@ -361,6 +362,19 @@ void Application::RenderDialogs()
         ImGui::TextWrapped("%s", _locked_warning.c_str());
         ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote and require a force push.");
         break;
+    case Dialog::ConfirmBookmarkMove:
+        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f), "Warning: non-forward bookmark move");
+        ImGui::Text("Move bookmark %s", _input_primary.c_str());
+        TextLabelledId("Current tip: ", _input_secondary, RevisionPrefix(_input_secondary),
+            CommitIdColor(_input_secondary == _snapshot->working_copy));
+        TextLabelledId("Target: ", _input_tertiary, RevisionPrefix(_input_tertiary),
+            CommitIdColor(_input_tertiary == _snapshot->working_copy));
+        ImGui::TextWrapped("This moves the bookmark backwards or sideways. Commits reachable only from its current "
+                           "tip may become unreachable. The operation remains undoable.");
+        if (_snapshot->generation != _dialog_snapshot_generation)
+            ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+                "Repository changed. Close this dialog and inspect the bookmark again.");
+        break;
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
@@ -382,15 +396,18 @@ void Application::RenderDialogs()
     const bool submit_shortcut = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_Enter);
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
-    const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked;
+    const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
+        || _dialog == Dialog::ConfirmBookmarkMove;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
     const char* submit_label = _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::Reconcile ? "Reconcile"
+        : _dialog == Dialog::ConfirmBookmarkMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
-    const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag);
+    const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
+        || _dialog == Dialog::ConfirmBookmarkMove;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -482,6 +499,9 @@ void Application::SubmitDialog()
         if (_pending_change_info_save)
             _change_info_dirty = false;
         _pending_change_info_save = false;
+        break;
+    case Dialog::ConfirmBookmarkMove:
+        _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {_input_primary}, _input_tertiary, {}, true});
         break;
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }

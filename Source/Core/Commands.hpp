@@ -108,6 +108,7 @@ struct Bookmark
     std::vector<std::string> names;
     std::string revision;
     std::string rename_to;
+    bool allow_backwards = false;
 };
 struct Tag
 {

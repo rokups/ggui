@@ -1153,6 +1153,41 @@ TEST(RepositoryEngine, RenamesBookmarksWithoutOverwriting)
     EXPECT_NE(conflict.message.find("already exists"), std::string::npos);
 }
 
+TEST(RepositoryEngine, MovesBookmarksBackwardsOnlyWhenAllowed)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt") << "child\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add tracked.txt && git -C "
+        + Quote(repository.path) + " commit -m child >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return value.revisions.size() >= 2; });
+    ASSERT_NE(opened, nullptr);
+    const auto main = std::ranges::find_if(opened->refs, [](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+    });
+    ASSERT_NE(main, opened->refs.end());
+    const auto tip = std::ranges::find(opened->revisions, main->target, &Revision::oid);
+    ASSERT_NE(tip, opened->revisions.end());
+    ASSERT_FALSE(tip->parents.empty());
+    const std::string parent = tip->parents.front();
+
+    engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {"main"}, parent, {}});
+    const TerminalEvent rejected = WaitForTerminal(engine, "bookmark");
+    EXPECT_FALSE(rejected.finished);
+    EXPECT_NE(rejected.message.find("refusing to move bookmark"), std::string::npos);
+
+    engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {"main"}, parent, {}, true});
+    const auto moved = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return std::ranges::any_of(snapshot.refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main" && ref.target == parent;
+        });
+    });
+    ASSERT_NE(moved, nullptr);
+}
+
 TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
 {
     TemporaryRepository repository;

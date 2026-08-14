@@ -312,6 +312,12 @@ bool Application::CanSubmitDialog() const
                })
             && ClassifyBookmarkRelation(*_snapshot, _input_tertiary, _input_filesets)
                 == BookmarkRelation::Diverged;
+    case Dialog::ConfirmBookmarkMove:
+        return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
+            && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
+                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary
+                       && ref.target == _input_secondary;
+               });
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));

@@ -616,6 +616,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(dialog == nullptr || !dialog->Active);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "BookmarkMoveConfirmation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK_GE(rows.size(), 2U);
+        if (rows.size() < 2)
+            return;
+
+        context->SetRef("History");
+        context->ItemClick(rows[1], ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Move bookmark here");
+        context->Yield();
+        context->ItemClick("**/coverage-bookmark");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("**/Warning: non-forward bookmark move"));
+        IM_CHECK((context->ItemInfo("Force move").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
