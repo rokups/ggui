@@ -112,10 +112,38 @@ void Application::RenderHistory()
         _reveal_revision.clear();
     }
 
-    // Keyboard revision navigation
+    // History keyboard actions and revision navigation
     const ImGuiIO& io = ImGui::GetIO();
+    const bool history_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const bool action_hotkeys = history_focused && !io.WantTextInput && !io.KeyCtrl && !io.KeySuper
+        && _dialog == Dialog::None && _active_operation.empty() && !_selected_revision.empty();
+    if (action_hotkeys)
+    {
+        if (!io.KeyAlt && !io.KeyShift)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_E))
+                _engine.Enqueue(Edit{_selected_revision});
+            if (ImGui::IsKeyPressed(ImGuiKey_N))
+                CreateChange(true, _selected_revision);
+            if (ImGui::IsKeyPressed(ImGuiKey_D))
+                _engine.Enqueue(Duplicate{_selected_revision, false});
+            if (ImGui::IsKeyPressed(ImGuiKey_A))
+                RequestAbandon(_selected_revision);
+        }
+        if (!io.KeyAlt && io.KeyShift)
+        {
+            if (ImGui::IsKeyPressed(ImGuiKey_D))
+                _engine.Enqueue(Duplicate{_selected_revision, true});
+            if (ImGui::IsKeyPressed(ImGuiKey_A))
+                RequestAbandon(_selected_revision, true);
+            if (ImGui::IsKeyPressed(ImGuiKey_S))
+                OpenDialog(Dialog::Squash);
+        }
+        if (io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S))
+            OpenDialog(Dialog::Split);
+    }
     const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
-        && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+        && history_focused;
     const ImGuiID navigation_owner = ImGui::GetID("history arrow navigation");
     if (keyboard_navigation)
     {
@@ -228,39 +256,16 @@ void Application::RenderHistory()
             // Revision context menu
             if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
-                const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
-                if (ImGui::BeginMenu(copy_label.c_str()))
-                {
-                    IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
-                    for (std::size_t index = 0; index < revision.aliases.size(); ++index)
-                        IdCopyMenuItems("alias " + std::to_string(index + 1), revision.aliases[index],
-                            RevisionPrefix(revision.aliases[index]));
-                    if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
-                            !revision.description.empty()))
-                        ImGui::SetClipboardText(revision.description.c_str());
-                    ImGui::EndMenu();
-                }
-                ImGui::Separator();
                 ImGui::BeginDisabled(actions_locked);
                 if (ActionMenuItem(ICON_MS_ADD, "New", "N"))
                 {
                     SelectRevision(revision.oid);
-                    CreateChange(true);
+                    CreateChange(true, revision.oid);
                 }
+                RenderSelectedChangeActions(revision.oid, true);
+
                 ImGui::Separator();
                 const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
-                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
-                if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
-                        bookmark != nullptr && !remote.empty()))
-                    _engine.Enqueue(Push{bookmark->name, remote});
-                if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
-                        bookmark != nullptr && !_snapshot->remotes.empty()))
-                {
-                    OpenDialog(Dialog::PushTo);
-                    _input_primary = remote;
-                    _input_secondary = bookmark->name;
-                }
-                ImGui::Separator();
                 if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark..."))
                 {
                     SelectRevision(revision.oid);
@@ -300,9 +305,34 @@ void Application::RenderHistory()
                             _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
                     ImGui::EndMenu();
                 }
+
                 ImGui::Separator();
-                RenderSelectedChangeActions(revision.oid, true);
+                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+                if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
+                        bookmark != nullptr && !remote.empty()))
+                    _engine.Enqueue(Push{bookmark->name, remote});
+                if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
+                        bookmark != nullptr && !_snapshot->remotes.empty()))
+                {
+                    OpenDialog(Dialog::PushTo);
+                    _input_primary = remote;
+                    _input_secondary = bookmark->name;
+                }
                 ImGui::EndDisabled();
+
+                ImGui::Separator();
+                const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
+                if (ImGui::BeginMenu(copy_label.c_str()))
+                {
+                    IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
+                    for (std::size_t index = 0; index < revision.aliases.size(); ++index)
+                        IdCopyMenuItems("alias " + std::to_string(index + 1), revision.aliases[index],
+                            RevisionPrefix(revision.aliases[index]));
+                    if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
+                            !revision.description.empty()))
+                        ImGui::SetClipboardText(revision.description.c_str());
+                    ImGui::EndMenu();
+                }
                 ImGui::EndPopup();
             }
 

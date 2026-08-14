@@ -134,22 +134,6 @@ void Application::RenderFrame()
             _engine.Enqueue(Refresh{});
         if (_snapshot != nullptr && _dialog == Dialog::None && ImGui::IsKeyPressed(ImGuiKey_F6))
             NavigateChangedFile(io.KeyShift ? -1 : 1);
-        const bool plain_key = !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper;
-        if (_snapshot != nullptr && _dialog == Dialog::None && _active_operation.empty()
-            && !_selected_revision.empty())
-        {
-            if (plain_key)
-            {
-                if (ImGui::IsKeyPressed(ImGuiKey_E))
-                    _engine.Enqueue(Edit{_selected_revision});
-                if (CanCreateChange() && ImGui::IsKeyPressed(ImGuiKey_N))
-                    CreateChange(true);
-                if (ImGui::IsKeyPressed(ImGuiKey_A))
-                    RequestAbandon(_selected_revision);
-            }
-            if (!io.KeyCtrl && !io.KeyShift && !io.KeySuper && ImGui::IsKeyPressed(ImGuiKey_S))
-                OpenDialog(io.KeyAlt ? Dialog::Split : Dialog::Squash);
-        }
     }
 
     // Repository workspace or welcome screen
@@ -392,7 +376,6 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     };
 
     // Change actions
-    dialog(ICON_MS_INFO, "Metaedit...", nullptr, Dialog::Metaedit);
     if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E", enabled))
     {
         select();
@@ -401,12 +384,12 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     const std::string duplicate_label = IconLabel(ICON_MS_CONTENT_COPY, "Duplicate");
     if (ImGui::BeginMenu(duplicate_label.c_str(), enabled))
     {
-        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Change"))
+        if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Change", "D"))
         {
             select();
             _engine.Enqueue(Duplicate{revision, false});
         }
-        if (ActionMenuItem(ICON_MS_ACCOUNT_TREE, "Branch"))
+        if (ActionMenuItem(ICON_MS_ACCOUNT_TREE, "Branch", "Shift+D"))
         {
             select();
             _engine.Enqueue(Duplicate{revision, true});
@@ -420,13 +403,18 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         if (select_revision)
             _input_primary = revision;
     }
-    dialog(ICON_MS_MERGE, "Squash...", "S", Dialog::Squash);
+    dialog(ICON_MS_MERGE, "Squash...", "Shift+S", Dialog::Squash);
     dialog(ICON_MS_DIFFERENCE, "Split...", "Alt+S", Dialog::Split);
     dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
     if (ActionMenuItem(ICON_MS_DELETE, "Abandon...", "A", enabled))
     {
         select();
         RequestAbandon(revision);
+    }
+    if (ActionMenuItem(ICON_MS_DELETE, "Abandon branch...", "Shift+A", enabled))
+    {
+        select();
+        RequestAbandon(revision, true);
     }
     if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, enabled))
     {
@@ -439,13 +427,14 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
 void Application::RenderToolbar()
 {
     // Change actions
+    const std::string& current_commit = CurrentCommit(*_snapshot);
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
-    ImGui::BeginDisabled(!CanCreateChange());
-    if (ActionButton(ICON_MS_ADD, "New")) CreateChange();
+    ImGui::BeginDisabled(current_commit.empty());
+    if (ActionButton(ICON_MS_ADD, "New")) CreateChange(false, "@");
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip(
-            "Create and edit an empty change on the selected parent(s). An already-empty current change is refreshed.");
+            "Create and edit an empty change on @. An already-empty current change is refreshed.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!_compare_to.empty());
@@ -477,7 +466,7 @@ void Application::RenderToolbar()
 
     // Remote actions
     const Remote* remote = DefaultRemote(*_snapshot);
-    const NamedRef* bookmark = BookmarkAt(*_snapshot, _selected_revision);
+    const NamedRef* bookmark = BookmarkAt(*_snapshot, current_commit);
     const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
     ImGui::SameLine();
     ImGui::BeginDisabled(remote == nullptr);
@@ -524,7 +513,6 @@ void Application::RenderToolbar()
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
 
     // Current commit and bookmark
-    const std::string& current_commit = CurrentCommit(*_snapshot);
     if (!current_commit.empty())
     {
         ImGui::SameLine();

@@ -325,7 +325,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("Apply from Clipboard"));
         IM_CHECK(context->ItemExists("Apply from File"));
         context->ItemClick("Cancel");
-        for (const char* action : {"Commit...", "Metaedit...", "Rebase...", "Squash...",
+        for (const char* action : {"Commit...", "Rebase...", "Squash...",
                  "Split...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
@@ -590,7 +590,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
     test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
-        Application::Instance().SetSnapshotForTest(RichSnapshot());
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
         context->Yield(2);
         context->SetRef("ggui dockspace");
         context->ItemClick("Push to...");
@@ -598,6 +600,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(dialog, nullptr);
         context->SetRef("ggui action");
         IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Remote").ID);
+        IM_CHECK(context->ItemExists("**/Push bookmark coverage-bookmark"));
         IM_CHECK(context->ItemExists("Force push"));
         IM_CHECK(!context->ItemExists("**/Warning: force push can overwrite remote history."));
         context->ItemClick("Force push");
@@ -1652,7 +1655,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        for (const char* action : {"Metaedit...", "Squash...", "Restore...", "Abandon..."})
+        for (const char* action : {"Squash...", "Restore...", "Abandon..."})
         {
             const std::string path = std::string("//##MainMenuBar/Change/") + action;
             ApplyOpenDialog(context, path.c_str());
@@ -1844,16 +1847,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
             IM_CHECK(context->ItemExists("**/New"));
-            const ImGuiTestItemInfo push_item = context->ItemInfo("**/Push");
-            const ImGuiTestItemInfo push_to_item = context->ItemInfo("**/Push to...");
-            IM_CHECK_GE(push_to_item.RectFull.Min.y - push_item.RectFull.Min.y,
-                ImGui::GetTextLineHeight() + 4.0f);
             for (const char* action : {"Push", "Push to...", "Create bookmark...", "Move bookmark here",
                      "Delete bookmark", "Copy"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
             IM_CHECK(!context->ItemExists("**/Describe..."));
-            constexpr std::array change_actions{"Metaedit...", "Edit", "Duplicate", "Rebase...", "Squash...", "Split...",
-                "Restore...", "Abandon...", "Simplify parents"};
+            IM_CHECK(!context->ItemExists("**/Metaedit..."));
+            constexpr std::array change_actions{"Edit", "Duplicate", "Rebase...", "Squash...", "Split...",
+                "Restore...", "Abandon...", "Abandon branch...", "Simplify parents"};
             float previous_y = -FLT_MAX;
             for (const char* action : change_actions)
             {
@@ -1862,6 +1862,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 IM_CHECK_GT(item.RectFull.Min.y, previous_y);
                 previous_y = item.RectFull.Min.y;
             }
+            IM_CHECK_LT(context->ItemInfo("**/Simplify parents").RectFull.Min.y,
+                context->ItemInfo("**/Create bookmark...").RectFull.Min.y);
+            IM_CHECK_LT(context->ItemInfo("**/Delete bookmark").RectFull.Min.y,
+                context->ItemInfo("**/Push").RectFull.Min.y);
+            IM_CHECK_LT(context->ItemInfo("**/Push to...").RectFull.Min.y,
+                context->ItemInfo("**/Copy").RectFull.Min.y);
             context->ItemClick("**/Duplicate");
             context->Yield();
             IM_CHECK(context->ItemExists("**/Change"));
@@ -1884,8 +1890,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Metaedit...", "Edit", "Squash...", "Split...", "Restore...",
-                     "Abandon..."})
+            for (const char* action : {"Edit", "Squash...", "Split...", "Restore...",
+                     "Abandon...", "Abandon branch..."})
             {
                 context->SetRef("History");
                 context->ItemClick(rows[0], ImGuiMouseButton_Right);
@@ -2593,10 +2599,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         context->KeyPress(ImGuiKey_E);
         context->KeyPress(ImGuiKey_N);
+        context->KeyPress(ImGuiKey_D);
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_D);
         context->Yield(2);
         IM_CHECK(!ActionDialogOpen());
 
         context->KeyPress(ImGuiKey_S);
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
+
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_S);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Into"));
@@ -2614,6 +2626,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
+
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_A);
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemIsChecked("Also abandon all descendants (full branch)"));
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "Bookmarks");
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_S);
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
     };
 
 }

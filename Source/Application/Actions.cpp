@@ -112,20 +112,22 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
-void Application::CreateChange(bool force_child)
+void Application::CreateChange(bool force_child, const std::string& parent)
 {
     if (!_active_operation.empty())
         return;
-    const auto selected = _selected_revisions.size() == 1
-        ? std::ranges::find(_snapshot->revisions, _selected_revisions.front(), &Revision::oid)
-        : _snapshot->revisions.end();
+    const std::string selected_revision = parent == "@" ? CurrentCommit(*_snapshot)
+        : !parent.empty()                              ? parent
+        : _selected_revisions.size() == 1              ? _selected_revisions.front()
+                                                        : "";
+    const auto selected = std::ranges::find(_snapshot->revisions, selected_revision, &Revision::oid);
     if (!force_child && selected != _snapshot->revisions.end()
         && selected->oid == _snapshot->working_copy && selected->empty)
     {
         _engine.Enqueue(Refresh{});
         return;
     }
-    _engine.Enqueue(NewChange{{}, SelectedParentRevisions(), {}, {}, false});
+    _engine.Enqueue(NewChange{{}, parent.empty() ? SelectedParentRevisions() : std::vector{parent}, {}, {}, false});
 }
 
 bool Application::IsLocked(const std::string& identifier) const
@@ -260,7 +262,7 @@ std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(
     return result;
 }
 
-void Application::RequestAbandon(const std::string& revision)
+void Application::RequestAbandon(const std::string& revision, bool include_descendants)
 {
     if (!_active_operation.empty() || revision.empty())
         return;
@@ -269,13 +271,17 @@ void Application::RequestAbandon(const std::string& revision)
     const auto selected = std::ranges::find(_snapshot->revisions, revision, &Revision::oid);
     const bool has_refs = std::ranges::any_of(
         _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
-    if (selected != _snapshot->revisions.end() && selected->empty && !has_refs && !selected->pushed)
+    if (!include_descendants && selected != _snapshot->revisions.end() && selected->empty && !has_refs
+        && !selected->pushed)
         _engine.Enqueue(Abandon{{revision}, false, false, {}});
     else
     {
         OpenDialog(Dialog::Abandon);
+        _input_flag_tertiary = include_descendants;
+        const std::vector<std::string> revisions = AbandonRevisions(revision, include_descendants);
         _input_flag = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision;
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                && std::ranges::find(revisions, ref.target) != revisions.end();
         });
     }
 }
