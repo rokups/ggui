@@ -174,7 +174,7 @@ const char* DeltaName(git_delta_t status)
     case GIT_DELTA_TYPECHANGE: return "T";
     case GIT_DELTA_UNTRACKED: return "?";
     case GIT_DELTA_IGNORED: return "I";
-    case GIT_DELTA_CONFLICTED: return "!";
+    case GIT_DELTA_CONFLICTED: return "C";
     default: return " ";
     }
 }

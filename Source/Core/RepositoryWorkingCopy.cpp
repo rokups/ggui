@@ -40,6 +40,83 @@ void RepositoryEngine::Impl::ApplyPatchText(const ApplyPatch& command)
     PublishSnapshot();
 }
 
+void RepositoryEngine::Impl::ResolveConflictFile(const ResolveConflict& command)
+{
+    Sync();
+    const std::filesystem::path path = std::filesystem::path(command.path).lexically_normal();
+    if (command.revision.empty() || path.empty() || path.is_absolute()
+        || std::ranges::any_of(path, [](const std::filesystem::path& part) { return part == ".."; }))
+        throw std::runtime_error("conflict resolution requires a revision and repository-relative path");
+
+    git_oid revision_oid{};
+    Check(gg_repository_resolve(&revision_oid, gg, command.revision.c_str()), "resolve conflicted revision");
+    Conflicts conflicts;
+    Check(gg_repository_conflicts(&conflicts.value, gg, &revision_oid), "load revision conflicts");
+    bool conflicted = false;
+    for (size_t index = 0; index < conflicts.value.count; ++index)
+        conflicted |= conflicts.value.items[index].path != nullptr && command.path == conflicts.value.items[index].path;
+    if (!conflicted)
+        throw std::runtime_error("selected file is no longer conflicted");
+
+    git_commit* raw_revision = nullptr;
+    Check(git_commit_lookup(&raw_revision, git.get(), &revision_oid), "load conflicted revision");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> revision(raw_revision, git_commit_free);
+    git_tree* raw_tree = nullptr;
+    Check(git_commit_tree(&raw_tree, revision.get()), "load conflicted revision tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
+    git_index* raw_index = nullptr;
+    git_index_options index_options = GIT_INDEX_OPTIONS_INIT;
+    index_options.oid_type = git_repository_oid_type(git.get());
+    Check(git_index_new(&raw_index, &index_options), "create conflict resolution index");
+    std::unique_ptr<git_index, decltype(&git_index_free)> index(raw_index, git_index_free);
+    Check(git_index_read_tree(index.get(), tree.get()), "load conflict resolution tree");
+
+    if (command.present)
+    {
+        const git_index_entry* existing = git_index_get_bypath(index.get(), command.path.c_str(), 0);
+        git_oid blob_oid{};
+        Check(git_blob_create_frombuffer(
+                  &blob_oid, git.get(), command.contents.data(), command.contents.size()),
+            "write resolved file");
+        git_index_entry entry{};
+        entry.id = blob_oid;
+        entry.mode = GIT_FILEMODE_BLOB;
+        if (existing != nullptr)
+            entry.mode = existing->mode;
+        entry.path = command.path.c_str();
+        Check(git_index_add(index.get(), &entry), "add resolved file");
+    }
+    else
+    {
+        const int removed = git_index_remove_bypath(index.get(), command.path.c_str());
+        if (removed != GIT_ENOTFOUND)
+            Check(removed, "remove resolved file");
+    }
+
+    git_oid tree_oid{};
+    Check(git_index_write_tree_to(&tree_oid, index.get(), git.get()), "write conflict resolution tree");
+    git_tree* raw_resolved_tree = nullptr;
+    Check(git_tree_lookup(&raw_resolved_tree, git.get(), &tree_oid), "load conflict resolution tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> resolved_tree(raw_resolved_tree, git_tree_free);
+    git_oid source_oid{};
+    Check(git_commit_create(&source_oid, git.get(), nullptr, git_commit_author(revision.get()),
+              git_commit_committer(revision.get()), nullptr, "ggui conflict resolution", resolved_tree.get(), 0,
+              nullptr),
+        "create conflict resolution source");
+
+    const std::vector<std::string> paths{command.path};
+    const StringArray filesets(paths);
+    const std::string source = OidString(source_oid);
+    gg_restore_options options = GG_RESTORE_OPTIONS_INIT;
+    options.from = source.c_str();
+    options.into = command.revision.c_str();
+    options.filesets = filesets.Get();
+    Mutation mutation;
+    gg_operation_options operation = OperationOptions();
+    Check(gg_repository_restore(&mutation.value, gg, &options, &operation), "restore conflict resolution");
+    PublishSnapshot();
+}
+
 void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
 {
     Sync();

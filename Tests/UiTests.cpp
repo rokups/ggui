@@ -506,6 +506,39 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             std::filesystem::weakly_canonical(working_path));
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "ConflictFileUsesMergeResolution");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(3);
+
+        FocusWindow(context, "Changes");
+        IM_CHECK(context->ItemExists("**/C  conflict.txt"));
+        context->ItemClick("**/C  conflict.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Resolve with merge tool"));
+        IM_CHECK(context->ItemExists("**/Mark current file resolved"));
+        context->KeyPress(ImGuiKey_Escape);
+        context->ItemDoubleClick("**/C  conflict.txt");
+        IM_CHECK_NE(WaitForWindow(context, "Resolve conflict"), nullptr);
+        context->SetRef("Resolve conflict");
+        IM_CHECK(context->ItemExists("Mark resolved"));
+        IM_CHECK(context->ItemExists("Keep conflict"));
+        context->ItemClick("Keep conflict");
+
+        application.SetSnapshotForTest(RichSnapshot());
+        application.SelectRevisionForTest("left");
+        application.ApplyEventForTest(
+            DiffReady{{1000, "left", "conflict.txt", "base\n", "<<<<<<< Conflict\n", false,
+                RichSnapshot().status}});
+        context->Yield(3);
+        FocusWindow(context, "Changes");
+        context->ItemDoubleClick("**/C  conflict.txt");
+        IM_CHECK_NE(WaitForWindow(context, "Resolve conflict"), nullptr);
+        context->SetRef("Resolve conflict");
+        context->ItemClick("Keep conflict");
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "OperationAvailability");
     test->TestFunc = [](ImGuiTestContext* context) {
         RepoSnapshot snapshot = RichSnapshot();
@@ -875,7 +908,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const std::array<std::pair<git_delta_t, const char*>, 10> names{{
             {GIT_DELTA_ADDED, "A"}, {GIT_DELTA_DELETED, "D"}, {GIT_DELTA_MODIFIED, "M"},
             {GIT_DELTA_RENAMED, "R"}, {GIT_DELTA_COPIED, "C"}, {GIT_DELTA_TYPECHANGE, "T"},
-            {GIT_DELTA_UNTRACKED, "?"}, {GIT_DELTA_IGNORED, "I"}, {GIT_DELTA_CONFLICTED, "!"},
+            {GIT_DELTA_UNTRACKED, "?"}, {GIT_DELTA_IGNORED, "I"}, {GIT_DELTA_CONFLICTED, "C"},
             {GIT_DELTA_UNMODIFIED, " "},
         }};
         for (const auto& [status, name] : names)
@@ -921,8 +954,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::DropPlacementForTest(1), GG_REORDER_BEFORE);
         IM_CHECK_EQ(Application::DropTooltipForTest(0), "Move before");
         IM_CHECK_EQ(Application::DropTooltipForTest(1), "Move after");
-        IM_CHECK_EQ(Application::DropTooltipForTest(2), "Squash into");
-        IM_CHECK_EQ(Application::DropTooltipForTest(3), "Rebase onto");
+        IM_CHECK_EQ(Application::DropTooltipForTest(2), "Squash change into");
+        IM_CHECK_EQ(Application::DropTooltipForTest(2, true), "Squash entire branch into");
+        IM_CHECK_EQ(Application::DropTooltipForTest(3), "Rebase change onto");
+        IM_CHECK_EQ(Application::DropTooltipForTest(3, true), "Rebase entire branch onto");
         IM_CHECK_NE(ImGui::GetFontBaked()->FindGlyphNoFallback(0xf097), nullptr);
         IM_CHECK(std::string_view(ICON_MS_EDIT).size() > 1);
     };
@@ -1896,11 +1931,33 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemDragAndDrop("**/M  modified.txt", rows[1]);
             context->Yield(2);
 
-            context->ItemDragAndDrop(rows[0], rows[1]);
-            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-            context->SetRef("ggui action");
-            context->ItemClick("Cancel");
-            context->Yield(2);
+            struct CenterDropCase
+            {
+                bool alt;
+                bool shift;
+                int action;
+                bool entire_branch;
+            };
+            constexpr std::array center_drop_cases{
+                CenterDropCase{false, false, 2, false},
+                CenterDropCase{false, true, 2, true},
+                CenterDropCase{true, false, 3, false},
+                CenterDropCase{true, true, 3, true},
+            };
+            for (const CenterDropCase& drop : center_drop_cases)
+            {
+                if (drop.alt) context->KeyDown(ImGuiMod_Alt);
+                if (drop.shift) context->KeyDown(ImGuiMod_Shift);
+                context->ItemDragAndDrop(rows[0], rows[1]);
+                if (drop.shift) context->KeyUp(ImGuiMod_Shift);
+                if (drop.alt) context->KeyUp(ImGuiMod_Alt);
+                IM_CHECK_EQ(
+                    application.PendingDropActionForTest(), std::pair(drop.action, drop.entire_branch));
+                IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+                context->SetRef("ggui action");
+                context->ItemClick("Cancel");
+                context->Yield(2);
+            }
 
             for (const char* action : {"Move before", "Move after", "Squash", "Rebase"})
             {
@@ -1925,6 +1982,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->MouseMoveToPos(ImVec2(target.RectFull.GetCenter().x, target.RectFull.Max.y - 1.0f));
             context->Yield(2);
             context->MouseUp();
+            IM_CHECK_EQ(application.PendingDropActionForTest(), std::pair(1, false));
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
             context->SetRef("ggui action");
             context->ItemClick("Cancel");

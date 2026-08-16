@@ -132,7 +132,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 options.destination = value.destination.c_str();
                 options.message = value.message.c_str();
                 Mutate("squash change", [&](auto* out, auto* operation) {
-                    return gg_repository_squash(out, gg, &options, operation);
+                    return gg_repository_squash_ex(out, gg, &options, value.entire_branch, operation);
                 });
             },
             [&](const Abandon& value) {
@@ -288,6 +288,7 @@ std::string RepositoryEngine::Impl::CommandName(const Command& command)
             [](const DeleteRemote&) { return "delete remote"; },
             [](const LoadDiff&) { return "diff"; }, [](const LoadFileContent&) { return "load file"; },
             [](const ApplyPatch&) { return "apply patch"; },
+            [](const ResolveConflict&) { return "resolve conflict"; },
             [](const RevertFile&) { return "revert file"; },
             [](const DeleteFile&) { return "delete file"; },
             [](const NewChange&) { return "new"; },

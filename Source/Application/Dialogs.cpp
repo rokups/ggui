@@ -49,12 +49,36 @@ void Application::OpenDialog(Dialog dialog)
         _input_secondary = CurrentCommit(*_snapshot);
         _dialog_snapshot_generation = _snapshot->generation;
     }
+    if (dialog == Dialog::ConfirmDrop && _snapshot != nullptr)
+        _dialog_snapshot_generation = _snapshot->generation;
     if (dialog == Dialog::Credentials)
         _input_primary = _credential_request.username;
 }
 
 void Application::RenderDialogs()
 {
+    if (_open_merge_confirmation && !ImGui::IsPopupOpen("Resolve conflict"))
+        ImGui::OpenPopup("Resolve conflict");
+    if (ImGui::BeginPopupModal("Resolve conflict", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextWrapped("The merge tool closed for %s.", _merge_conflict_path.c_str());
+        if (_merge_exit_code != 0)
+            ImGui::TextDisabled("The merge tool exited with status %d.", _merge_exit_code);
+        ImGui::TextUnformatted("Mark the merged file as resolved?");
+        if (ImGui::Button("Mark resolved"))
+        {
+            FinishConflictMerge(true);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Keep conflict"))
+        {
+            FinishConflictMerge(false);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // Save patch dialog
     if (_open_save_patch)
     {
@@ -344,10 +368,11 @@ void Application::RenderDialogs()
         break;
     case Dialog::ConfirmDrop:
     {
-        const char* action = _pending_drop.action == DropAction::Squash ? "Squash"
-            : _pending_drop.action == DropAction::Rebase               ? "Rebase"
-            : _pending_drop.action == DropAction::ReorderAfter         ? "Move after"
-                                                                       : "Move before";
+        const char* action = _pending_drop.action == DropAction::Squash
+            ? _pending_drop.entire_branch ? "Squash branch" : "Squash"
+            : _pending_drop.action == DropAction::Rebase
+            ? _pending_drop.entire_branch ? "Rebase branch" : "Rebase"
+            : _pending_drop.action == DropAction::ReorderAfter ? "Move after" : "Move before";
         TextLabelledId(std::string(action) + " ", _pending_drop.source, RevisionPrefix(_pending_drop.source),
             CommitIdColor(_pending_drop.source == _snapshot->working_copy));
         TextLabelledId("Target: ", _pending_drop.target, RevisionPrefix(_pending_drop.target),
@@ -360,9 +385,9 @@ void Application::RenderDialogs()
             refs += ref.target == _pending_drop.source || ref.target == _pending_drop.target;
         ImGui::TextWrapped("gg will restack affected descendants and move associated refs atomically. Direct children: %d; refs on source/target: %d. Conflicts remain editable and this operation can be undone.",
             affected, refs);
-        if (_pending_drop.action == DropAction::Rebase && CurrentCommit(*_snapshot) != _pending_drop.source)
+        if (_snapshot->generation != _dialog_snapshot_generation)
             ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
-                "The @ change moved. Close this dialog and inspect @ again.");
+                "Repository changed. Close this dialog and inspect the graph again.");
         break;
     }
     case Dialog::ConfirmLocked:
@@ -493,9 +518,10 @@ void Application::SubmitDialog()
     }
     case Dialog::ConfirmDrop:
         if (_pending_drop.action == DropAction::Squash)
-            _engine.Enqueue(Squash{_pending_drop.source, _pending_drop.target, {}});
+            _engine.Enqueue(
+                Squash{_pending_drop.source, _pending_drop.target, {}, _pending_drop.entire_branch});
         else if (_pending_drop.action == DropAction::Rebase)
-            _engine.Enqueue(Rebase{_pending_drop.source, _pending_drop.target});
+            _engine.Enqueue(Rebase{_pending_drop.source, _pending_drop.target, _pending_drop.entire_branch});
         else
             _engine.Enqueue(Reorder{
                 _pending_drop.source, _pending_drop.target, DropPlacement(_pending_drop.action)});

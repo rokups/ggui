@@ -194,6 +194,7 @@ struct RepositoryEngine::Impl
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);
     void ApplyPatchText(const ApplyPatch& command);
+    void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);
     void DeleteWorkingFile(const DeleteFile& command);
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false);

@@ -109,6 +109,8 @@ std::vector<std::pair<std::string, std::string>> Application::RecentRepositoryLa
 
 void Application::RenderFrame()
 {
+    PollMergeTool();
+
     // Main menu bar
     RenderMenuBar();
 

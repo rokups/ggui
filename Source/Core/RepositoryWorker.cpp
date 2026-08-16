@@ -69,6 +69,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             LoadFile(*value);
         else if (const auto* value = std::get_if<ApplyPatch>(&command))
             ApplyPatchText(*value);
+        else if (const auto* value = std::get_if<ResolveConflict>(&command))
+            ResolveConflictFile(*value);
         else if (const auto* value = std::get_if<RevertFile>(&command))
             RevertFileChange(*value);
         else if (const auto* value = std::get_if<DeleteFile>(&command))

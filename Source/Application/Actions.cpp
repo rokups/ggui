@@ -21,6 +21,38 @@ namespace Ggui
 {
 using namespace ApplicationInternal;
 
+namespace
+{
+
+template <typename Type, void (*Free)(Type*)>
+struct GitDeleter
+{
+    void operator()(Type* value) const { Free(value); }
+};
+
+template <typename Type, void (*Free)(Type*)>
+using GitPtr = std::unique_ptr<Type, GitDeleter<Type, Free>>;
+
+void CheckMerge(int result, std::string_view action)
+{
+    if (result >= 0)
+        return;
+    const git_error* error = git_error_last();
+    throw std::runtime_error(std::string(action) + ": "
+        + (error == nullptr || error->message == nullptr ? "libgit2 error" : error->message));
+}
+
+git_index_entry ConflictIndexEntry(const gg_conflict_term& term, const std::string& path)
+{
+    git_index_entry entry{};
+    entry.mode = term.mode;
+    entry.id = term.oid;
+    entry.path = path.c_str();
+    return entry;
+}
+
+} // namespace
+
 void Application::SelectRevision(const std::string& oid, bool additive)
 {
     if (_snapshot != nullptr && oid == _snapshot->working_copy)
@@ -186,7 +218,12 @@ bool Application::DialogModifiesLockedCommit() const
         const Revision* source = RebaseBranchRoot(*_snapshot, _input_tertiary, _input_filesets);
         return IsLocked(source == nullptr ? _input_tertiary : source->oid);
     }
-    case Dialog::ConfirmDrop: return IsLocked(_pending_drop.source) || IsLocked(_pending_drop.target);
+    case Dialog::ConfirmDrop:
+    {
+        const Revision* source = _pending_drop.entire_branch
+            ? RebaseBranchRoot(*_snapshot, _pending_drop.source, _pending_drop.target) : nullptr;
+        return IsLocked(source == nullptr ? _pending_drop.source : source->oid) || IsLocked(_pending_drop.target);
+    }
     case Dialog::ConfirmLocked: return true;
     default: return false;
     }
@@ -331,8 +368,9 @@ bool Application::CanSubmitDialog() const
                        && ref.target == _input_secondary;
                });
     case Dialog::ConfirmDrop:
-        return _pending_drop.action != DropAction::Rebase
-            || (_snapshot != nullptr && CurrentCommit(*_snapshot) == _pending_drop.source);
+        return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
+            && ResolveSnapshotRevision(*_snapshot, _pending_drop.source) != nullptr
+            && ResolveSnapshotRevision(*_snapshot, _pending_drop.target) != nullptr;
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));
@@ -346,12 +384,13 @@ gg_reorder_placement Application::DropPlacement(DropAction action)
     return action == DropAction::ReorderAfter ? GG_REORDER_BEFORE : GG_REORDER_AFTER;
 }
 
-std::string_view Application::DropTooltip(DropAction action)
+std::string_view Application::DropTooltip(DropAction action, bool entire_branch)
 {
     return action == DropAction::ReorderBefore ? "Move before"
         : action == DropAction::ReorderAfter    ? "Move after"
-        : action == DropAction::Squash          ? "Squash into"
-                                                : "Rebase onto";
+        : action == DropAction::Squash
+        ? entire_branch ? "Squash entire branch into" : "Squash change into"
+        : entire_branch ? "Rebase entire branch onto" : "Rebase change onto";
 }
 
 void Application::SelectFile(const std::string& path)
@@ -391,6 +430,7 @@ std::pair<std::string, std::string> Application::AdjacentRevisions(const std::st
 
 void Application::ResetRepositoryState()
 {
+    ClearConflictMerge();
     _snapshot.reset();
     _diff = {};
     _visible_revisions.clear();
@@ -424,7 +464,7 @@ void Application::ResetRepositoryState()
 
 bool Application::FileMatchesFilter(const StatusEntry& file) const
 {
-    const std::string status = DeltaName(file.status);
+    const std::string status = DeltaName(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
     return ContainsInsensitive(status, _changes_filter) || ContainsInsensitive(file.path, _changes_filter)
         || ContainsInsensitive(file.old_path, _changes_filter);
 }
@@ -548,6 +588,230 @@ void Application::OpenTemporaryFileInEditor(const FileContentReady& file)
     {
         _error_message = error.what();
     }
+}
+
+void Application::OpenConflictInMergeTool(const std::string& path)
+{
+    if (_snapshot == nullptr || _selected_revision.empty() || path.empty() || !_active_operation.empty())
+        return;
+    if (_merge_process != nullptr || _open_merge_confirmation)
+    {
+        _error_message = "Finish the current conflict merge first";
+        return;
+    }
+#ifdef IMGUI_BUILD_TESTING
+    if (_test_mode)
+    {
+        _merge_revision = _selected_revision;
+        _merge_conflict_path = path;
+        _merge_exit_code = 0;
+        _open_merge_confirmation = true;
+        return;
+    }
+#endif
+    // GCOV_EXCL_START: native merge-tool staging and process handoff
+    try
+    {
+        git_repository* raw_repository = nullptr;
+        CheckMerge(git_repository_open(&raw_repository, _snapshot->root.c_str()), "open merge repository");
+        GitPtr<git_repository, git_repository_free> repository(raw_repository);
+        gg_repository* raw_gg = nullptr;
+        CheckMerge(gg_repository_attach(&raw_gg, repository.get()), "attach merge repository");
+        GitPtr<gg_repository, gg_repository_free> gg(raw_gg);
+        git_oid revision_oid{};
+        CheckMerge(gg_repository_resolve(&revision_oid, gg.get(), _selected_revision.c_str()),
+            "load conflicted revision");
+        gg_conflict_array conflicts{};
+        CheckMerge(gg_repository_conflicts(&conflicts, gg.get(), &revision_oid), "load conflict sides");
+        const auto dispose_conflicts = [&conflicts](void*) { gg_conflict_array_dispose(&conflicts); };
+        std::unique_ptr<void, decltype(dispose_conflicts)> conflict_guard(reinterpret_cast<void*>(1), dispose_conflicts);
+        const gg_conflict* conflict = nullptr;
+        for (size_t index = 0; index < conflicts.count; ++index)
+            if (conflicts.items[index].path != nullptr && path == conflicts.items[index].path)
+            {
+                conflict = &conflicts.items[index];
+                break;
+            }
+        if (conflict == nullptr)
+            throw std::runtime_error("The selected file is no longer conflicted");
+        if (conflict->remove_count != 1 || conflict->add_count != 2)
+            throw std::runtime_error("The configured merge tool requires one base and two conflict sides");
+
+        _merge_temp_directory = std::filesystem::temp_directory_path()
+            / ("ggui-merge-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const std::filesystem::path worktree = _merge_temp_directory / "worktree";
+        std::filesystem::create_directories(worktree);
+        const std::optional<std::filesystem::path> merge_result = WorkingCopyPath(worktree.string(), path);
+        if (!merge_result.has_value())
+            throw std::runtime_error("Conflict path is outside the temporary merge worktree");
+        _merge_result_path = *merge_result;
+        std::filesystem::create_directories(_merge_result_path.parent_path());
+        git_commit* raw_revision = nullptr;
+        CheckMerge(git_commit_lookup(&raw_revision, repository.get(), &revision_oid), "load conflicted revision");
+        GitPtr<git_commit, git_commit_free> revision(raw_revision);
+        git_tree* raw_tree = nullptr;
+        CheckMerge(git_commit_tree(&raw_tree, revision.get()), "load conflicted revision tree");
+        GitPtr<git_tree, git_tree_free> tree(raw_tree);
+        git_tree_entry* raw_entry = nullptr;
+        const int entry_result = git_tree_entry_bypath(&raw_entry, tree.get(), path.c_str());
+        if (entry_result == GIT_ENOTFOUND)
+        {
+            std::ofstream output(_merge_result_path, std::ios::binary);
+            if (!output)
+                throw std::runtime_error("Could not prepare the merge result file");
+        }
+        else
+        {
+            CheckMerge(entry_result, "load conflicted file");
+            GitPtr<git_tree_entry, git_tree_entry_free> entry(raw_entry);
+            if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
+                throw std::runtime_error("The conflicted path is not a file");
+            git_blob* raw_blob = nullptr;
+            CheckMerge(git_blob_lookup(&raw_blob, repository.get(), git_tree_entry_id(entry.get())),
+                "load conflicted file contents");
+            GitPtr<git_blob, git_blob_free> blob(raw_blob);
+            std::ofstream output(_merge_result_path, std::ios::binary | std::ios::trunc);
+            if (git_blob_rawsize(blob.get()) != 0)
+                output.write(static_cast<const char*>(git_blob_rawcontent(blob.get())),
+                    static_cast<std::streamsize>(git_blob_rawsize(blob.get())));
+            if (!output)
+                throw std::runtime_error("Could not prepare the merge result file");
+        }
+
+        const std::filesystem::path index_path = _merge_temp_directory / "index";
+        git_index* raw_index = nullptr;
+#ifdef GIT_EXPERIMENTAL_SHA256
+        git_index_options index_options = GIT_INDEX_OPTIONS_INIT;
+        index_options.oid_type = git_repository_oid_type(repository.get());
+        CheckMerge(git_index_open(&raw_index, index_path.string().c_str(), &index_options),
+            "create temporary merge index");
+#else
+        CheckMerge(git_index_open(&raw_index, index_path.string().c_str()), "create temporary merge index");
+#endif
+        GitPtr<git_index, git_index_free> index(raw_index);
+        const git_index_entry base = ConflictIndexEntry(conflict->removes[0], path);
+        const git_index_entry local = ConflictIndexEntry(conflict->adds[0], path);
+        const git_index_entry remote = ConflictIndexEntry(conflict->adds[1], path);
+        CheckMerge(git_index_conflict_add(index.get(), conflict->removes[0].present ? &base : nullptr,
+            conflict->adds[0].present ? &local : nullptr, conflict->adds[1].present ? &remote : nullptr),
+            "stage conflict sides");
+        CheckMerge(git_index_write(index.get()), "write temporary merge index");
+
+        const char* arguments[]{"git", "-C", _snapshot->root.c_str(), "mergetool", "--no-prompt", "--",
+            path.c_str(), nullptr};
+        SDL_Environment* environment = SDL_CreateEnvironment(true);
+        if (environment == nullptr
+            || !SDL_SetEnvironmentVariable(environment, "GIT_INDEX_FILE", index_path.string().c_str(), true)
+            || !SDL_SetEnvironmentVariable(environment, "GIT_WORK_TREE", worktree.string().c_str(), true))
+        {
+            if (environment != nullptr)
+                SDL_DestroyEnvironment(environment);
+            throw std::runtime_error(SDL_GetError());
+        }
+        const SDL_PropertiesID properties = SDL_CreateProperties();
+        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, const_cast<char**>(arguments));
+        SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, environment);
+        _merge_process = SDL_CreateProcessWithProperties(properties);
+        SDL_DestroyProperties(properties);
+        SDL_DestroyEnvironment(environment);
+        if (_merge_process == nullptr)
+            throw std::runtime_error(SDL_GetError());
+        _merge_revision = _selected_revision;
+        _merge_conflict_path = path;
+        _status_message = "Three-way merge tool opened";
+    }
+    catch (const std::exception& error)
+    {
+        _error_message = error.what();
+        ClearConflictMerge();
+    }
+    // GCOV_EXCL_STOP
+}
+
+void Application::PollMergeTool()
+{
+    if (_merge_process == nullptr || !SDL_WaitProcess(_merge_process, false, &_merge_exit_code))
+        return;
+    // GCOV_EXCL_START: external merge-tool process completion
+    SDL_DestroyProcess(_merge_process);
+    _merge_process = nullptr;
+    _open_merge_confirmation = true;
+    // GCOV_EXCL_STOP
+}
+
+void Application::MarkConflictResolved(const std::string& path)
+{
+    if (_snapshot == nullptr || _selected_revision != _snapshot->working_copy || path.empty())
+        return;
+    const std::optional<std::filesystem::path> working_path = WorkingCopyPath(_snapshot->root, path);
+    std::error_code error;
+    if (!working_path.has_value()
+        || (std::filesystem::exists(*working_path, error) && !std::filesystem::is_regular_file(*working_path, error))
+        || error)
+    {
+        _error_message = "Resolved file is unavailable in the working copy";
+        return;
+    }
+    _engine.Enqueue(Refresh{});
+    _status_message = "Conflict resolution queued";
+}
+
+void Application::FinishConflictMerge(bool resolved)
+{
+    if (resolved && _snapshot != nullptr)
+    {
+        // GCOV_EXCL_START: confirmed external merge result import
+        try
+        {
+            ResolveConflict resolution{_merge_revision, _merge_conflict_path, {}, false};
+            if (std::filesystem::is_regular_file(_merge_result_path))
+            {
+                std::ifstream input(_merge_result_path, std::ios::binary);
+                resolution.contents.assign(
+                    std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+                if (!input.eof())
+                    throw std::runtime_error("Could not read the merge result file");
+                resolution.present = true;
+            }
+            else if (std::filesystem::exists(_merge_result_path))
+            {
+                throw std::runtime_error("The merge result is not a file");
+            }
+            _engine.Enqueue(std::move(resolution));
+            _status_message = "Conflict resolution queued";
+        }
+        catch (const std::exception& error)
+        {
+            _error_message = error.what();
+            return;
+        }
+        // GCOV_EXCL_STOP
+    }
+    ClearConflictMerge();
+}
+
+void Application::ClearConflictMerge()
+{
+    if (_merge_process != nullptr)
+    {
+        // GCOV_EXCL_START: external merge-tool process shutdown
+        SDL_KillProcess(_merge_process, true);
+        SDL_WaitProcess(_merge_process, true, nullptr);
+        SDL_DestroyProcess(_merge_process);
+        _merge_process = nullptr;
+        // GCOV_EXCL_STOP
+    }
+    if (!_merge_temp_directory.empty())
+    {
+        std::error_code error;
+        std::filesystem::remove_all(_merge_temp_directory, error);
+    }
+    _merge_temp_directory.clear();
+    _merge_result_path.clear();
+    _merge_revision.clear();
+    _merge_conflict_path.clear();
+    _open_merge_confirmation = false;
+    _merge_exit_code = 0;
 }
 
 // GCOV_EXCL_START: OS-default file handlers are platform integrations

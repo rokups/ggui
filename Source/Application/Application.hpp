@@ -62,7 +62,9 @@ public:
     std::string RebaseSourceForTest() const;
     bool DialogModifiesLockedCommitForTest() const;
     void ApplyEventForTest(Event event);
-    void ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action);
+    void ShowDropConfirmationForTest(
+        const std::string& source, const std::string& target, int action, bool entire_branch = false);
+    std::pair<int, bool> PendingDropActionForTest() const;
     void ShowWorkspaceRenameForTest();
     void ShowBookmarkRenameForTest(const std::string& name);
     void SetSnapshotForTest(RepoSnapshot snapshot);
@@ -88,7 +90,7 @@ public:
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
-    static std::string DropTooltipForTest(int action);
+    static std::string DropTooltipForTest(int action, bool entire_branch = false);
     std::vector<std::string> AbandonRevisionsForTest(const std::string& revision) const;
     const std::string& PendingEditorRevisionForTest() const;
     const std::filesystem::path& OpenedEditorPathForTest() const;
@@ -133,6 +135,7 @@ private:
         std::string source;
         std::string target;
         DropAction action = DropAction::ReorderBefore;
+        bool entire_branch = false;
     };
 
     bool Initialize();
@@ -187,7 +190,13 @@ private:
     void OpenFileInEditor(const std::string& path);
     void OpenTemporaryFileInEditor(const FileContentReady& file);
     void OpenEditorPath(const std::filesystem::path& path);
-    void RenderRevisionTooltip(std::string_view label, const std::string& revision);
+    void OpenConflictInMergeTool(const std::string& path);
+    void PollMergeTool();
+    void MarkConflictResolved(const std::string& path);
+    void FinishConflictMerge(bool resolved);
+    void ClearConflictMerge();
+    void RenderRevisionTooltip(
+        std::string_view label, const std::string& revision, std::string_view hint = {});
     void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
     void OpenExternalDiff(const std::string& path, const std::string& compare_to);
     std::vector<std::string> SelectedParentRevisions() const;
@@ -203,7 +212,7 @@ private:
     bool DialogModifiesLockedCommit() const;
     const Revision* RebaseSource() const;
     static gg_reorder_placement DropPlacement(DropAction action);
-    static std::string_view DropTooltip(DropAction action);
+    static std::string_view DropTooltip(DropAction action, bool entire_branch = false);
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);
@@ -238,6 +247,13 @@ private:
     std::string _pending_editor_revision;
     std::string _pending_editor_path;
     std::filesystem::path _editor_temp_directory;
+    SDL_Process* _merge_process = nullptr;
+    std::filesystem::path _merge_temp_directory;
+    std::filesystem::path _merge_result_path;
+    std::string _merge_revision;
+    std::string _merge_conflict_path;
+    bool _open_merge_confirmation = false;
+    int _merge_exit_code = 0;
     std::string _compare_to;
     bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;

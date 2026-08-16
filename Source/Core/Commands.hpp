@@ -47,6 +47,13 @@ struct LoadDiff
 struct LoadFileContent { std::string revision; std::string path; };
 
 struct ApplyPatch { std::string text; std::string path; };
+struct ResolveConflict
+{
+    std::string revision;
+    std::string path;
+    std::string contents;
+    bool present = true;
+};
 struct RevertFile
 {
     std::string source;
@@ -83,7 +90,13 @@ struct Reorder
     gg_reorder_placement placement = GG_REORDER_BEFORE;
 };
 struct Split { std::string revision; std::string message; std::vector<std::string> filesets; };
-struct Squash { std::string source; std::string destination; std::string message; };
+struct Squash
+{
+    std::string source;
+    std::string destination;
+    std::string message;
+    bool entire_branch = false;
+};
 struct RemoteBookmarkDelete { std::string bookmark; std::string remote; };
 struct Abandon
 {
@@ -135,8 +148,8 @@ struct UntrackPaths { std::vector<std::string> filesets; };
 struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; };
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, RevertFile, DeleteFile, NewChange, Describe, Metaedit,
-    Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
+    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
+    Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
 

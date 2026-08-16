@@ -80,13 +80,14 @@ void Application::RenderChanges()
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(ImGui::GetStyle().ItemSpacing.x, 2.0f));
     for (const StatusEntry& file : _diff.files)
     {
-        const std::string status = DeltaName(file.status);
+        const git_delta_t display_status = file.conflicted ? GIT_DELTA_CONFLICTED : file.status;
+        const std::string status = DeltaName(display_status);
         if (!FileMatchesFilter(file))
             continue;
         ImGui::PushID(&file);
         const std::string label = status + "  " + file.path;
         const std::string item_id = "###" + label;
-        const ImU32 accent = StatusColor(file.conflicted ? GIT_DELTA_CONFLICTED : file.status);
+        const ImU32 accent = StatusColor(display_status);
         const bool selected = ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
         if (selection_navigated && file.path == _selected_file)
             ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
@@ -102,7 +103,12 @@ void Application::RenderChanges()
         if (selected)
             SelectFile(file.path);
         if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
-            OpenFileInEditor(file.path);
+        {
+            if (file.conflicted)
+                OpenConflictInMergeTool(file.path);
+            else
+                OpenFileInEditor(file.path);
+        }
 
         // File drag source
         if (!actions_locked && !comparison_active && ImGui::BeginDragDropSource())
@@ -148,6 +154,16 @@ void Application::RenderChanges()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            if (file.conflicted)
+            {
+                if (ActionMenuItem(ICON_MS_MERGE, "Resolve with merge tool"))
+                    OpenConflictInMergeTool(file.path);
+                ImGui::BeginDisabled(_selected_revision != _snapshot->working_copy);
+                if (ActionMenuItem(ICON_MS_CHECK, "Mark current file resolved"))
+                    MarkConflictResolved(file.path);
+                ImGui::EndDisabled();
+                ImGui::Separator();
+            }
             const bool patch_available = _diff.path == file.path && !_diff.patch.empty();
             ImGui::BeginDisabled(!patch_available);
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy patch"))
@@ -229,27 +245,6 @@ void Application::RenderChanges()
     }
     ImGui::PopStyleVar();
 
-    // Working-copy conflicts
-    if (_selected_revision == _snapshot->working_copy && !_snapshot->conflicts.empty())
-    {
-        ImGui::SeparatorText("Conflicts");
-        for (const Conflict& conflict : _snapshot->conflicts)
-        {
-            ImGui::PushStyleColor(ImGuiCol_Text, kStatusConflict);
-            ImGui::TextUnformatted(conflict.path.c_str());
-            ImGui::PopStyleColor();
-            ImGui::TextDisabled("%zu base removals, %zu side additions", conflict.removes, conflict.adds);
-            ImGui::PushID(&conflict);
-            if (ImGui::SmallButton("Open externally"))
-            {
-                const std::string path = (std::filesystem::path(_snapshot->root) / conflict.path)
-                                             .string(); // GCOV_EXCL_LINE: external application handoff
-                OpenExternalPath(path, "Conflicted file"); // GCOV_EXCL_LINE: external application handoff
-            }
-            ImGui::PopID();
-        }
-        ImGui::TextWrapped("Save resolved files; ggui snapshots them automatically.");
-    }
     ImGui::EndChild();
     ImGui::End();
 }

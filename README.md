@@ -68,6 +68,12 @@ selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
 the current working-copy change while preserving later edits where the patch
 applies. Working-copy file menus can also delete the file from disk.
+Conflicted files stay in the normal Changes list with a red **C**. Their diff
+shows the stored conflict markers. Double-click a conflict, or use its context
+menu, to open the configured Git merge tool with base, local, and remote
+inputs. When the tool closes, ggui asks before it writes the result and marks
+the file resolved. Historical conflicts are resolved in their selected graph
+revision, with descendants restacked instead of copying over unrelated files.
 Right-click a text diff to move the clicked line, the selected lines, or
 the containing hunk to an adjacent parent or child change; unavailable targets
 and unsupported diff contexts remain disabled. Unified and side-by-side views

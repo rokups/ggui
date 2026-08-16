@@ -287,6 +287,7 @@ void Application::WindowSettingsWriteAll(
 void Application::Shutdown()
 {
     SaveSettings();
+    ClearConflictMerge();
     if (!_editor_temp_directory.empty())
     {
         std::error_code error;

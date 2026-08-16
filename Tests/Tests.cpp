@@ -1038,10 +1038,100 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
                });
     });
     ASSERT_NE(conflicted, nullptr);
+    const auto conflict_revision = std::ranges::find_if(conflicted->revisions, [](const Revision& revision) {
+        return revision.conflicted;
+    });
+    ASSERT_NE(conflict_revision, conflicted->revisions.end());
+    const std::string conflicted_source = conflict_revision->oid;
+    engine.Enqueue(LoadDiff{conflicted_source, "tracked.txt"});
+    const auto conflict_diff = WaitForDiff(engine);
+    ASSERT_TRUE(conflict_diff.has_value());
+    const auto conflict_file = std::ranges::find(conflict_diff->files, "tracked.txt", &StatusEntry::path);
+    ASSERT_NE(conflict_file, conflict_diff->files.end());
+    EXPECT_TRUE(conflict_file->conflicted);
+    EXPECT_NE(conflict_diff->after.find("<<<<<<< Conflict"), std::string::npos);
     engine.Enqueue(Push{"main", "origin"});
     const TerminalEvent push = WaitForTerminal(engine, "push");
     EXPECT_FALSE(push.finished);
     EXPECT_NE(push.message.find("conflict"), std::string::npos);
+
+    engine.Enqueue(NewChange{"alternate destination", {remote_tip}, {}, {}, false});
+    const auto alternate = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > conflicted->generation && snapshot.working_copy != conflicted_source
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "alternate destination";
+               });
+    });
+    ASSERT_NE(alternate, nullptr);
+    std::ofstream(repository.path / "tracked.txt") << "alternate\n";
+    engine.Enqueue(Refresh{});
+    const auto alternate_changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > alternate->generation && !snapshot.status.empty();
+    });
+    ASSERT_NE(alternate_changed, nullptr);
+    const std::string alternate_id = alternate_changed->working_copy;
+
+    engine.Enqueue(Edit{conflicted_source});
+    const auto conflict_checked_out = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= alternate_changed->generation)
+            return false;
+        const auto revision = FindRevision(snapshot, conflicted_source);
+        return revision != snapshot.revisions.end() && revision->conflicted
+            && snapshot.working_copy == revision->oid;
+    });
+    ASSERT_NE(conflict_checked_out, nullptr);
+
+    engine.Enqueue(Rebase{conflicted_source, alternate_id});
+    const auto conflict_rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= conflict_checked_out->generation)
+            return false;
+        const auto revision = FindRevision(snapshot, conflicted_source);
+        return revision != snapshot.revisions.end() && revision->conflicted
+            && snapshot.working_copy == revision->oid
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                   return entry.path == "tracked.txt" && entry.conflicted;
+               });
+    });
+    ASSERT_NE(conflict_rebased, nullptr);
+    engine.Enqueue(LoadDiff{conflict_rebased->working_copy, "tracked.txt"});
+    const auto rebased_conflict_diff = WaitForDiff(engine);
+    ASSERT_TRUE(rebased_conflict_diff.has_value());
+    const auto rebased_conflict_file =
+        std::ranges::find(rebased_conflict_diff->files, "tracked.txt", &StatusEntry::path);
+    ASSERT_NE(rebased_conflict_file, rebased_conflict_diff->files.end());
+    EXPECT_TRUE(rebased_conflict_file->conflicted);
+    EXPECT_NE(rebased_conflict_diff->after.find("<<<<<<< Conflict"), std::string::npos);
+
+    const auto rebased_source = FindRevision(*conflict_rebased, conflicted_source);
+    ASSERT_NE(rebased_source, conflict_rebased->revisions.end());
+    const std::string rebased_source_id = rebased_source->oid;
+    std::ifstream binary_before(repository.path / "binary.dat", std::ios::binary);
+    const std::string preserved_binary{
+        std::istreambuf_iterator<char>(binary_before), std::istreambuf_iterator<char>()};
+    engine.Enqueue(NewChange{"resolution child", {rebased_source_id}, {}, {}, false});
+    const auto resolution_child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > conflict_rebased->generation && snapshot.working_copy != rebased_source_id
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "resolution child";
+               });
+    });
+    ASSERT_NE(resolution_child, nullptr);
+
+    engine.Enqueue(ResolveConflict{rebased_source_id, "tracked.txt", "resolved\n", true});
+    const auto resolved = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= resolution_child->generation)
+            return false;
+        const auto revision = FindRevision(snapshot, rebased_source_id);
+        return revision != snapshot.revisions.end() && !revision->conflicted
+            && std::ranges::none_of(snapshot.status, [](const StatusEntry& entry) { return entry.conflicted; });
+    });
+    ASSERT_NE(resolved, nullptr);
+    std::ifstream resolved_file(repository.path / "tracked.txt", std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(resolved_file), std::istreambuf_iterator<char>()),
+        "resolved\n");
+    std::ifstream binary_after(repository.path / "binary.dat", std::ios::binary);
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(binary_after), std::istreambuf_iterator<char>()),
+        preserved_binary);
 }
 
 TEST(RepositoryEngine, OpensLinkedWorktree)
@@ -1477,7 +1567,7 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     EXPECT_TRUE(child_after_return->patch.empty());
 }
 
-TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
+TEST(RepositoryEngine, RebasesAndSquashesEntireBranchFromDivergence)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
@@ -1572,6 +1662,31 @@ TEST(RepositoryEngine, RebasesEntireBranchFromDivergence)
             && rewritten_tip->parents == std::vector{rewritten_root->oid};
     });
     ASSERT_NE(rebased, nullptr);
+
+    engine.Enqueue(Undo{});
+    const auto squash_restored = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= rebased->generation)
+            return false;
+        const auto restored_root = FindRevision(snapshot, root_id);
+        const auto restored_tip = FindRevision(snapshot, tip_id);
+        return restored_root != snapshot.revisions.end() && restored_tip != snapshot.revisions.end()
+            && restored_root->parents == std::vector{base->oid}
+            && restored_tip->parents == std::vector{restored_root->oid};
+    });
+    ASSERT_NE(squash_restored, nullptr);
+
+    engine.Enqueue(Squash{tip_id, destination_id, {}, true});
+    const auto squashed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= squash_restored->generation)
+            return false;
+        const auto root_alias = FindRevision(snapshot, root_id);
+        const auto tip_alias = FindRevision(snapshot, tip_id);
+        const auto destination_alias = FindRevision(snapshot, destination_id);
+        return root_alias != snapshot.revisions.end() && tip_alias != snapshot.revisions.end()
+            && destination_alias != snapshot.revisions.end() && root_alias->oid == tip_alias->oid
+            && tip_alias->oid == destination_alias->oid && destination_alias->parents == std::vector{base->oid};
+    });
+    ASSERT_NE(squashed, nullptr);
 }
 
 TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)

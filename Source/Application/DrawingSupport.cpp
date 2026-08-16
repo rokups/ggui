@@ -188,11 +188,14 @@ ImU32 CommitIdColor(bool working)
 namespace Ggui
 {
 
-void Application::RenderRevisionTooltip(std::string_view label, const std::string& revision)
+void Application::RenderRevisionTooltip(
+    std::string_view label, const std::string& revision, std::string_view hint)
 {
     ImGui::BeginTooltip();
     ApplicationInternal::TextLabelledId(std::string(label) + " ", revision, RevisionPrefix(revision),
         ApplicationInternal::CommitIdColor(_snapshot != nullptr && revision == _snapshot->working_copy));
+    if (!hint.empty())
+        ImGui::TextDisabled("%.*s", static_cast<int>(hint.size()), hint.data());
     ImGui::EndTooltip();
 }
 

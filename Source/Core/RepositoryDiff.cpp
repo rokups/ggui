@@ -111,6 +111,27 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
         const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
         result.files.push_back({old_path, new_path, delta->status, false});
     }
+    if (command.compare_to.empty() && !command.file_comparison)
+    {
+        Conflicts conflicts;
+        Check(gg_repository_conflicts(&conflicts.value, gg, &oid), "load revision conflicts");
+        for (size_t index = 0; index < conflicts.value.count; ++index)
+        {
+            const std::string_view path =
+                conflicts.value.items[index].path == nullptr ? "" : conflicts.value.items[index].path;
+            if (path.empty())
+                continue;
+            const auto file = std::ranges::find_if(result.files, [&](const StatusEntry& value) {
+                return value.path == path || value.old_path == path;
+            });
+            if (file != result.files.end())
+                file->conflicted = true;
+            else
+                result.files.push_back({std::string(path), std::string(path), GIT_DELTA_CONFLICTED, true});
+            if (result.path == path)
+                result.selected_status = GIT_DELTA_CONFLICTED;
+        }
+    }
     git_oid working_copy{};
     if (command.compare_to.empty() && !command.file_comparison
         && gg_repository_working_copy(&working_copy, gg) == GIT_OK
@@ -118,17 +139,27 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     {
         gg_status_options options = GG_STATUS_OPTIONS_INIT;
         Status status;
-        Check(gg_repository_status(&status.value, gg, &options), "load untracked files");
+        Check(gg_repository_status(&status.value, gg, &options), "load working-copy status");
         for (size_t index = 0; index < status.value.entry_count; ++index)
         {
             const gg_status_entry& entry = status.value.entries[index];
             const std::string_view path = entry.new_path == nullptr ? "" : entry.new_path;
-            if (entry.status != GIT_DELTA_UNTRACKED || path.empty()
-                || std::ranges::any_of(result.files, [&](const StatusEntry& file) { return file.path == path; }))
+            if (path.empty())
                 continue;
-            result.files.push_back({{}, std::string(path), GIT_DELTA_UNTRACKED, false});
+            const auto file = std::ranges::find_if(result.files, [&](const StatusEntry& value) {
+                return value.path == path || value.old_path == path;
+            });
+            if (file != result.files.end())
+            {
+                file->conflicted = entry.conflicted != 0;
+                continue;
+            }
+            if (entry.status != GIT_DELTA_UNTRACKED && entry.conflicted == 0)
+                continue;
+            result.files.push_back({entry.old_path == nullptr ? "" : entry.old_path,
+                std::string(path), entry.status, entry.conflicted != 0});
             if (result.path == path)
-                result.selected_status = GIT_DELTA_UNTRACKED;
+                result.selected_status = entry.status;
         }
     }
     if (command.file_comparison)

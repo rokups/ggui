@@ -176,6 +176,10 @@ void Application::RenderHistory()
         }
     }
 
+    // History draws custom drop indicators for its rows and final drop zone.
+    ImGui::PushStyleColor(ImGuiCol_DragDropTarget, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_DragDropTargetBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
+
     // Visible revision rows
     ImGuiListClipper clipper;
     clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
@@ -219,18 +223,25 @@ void Application::RenderHistory()
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
                 const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+                bool hovered_entire_branch = false;
                 if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
                 {
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
-                        : ratio < 0.8f                  ? DropAction::Squash
-                                                      : DropAction::Rebase;
-                    RenderRevisionTooltip(DropTooltip(*hovered_drop), revision.oid);
+                        : ratio >= 0.8f                 ? DropAction::ReorderAfter
+                        : ImGui::GetIO().KeyAlt         ? DropAction::Rebase
+                                                       : DropAction::Squash;
+                    hovered_entire_branch = ratio >= 0.2f && ratio < 0.8f && ImGui::GetIO().KeyShift;
+                    const std::string_view hint = ratio >= 0.2f && ratio < 0.8f
+                        ? "No modifier: squash change | Shift: squash entire branch\n"
+                          "Alt: rebase change | Alt+Shift: rebase entire branch"
+                        : std::string_view{};
+                    RenderRevisionTooltip(
+                        DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
-                    const std::string source = *hovered_drop == DropAction::Rebase
-                        ? CurrentCommit(*_snapshot) : static_cast<const char*>(payload->Data);
-                    _pending_drop = {source, revision.oid, *hovered_drop};
+                    _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop,
+                        hovered_entire_branch};
                     if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
@@ -354,17 +365,19 @@ void Application::RenderHistory()
             if (hovered_drop.has_value())
             {
                 const ImU32 zone_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 80)
+                    : *hovered_drop == DropAction::ReorderAfter                     ? IM_COL32(90, 150, 255, 80)
                     : *hovered_drop == DropAction::Squash                            ? IM_COL32(220, 170, 70, 80)
                                                                                      : IM_COL32(110, 210, 145, 80);
                 drop_outline_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 230)
+                    : *hovered_drop == DropAction::ReorderAfter                 ? IM_COL32(90, 150, 255, 230)
                     : *hovered_drop == DropAction::Squash                        ? IM_COL32(220, 170, 70, 230)
                                                                                  : IM_COL32(110, 210, 145, 230);
                 const float zone_top = *hovered_drop == DropAction::ReorderBefore ? minimum.y
-                    : *hovered_drop == DropAction::Squash                          ? minimum.y + kRowHeight * 0.2f
-                                                                                  : minimum.y + kRowHeight * 0.8f;
+                    : *hovered_drop == DropAction::ReorderAfter                    ? minimum.y + kRowHeight * 0.8f
+                                                                                   : minimum.y + kRowHeight * 0.2f;
                 const float zone_bottom = *hovered_drop == DropAction::ReorderBefore ? minimum.y + kRowHeight * 0.2f
-                    : *hovered_drop == DropAction::Squash                             ? minimum.y + kRowHeight * 0.8f
-                                                                                     : maximum.y;
+                    : *hovered_drop == DropAction::ReorderAfter                       ? maximum.y
+                                                                                      : minimum.y + kRowHeight * 0.8f;
                 drop_zone_minimum = ImVec2(minimum.x, zone_top);
                 drop_zone_maximum = ImVec2(maximum.x, zone_bottom);
                 draw->AddRectFilled(drop_zone_minimum, drop_zone_maximum, zone_color);
@@ -572,6 +585,7 @@ void Application::RenderHistory()
         draw->AddRect(ImVec2(end_minimum.x + 1.0f, end_minimum.y + 1.0f),
             ImVec2(end_maximum.x - 1.0f, end_maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
             ImDrawFlags_None, 2.0f);
+    ImGui::PopStyleColor(2);
     ImGui::EndChild();
 
     // Explicit drag-and-drop action picker
@@ -591,8 +605,7 @@ void Application::RenderHistory()
         if (action.has_value())
         {
             _pending_drop.action = *action;
-            if (*action == DropAction::Rebase)
-                _pending_drop.source = CurrentCommit(*_snapshot);
+            _pending_drop.entire_branch = false;
             if (_pending_drop.source != _pending_drop.target)
                 OpenDialog(Dialog::ConfirmDrop);
         }

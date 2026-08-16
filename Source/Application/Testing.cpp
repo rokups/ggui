@@ -167,12 +167,17 @@ void Application::ApplyEventForTest(Event event)
     ApplyEvent(std::move(event));
 }
 
-void Application::ShowDropConfirmationForTest(const std::string& source, const std::string& target, int action)
+void Application::ShowDropConfirmationForTest(
+    const std::string& source, const std::string& target, int action, bool entire_branch)
 {
     const DropAction drop_action = static_cast<DropAction>(std::clamp(action, 0, 3));
-    _pending_drop = {drop_action == DropAction::Rebase && _snapshot != nullptr ? CurrentCommit(*_snapshot) : source,
-        target, drop_action};
+    _pending_drop = {source, target, drop_action, entire_branch};
     OpenDialog(Dialog::ConfirmDrop);
+}
+
+std::pair<int, bool> Application::PendingDropActionForTest() const
+{
+    return {static_cast<int>(_pending_drop.action), _pending_drop.entire_branch};
 }
 
 void Application::ShowWorkspaceRenameForTest()
@@ -310,9 +315,10 @@ int Application::DropPlacementForTest(int action)
     return DropPlacement(static_cast<DropAction>(std::clamp(action, 0, 3)));
 }
 
-std::string Application::DropTooltipForTest(int action)
+std::string Application::DropTooltipForTest(int action, bool entire_branch)
 {
-    return std::string(DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3))));
+    return std::string(
+        DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), entire_branch));
 }
 
 const std::string& Application::PendingEditorRevisionForTest() const
