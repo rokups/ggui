@@ -110,6 +110,10 @@ int Application::Run(int argc, char** argv)
         int height = 0;
         SDL_GetWindowSizeInPixels(_window, &width, &height);
         glViewport(0, 0, width, height);
+        // ImGui colors are already authored as display-encoded sRGB values.
+        // Encoding them again through an sRGB framebuffer visibly washes out
+        // the interface, notably with some Windows OpenGL pixel formats.
+        glDisable(GL_FRAMEBUFFER_SRGB);
         if (_dark_theme)
             glClearColor(0.047f, 0.067f, 0.094f, 1.0f);
         else
@@ -187,6 +191,9 @@ bool Application::Initialize()
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    // Request a conventional untagged framebuffer. Dear ImGui emits packed
+    // display colors rather than linear-light values.
+    SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0);
     _window = SDL_CreateWindow(
         "ggui", 1440, 900, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (_window == nullptr)
@@ -206,6 +213,7 @@ bool Application::Initialize()
         SDL_Quit();
         return false;
     }
+    glDisable(GL_FRAMEBUFFER_SRGB);
     SDL_GL_SetSwapInterval(1);
 
     char* preferences = SDL_GetPrefPath("gg", "ggui");
