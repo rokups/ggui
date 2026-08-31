@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <optional>
 #include <ranges>
@@ -158,6 +159,12 @@ void Application::RenderHistory()
     ImDrawList* draw = ImGui::GetWindowDrawList();
     int graph_columns = 1;
     for (const GraphRow& row : _graph_rows) graph_columns = std::max(graph_columns, GraphColumnCount(row));
+    const std::optional<int> highlighted_track = _history_hovered_track < 0
+        ? std::nullopt : std::optional{_history_hovered_track};
+    const std::optional<int> highlighted_commit_row = _history_hovered_commit_row < 0
+        ? std::nullopt : std::optional{_history_hovered_commit_row};
+    int next_hovered_track = -1;
+    int next_hovered_commit_row = -1;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     // The stock ImGui target frame obscures both the graph and our action-specific
     // feedback. History renders a precise insertion line or commit-content border instead.
@@ -185,8 +192,10 @@ void Application::RenderHistory()
             const ImVec2 maximum = ImGui::GetItemRectMax();
             const float center = (minimum.y + maximum.y) * 0.5f;
             const float lane_width = HistoryLaneWidth(width, graph_columns);
+            const float row_content_x = minimum.x
+                + HistoryContentOffset(lane_width, GraphColumnCount(row));
             const bool hovered = region ? ImGui::IsMouseHoveringRect(minimum, maximum)
-                                        : ImGui::IsItemHovered();
+                : ImGui::IsItemHovered() && ImGui::GetMousePos().x >= row_content_x;
             const bool clicked = !region && ImGui::IsItemClicked();
             const bool region_clicked = region && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
             const bool selected = !region
@@ -198,6 +207,93 @@ void Application::RenderHistory()
             const float graph_left = minimum.x + kGraphPadding;
             const auto lane_x = [&](int column) { return graph_left + column * lane_width + lane_width * 0.5f; };
             const auto color = [](int track) { return kLaneColors[static_cast<std::size_t>(track) % kLaneColors.size()]; };
+
+            // Hit-test the curves in the actual rendered row. Keeping the
+            // resulting track for the following frame lets the highlight be
+            // drawn behind every visible segment of that lane.
+            if (!region && ImGui::GetDragDropPayload() == nullptr
+                && ImGui::IsMouseHoveringRect(minimum, maximum))
+            {
+                const ImVec2 mouse = ImGui::GetMousePos();
+                if (mouse.x >= row_content_x)
+                {
+                    next_hovered_track = row.track;
+                    next_hovered_commit_row = index;
+                }
+                else
+                {
+                    const float vertical = std::clamp(
+                        (mouse.y - minimum.y) / (maximum.y - minimum.y), 0.0f, 1.0f);
+                    float closest_distance = std::numeric_limits<float>::max();
+                    const auto consider = [&](int track, float x) {
+                        const float distance = std::fabs(mouse.x - x);
+                        if (distance < closest_distance)
+                        {
+                            closest_distance = distance;
+                            next_hovered_track = track;
+                        }
+                    };
+                    if (vertical < 0.5f)
+                    {
+                        const float normalized = vertical * 2.0f;
+                        const float parameter = 1.0f - std::sqrt(1.0f - normalized);
+                        const auto before = std::ranges::find(row.tracks_before, row.track);
+                        if (before != row.tracks_before.end())
+                        {
+                            const float start = lane_x(static_cast<int>(before - row.tracks_before.begin()));
+                            consider(row.track, start + (lane_x(row.column) - start) * parameter * parameter);
+                        }
+                    }
+                    else
+                    {
+                        const float parameter = std::sqrt((vertical - 0.5f) * 2.0f);
+                        for (std::size_t parent = 0; parent < row.parent_columns.size(); ++parent)
+                        {
+                            const float start = lane_x(row.column);
+                            const float end = lane_x(row.parent_columns[parent]);
+                            consider(row.parent_tracks[parent],
+                                start * (1.0f - parameter) * (1.0f - parameter)
+                                    + end * (1.0f - (1.0f - parameter) * (1.0f - parameter)));
+                        }
+                    }
+                    for (std::size_t before = 0; before < row.tracks_before.size(); ++before)
+                    {
+                        const int track = row.tracks_before[before];
+                        if (track == row.track) continue;
+                        const auto after = std::ranges::find(row.tracks_after, track);
+                        if (after == row.tracks_after.end()) continue;
+                        float parameter_low = 0.0f;
+                        float parameter_high = 1.0f;
+                        for (int iteration = 0; iteration < 8; ++iteration)
+                        {
+                            const float parameter = (parameter_low + parameter_high) * 0.5f;
+                            const float y = parameter * parameter * parameter
+                                - 1.5f * parameter * parameter + 1.5f * parameter;
+                            if (y < vertical) parameter_low = parameter;
+                            else parameter_high = parameter;
+                        }
+                        const float parameter = (parameter_low + parameter_high) * 0.5f;
+                        const float smooth = parameter * parameter * (3.0f - 2.0f * parameter);
+                        const float start = lane_x(static_cast<int>(before));
+                        const float end = lane_x(static_cast<int>(after - row.tracks_after.begin()));
+                        consider(track, start + (end - start) * smooth);
+                    }
+                    if (closest_distance > std::max(5.0f, lane_width * 0.45f))
+                        next_hovered_track = -1;
+                }
+            }
+            const auto quadratic = [&](ImVec2 first, ImVec2 control, ImVec2 last, int track) {
+                if (highlighted_track == track)
+                    draw->AddBezierQuadratic(first, control, last, IM_COL32(255, 255, 255, 115), 5.0f);
+                draw->AddBezierQuadratic(first, control, last, color(track), 2.0f);
+            };
+            const auto cubic = [&](ImVec2 first, ImVec2 first_control, ImVec2 second_control,
+                                   ImVec2 last, int track) {
+                if (highlighted_track == track)
+                    draw->AddBezierCubic(
+                        first, first_control, second_control, last, IM_COL32(255, 255, 255, 115), 5.0f);
+                draw->AddBezierCubic(first, first_control, second_control, last, color(track), 2.0f);
+            };
             const float dot_x = lane_x(row.column);
             // Route pass-by lanes by their stable track identity instead of
             // joining whatever happens to occupy the same column above and
@@ -208,28 +304,27 @@ void Application::RenderHistory()
                 const int track = row.tracks_before[before];
                 if (track == row.track)
                 {
-                    draw->AddBezierQuadratic({lane_x(static_cast<int>(before)), minimum.y},
-                        {lane_x(static_cast<int>(before)), center}, {dot_x, center}, color(track), 2.0f);
+                    quadratic({lane_x(static_cast<int>(before)), minimum.y},
+                        {lane_x(static_cast<int>(before)), center}, {dot_x, center}, track);
                     continue;
                 }
                 auto after = std::ranges::find(row.tracks_after, track);
                 if (after != row.tracks_after.end())
                 {
                     const int after_column = static_cast<int>(after - row.tracks_after.begin());
-                    draw->AddBezierCubic({lane_x(static_cast<int>(before)), minimum.y},
+                    cubic({lane_x(static_cast<int>(before)), minimum.y},
                         {lane_x(static_cast<int>(before)), center}, {lane_x(after_column), center},
-                        {lane_x(after_column), maximum.y}, color(track), 2.0f);
+                        {lane_x(after_column), maximum.y}, track);
                 }
             }
             for (std::size_t parent_index = 0; parent_index < row.parent_columns.size(); ++parent_index)
             {
                 const int parent = row.parent_columns[parent_index];
-                draw->AddBezierQuadratic({dot_x, center}, {lane_x(parent), center},
-                    {lane_x(parent), maximum.y}, color(row.parent_tracks[parent_index]), 2.0f);
+                quadratic({dot_x, center}, {lane_x(parent), center},
+                    {lane_x(parent), maximum.y}, row.parent_tracks[parent_index]);
             }
 
-            const float content_x = minimum.x
-                + HistoryContentOffset(lane_width, GraphColumnCount(row));
+            const float content_x = row_content_x;
             if (region)
             {
                 draw->AddCircleFilled({dot_x, center}, std::min(3.0f, lane_width * 0.3f), kTextMuted);
@@ -283,6 +378,9 @@ void Application::RenderHistory()
 
             const Revision& revision = item.revision;
             if (clicked) SelectRevision(revision.oid, io.KeyCtrl);
+            if (highlighted_commit_row == index)
+                draw->AddCircle({dot_x, center}, std::min(kDotRadius, lane_width * 0.35f) + 2.5f,
+                    IM_COL32(255, 255, 255, 180), 0, 2.5f);
             draw->AddCircleFilled({dot_x, center}, std::min(kDotRadius, lane_width * 0.35f),
                 revision.conflicted ? kStatusConflict : revision.working_copy ? kWorkingCommitId
                     : revision.pushed ? kStatusPushed : kStatusUnpushed);
@@ -441,6 +539,8 @@ void Application::RenderHistory()
             }
             ImGui::PopID();
         }
+    _history_hovered_track = next_hovered_track;
+    _history_hovered_commit_row = next_hovered_commit_row;
     if (reorder_marker.has_value())
         draw->AddLine(reorder_marker->first, reorder_marker->second,
             IM_COL32(100, 175, 255, 255), 4.0f);

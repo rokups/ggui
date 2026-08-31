@@ -2488,6 +2488,61 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         const ImGuiTestItemInfo source = context->ItemInfo(rows[0]);
         const ImGuiTestItemInfo target = context->ItemInfo(rows[1]);
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+
+        float dot_minimum_x = FLT_MAX;
+        float dot_maximum_x = -FLT_MAX;
+        if (graph != history->DC.ChildWindows.end())
+            for (const ImDrawVert& vertex : (*graph)->DrawList->VtxBuffer)
+                if (vertex.col == ApplicationInternal::kStatusUnpushed
+                    && vertex.pos.y >= source.RectFull.Min.y && vertex.pos.y <= source.RectFull.Max.y)
+                {
+                    dot_minimum_x = std::min(dot_minimum_x, vertex.pos.x);
+                    dot_maximum_x = std::max(dot_maximum_x, vertex.pos.x);
+                }
+        IM_CHECK(dot_maximum_x >= dot_minimum_x);
+        const ImVec2 lane_position{(dot_minimum_x + dot_maximum_x) * 0.5f, source.RectFull.GetCenter().y};
+        context->MouseMoveToPos(lane_position);
+        context->Yield(2);
+        int lane_highlight_vertices = 0;
+        int lane_dot_highlight_vertices = 0;
+        if (graph != history->DC.ChildWindows.end())
+            for (const ImDrawVert& vertex : (*graph)->DrawList->VtxBuffer)
+            {
+                lane_highlight_vertices += vertex.col == IM_COL32(255, 255, 255, 115);
+                lane_dot_highlight_vertices += vertex.col == IM_COL32(255, 255, 255, 180);
+            }
+        IM_CHECK_GT(lane_highlight_vertices, 0);
+        IM_CHECK_EQ(lane_dot_highlight_vertices, 0);
+
+        context->MouseMove(rows[0]);
+        context->Yield(2);
+        float highlight_minimum_y = FLT_MAX;
+        float highlight_maximum_y = -FLT_MAX;
+        float dot_highlight_minimum_y = FLT_MAX;
+        float dot_highlight_maximum_y = -FLT_MAX;
+        if (graph != history->DC.ChildWindows.end())
+            for (const ImDrawVert& vertex : (*graph)->DrawList->VtxBuffer)
+            {
+                if (vertex.col == IM_COL32(255, 255, 255, 115))
+                {
+                    highlight_minimum_y = std::min(highlight_minimum_y, vertex.pos.y);
+                    highlight_maximum_y = std::max(highlight_maximum_y, vertex.pos.y);
+                }
+                if (vertex.col == IM_COL32(255, 255, 255, 180))
+                {
+                    dot_highlight_minimum_y = std::min(dot_highlight_minimum_y, vertex.pos.y);
+                    dot_highlight_maximum_y = std::max(dot_highlight_maximum_y, vertex.pos.y);
+                }
+            }
+        IM_CHECK_GE(highlight_maximum_y - highlight_minimum_y, ApplicationInternal::kRowHeight);
+        IM_CHECK_LT(dot_highlight_maximum_y - dot_highlight_minimum_y, ApplicationInternal::kRowHeight);
+
         context->MouseMove(rows[0]);
         context->MouseDown();
         context->MouseMoveToPos(source.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
@@ -2498,12 +2553,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
         IM_CHECK(tooltip != nullptr && tooltip->Active);
 
-        ImGuiWindow* history = ImGui::FindWindowByName("History");
-        IM_CHECK_NE(history, nullptr);
-        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
-            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
-        });
-        IM_CHECK(graph != history->DC.ChildWindows.end());
         float border_minimum_x = FLT_MAX;
         int border_vertices = 0;
         if (graph != history->DC.ChildWindows.end())

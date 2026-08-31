@@ -52,6 +52,8 @@ void Application::ApplyEvent(Event event)
                         _history_revisions.clear();
                         _visible_revisions.clear();
                         _graph_rows.clear();
+                        _history_hovered_track = -1;
+                        _history_hovered_commit_row = -1;
                         _history_requested_generation = 0;
                         _history_requested_key.clear();
                         _history_requested_filter.clear();
@@ -100,6 +102,8 @@ void Application::ApplyEvent(Event event)
                         return;
                     _history_applied_request = value.view->request;
                     _history_view = std::move(value.view);
+                    _history_hovered_track = -1;
+                    _history_hovered_commit_row = -1;
                     if (!_history_view->skeleton && !_history_expansion_pending.empty())
                     {
                         _history_expansion_pending.clear();

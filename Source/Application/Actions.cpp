@@ -467,6 +467,8 @@ void Application::ResetRepositoryState()
     _diff = {};
     _visible_revisions.clear();
     _graph_rows.clear();
+    _history_hovered_track = -1;
+    _history_hovered_commit_row = -1;
     _graph_generation = 0;
     _history_requested_generation = 0;
     _history_applied_request = 0;

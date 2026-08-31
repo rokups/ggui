@@ -261,6 +261,8 @@ private:
     std::vector<int> _visible_revisions;
     std::vector<GraphRow> _graph_rows;
     std::size_t _rendered_history_rows = 0;
+    int _history_hovered_track = -1;
+    int _history_hovered_commit_row = -1;
     std::uint64_t _graph_generation = 0;
     std::uint64_t _history_requested_generation = 0;
     std::uint64_t _history_applied_request = 0;
