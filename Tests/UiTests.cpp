@@ -2213,7 +2213,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         auto view = std::make_shared<HistoryView>();
         view->repository_generation = 2270;
         view->request = 1000000;
-        view->skeleton = true;
         view->search = "needle";
         for (std::size_t index = 0; index < revisions.size(); ++index)
         {
@@ -2225,8 +2224,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             item.search_match = index == 165;
             view->items.push_back(std::move(item));
         }
-        auto progressive = std::make_shared<HistoryView>(*view);
-        progressive->skeleton = false;
+        auto repeated = std::make_shared<HistoryView>(*view);
+        auto preview = std::make_shared<HistoryView>();
+        preview->repository_generation = 2270;
+        preview->request = 1000000;
+        preview->skeleton = true;
+        preview->search = "needle";
+        preview->items.push_back(view->items.front());
+        preview->items.push_back(view->items[165]);
+        preview->items.front().parents.clear();
+        preview->items.back().parents.clear();
+        application.ApplyEventForTest(HistoryReady{std::move(preview)});
+        context->Yield(2);
         application.ApplyEventForTest(HistoryReady{std::move(view)});
         context->Yield(5);
 
@@ -2242,7 +2251,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         ImGui::SetScrollY(*graph, 1000.0f);
         context->Yield(2);
-        application.ApplyEventForTest(HistoryReady{std::move(progressive)});
+        application.ApplyEventForTest(HistoryReady{std::move(repeated)});
         context->Yield(2);
         IM_CHECK_LE(std::fabs((*graph)->Scroll.y - 1000.0f), 1.0f);
     };
