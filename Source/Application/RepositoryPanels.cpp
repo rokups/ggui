@@ -459,8 +459,10 @@ void Application::RenderWorkspaces()
         ImGui::PushID(&workspace);
         const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
         bool elided = false;
-        if (BadgedSelectable(workspace.name, workspace.working_copy == _selected_revision, 40.0f,
-                accent, {}, &elided))
+        if (BadgedSelectable(workspace.name,
+                !workspace.working_copy.empty() && workspace.working_copy == _selected_revision,
+                40.0f, accent, {}, &elided)
+            && !workspace.working_copy.empty())
             SelectRevision(workspace.working_copy);
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
@@ -480,8 +482,10 @@ void Application::RenderWorkspaces()
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
                 ImGui::SetClipboardText(workspace.root.c_str());
             ImGui::BeginDisabled(actions_locked);
-            if (ActionMenuItem(ICON_MS_DELETE, "Forget")) _engine.Enqueue(WorkspaceForget{{workspace.name}});
-            if (ActionMenuItem(ICON_MS_EDIT, "Rename current...")) OpenDialog(Dialog::WorkspaceRename);
+            if (ActionMenuItem(ICON_MS_DELETE, "Forget", nullptr, workspace.managed))
+                _engine.Enqueue(WorkspaceForget{{workspace.name}});
+            if (ActionMenuItem(ICON_MS_EDIT, "Rename current...", nullptr, workspace.managed))
+                OpenDialog(Dialog::WorkspaceRename);
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
@@ -492,8 +496,12 @@ void Application::RenderWorkspaces()
             ImGui::BeginTooltip();
             ImGui::Text("Workspace: %s", workspace.name.c_str());
             ImGui::Text("Directory: %.*s", static_cast<int>(location.size()), location.data());
-            TextLabelledId("Working copy: ", workspace.working_copy, RevisionPrefix(workspace.working_copy),
-                CommitIdColor(workspace.working_copy == _snapshot->working_copy));
+            if (workspace.working_copy.empty())
+                ImGui::TextDisabled("No commit checked out");
+            else
+                TextLabelledId(workspace.managed ? "Working copy: " : "Git HEAD: ",
+                    workspace.working_copy, RevisionPrefix(workspace.working_copy),
+                    CommitIdColor(workspace.working_copy == _snapshot->working_copy));
             ImGui::EndTooltip();
         }
         ImGui::PopID();

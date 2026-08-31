@@ -1483,6 +1483,15 @@ TEST(RepositoryEngine, OpensLinkedWorktree)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
     ASSERT_NE(opened, nullptr);
     EXPECT_EQ(std::filesystem::weakly_canonical(opened->root), std::filesystem::weakly_canonical(worktree.path));
+    ASSERT_EQ(opened->workspaces.size(), 2U);
+    const auto primary = std::ranges::find_if(opened->workspaces, [&](const Workspace& workspace) {
+        return !workspace.stale
+            && std::filesystem::weakly_canonical(workspace.root)
+                == std::filesystem::weakly_canonical(repository.path);
+    });
+    ASSERT_NE(primary, opened->workspaces.end());
+    EXPECT_FALSE(primary->managed);
+    EXPECT_FALSE(primary->working_copy.empty());
 }
 
 TEST(RepositoryEngine, ClonesThroughATemporaryDestination)

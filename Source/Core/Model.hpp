@@ -91,6 +91,7 @@ struct Workspace
     std::string root;
     std::string working_copy;
     bool stale = false;
+    bool managed = true;
 };
 
 struct Remote

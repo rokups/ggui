@@ -1844,6 +1844,24 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "ExistingGitWorktree");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.workspaces.push_back(
+            {"existing-git-worktree", "/tmp/existing-git-worktree", "base", false, false});
+        application.SetSnapshotForTest(std::move(snapshot));
+        context->Yield(3);
+
+        FocusWindow(context, "Workspaces");
+        IM_CHECK(context->ItemExists("**/existing-git-worktree"));
+        context->ItemClick("**/existing-git-worktree", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK((context->ItemInfo("**/Forget").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Rename current...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "ReferenceFilters");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application::Instance().SetSnapshotForTest(RichSnapshot());

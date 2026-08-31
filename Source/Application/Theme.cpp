@@ -8,7 +8,8 @@ using namespace ApplicationInternal;
 
 void Application::ApplyTheme()
 {
-    const float dpi_scale = ImGui::GetStyle().FontScaleDpi;
+    const float display_scale = _window == nullptr ? 1.0f : SDL_GetWindowDisplayScale(_window);
+    const float dpi_scale = display_scale > 0.0f ? display_scale : 1.0f;
     ImGui::GetStyle() = ImGuiStyle{};
     ImGui::GetStyle().FontScaleDpi = dpi_scale;
     if (_dark_theme)
@@ -84,9 +85,9 @@ void Application::ApplyTheme()
     style.TabBorderSize = 1.0f;
     style.PopupBorderSize = 1.0f;
     style.WindowMenuButtonPosition = ImGuiDir_None;
-    const float scale = static_cast<float>(_ui_scale_percent) / 100.0f;
-    style.ScaleAllSizes(scale);
-    style.FontSizeBase = 16.0f * scale;
+    const float user_scale = static_cast<float>(_ui_scale_percent) / 100.0f;
+    style.ScaleAllSizes(user_scale * dpi_scale);
+    style.FontSizeBase = 16.0f * user_scale;
     style._NextFrameFontSizeBase = style.FontSizeBase;
     style.FontScaleMain = 1.0f;
 }

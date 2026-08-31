@@ -101,7 +101,9 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
     {
         const gg_workspace& source = workspaces.value.items[index];
         result->workspaces.push_back({source.name == nullptr ? "" : source.name,
-            source.root == nullptr ? "" : source.root, OidString(source.working_copy), source.stale != 0});
+            source.root == nullptr ? "" : source.root,
+            source.has_working_copy != 0 ? OidString(source.working_copy) : "",
+            source.stale != 0, source.managed != 0});
     }
 
     GitStringArray remote_names;

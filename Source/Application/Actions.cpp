@@ -51,6 +51,20 @@ git_index_entry ConflictIndexEntry(const gg_conflict_term& term, const std::stri
     return entry;
 }
 
+SDL_Process* StartBackgroundProcess(const char* const* arguments)
+{
+    const SDL_PropertiesID properties = SDL_CreateProperties();
+    if (properties == 0)
+        return nullptr;
+    SDL_Process* process = nullptr;
+    if (SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER,
+            const_cast<char**>(arguments))
+        && SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true))
+        process = SDL_CreateProcessWithProperties(properties);
+    SDL_DestroyProperties(properties);
+    return process;
+}
+
 } // namespace
 
 void Application::SelectRevision(const std::string& oid, bool additive)
@@ -762,6 +776,11 @@ void Application::OpenConflictInMergeTool(const std::string& path)
         const SDL_PropertiesID properties = SDL_CreateProperties();
         SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, const_cast<char**>(arguments));
         SDL_SetPointerProperty(properties, SDL_PROP_PROCESS_CREATE_ENVIRONMENT_POINTER, environment);
+#ifdef _WIN32
+        // A GUI application has no console to inherit. Prevent git.exe from
+        // allocating a transient console while it waits for the merge tool.
+        SDL_SetBooleanProperty(properties, SDL_PROP_PROCESS_CREATE_BACKGROUND_BOOLEAN, true);
+#endif
         _merge_process = SDL_CreateProcessWithProperties(properties);
         SDL_DestroyProperties(properties);
         SDL_DestroyEnvironment(environment);
@@ -901,7 +920,7 @@ void Application::OpenEditorPath(const std::filesystem::path& path)
     const std::string command = editor + " \"$1\"";
     const char* arguments[]{"/bin/sh", "-c", command.c_str(), "ggui-editor", path_text.c_str(), nullptr};
 #endif
-    SDL_Process* process = SDL_CreateProcess(arguments, false); // GCOV_EXCL_LINE: external application handoff
+    SDL_Process* process = StartBackgroundProcess(arguments); // GCOV_EXCL_LINE: external application handoff
     if (process == nullptr)
         _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
     else
@@ -938,7 +957,7 @@ void Application::OpenExternalDiff(const std::string& path, const std::string& c
     if (!compare_to.empty())
         arguments.push_back(compare_to.c_str());
     arguments.insert(arguments.end(), {"--", path.c_str(), nullptr});
-    SDL_Process* process = SDL_CreateProcess(arguments.data(), false); // GCOV_EXCL_LINE: external application handoff
+    SDL_Process* process = StartBackgroundProcess(arguments.data()); // GCOV_EXCL_LINE: external application handoff
     if (process == nullptr)
         _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
     else

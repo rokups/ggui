@@ -171,6 +171,8 @@ void Application::ProcessEvent(SDL_Event& event)
         if (event.type == SDL_EVENT_WINDOW_MOVED || event.type == SDL_EVENT_WINDOW_RESIZED
             || event.type == SDL_EVENT_WINDOW_MAXIMIZED || event.type == SDL_EVENT_WINDOW_RESTORED)
             ImGui::MarkIniSettingsDirty();
+        if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED)
+            ApplyTheme();
     }
 }
 
@@ -219,6 +221,7 @@ bool Application::Initialize()
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigDpiScaleFonts = true;
     io.IniFilename = _imgui_ini_path.empty() ? nullptr : _imgui_ini_path.c_str();
     RegisterWindowSettings();
     if (io.IniFilename != nullptr && std::filesystem::exists(io.IniFilename))

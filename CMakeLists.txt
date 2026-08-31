@@ -273,6 +273,7 @@ add_executable(ggui
   "${GGUI_EMBEDDED_DIFF_FONT_SOURCE}"
   Source/Main.cpp)
 if(WIN32)
+  set_target_properties(ggui PROPERTIES WIN32_EXECUTABLE TRUE)
   enable_language(RC)
   set(GGUI_WINDOWS_RESOURCE "${CMAKE_CURRENT_BINARY_DIR}/generated/WindowsResources.rc")
   configure_file(Source/Platform/Windows/Resources.rc.in "${GGUI_WINDOWS_RESOURCE}" @ONLY)
