@@ -272,6 +272,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
         nodes.push_back({item.id, item.parents});
     }
     _graph_rows = BuildGraphLayout(nodes);
+    _history_search_scrolled_request = 0;
     _history_hovered_track = -1;
     _history_hovered_commit_row = -1;
     RebuildIdPrefixes();

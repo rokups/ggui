@@ -472,6 +472,7 @@ void Application::ResetRepositoryState()
     _graph_generation = 0;
     _history_requested_generation = 0;
     _history_applied_request = 0;
+    _history_search_scrolled_request = 0;
     _reveal_revision.clear();
     _history_scroll_target = -1.0f;
     _history_scroll_frames = 0;

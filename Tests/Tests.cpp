@@ -649,7 +649,7 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
 }
 
-TEST(RepositoryEngine, PublishesProgressiveConnectedHistoryView)
+TEST(RepositoryEngine, PublishesProgressiveBoundedHistoryView)
 {
     TemporaryRepository repository;
     for (int index = 0; index < 300; ++index)
@@ -667,11 +667,16 @@ TEST(RepositoryEngine, PublishesProgressiveConnectedHistoryView)
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
     ASSERT_NE(snapshot, nullptr);
+    const std::string current = snapshot->working_copy.empty() ? snapshot->head : snapshot->working_copy;
+    const auto old_ref = std::ranges::find_if(snapshot->refs, [](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_TAG && ref.name == "old";
+    });
+    ASSERT_NE(old_ref, snapshot->refs.end());
     engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, {}, snapshot->repository_generation}});
 
     bool saw_skeleton = false;
     std::shared_ptr<const HistoryView> detail;
-    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (std::chrono::steady_clock::now() < deadline && detail == nullptr)
     {
         for (const Event& event : engine.PollEvents())
@@ -694,6 +699,11 @@ TEST(RepositoryEngine, PublishesProgressiveConnectedHistoryView)
     EXPECT_TRUE(std::ranges::all_of(detail->items, [](const HistoryItem& item) {
         return item.kind != HistoryItemKind::Commit || item.revision.pushed;
     }));
+    const auto current_item = std::ranges::find(detail->items, current, &HistoryItem::id);
+    const auto old_item = std::ranges::find(detail->items, old_ref->target, &HistoryItem::id);
+    ASSERT_NE(current_item, detail->items.end());
+    ASSERT_NE(old_item, detail->items.end());
+    EXPECT_LT(current_item - detail->items.begin(), old_item - detail->items.begin());
     std::unordered_set<std::string> ids;
     for (const HistoryItem& item : detail->items) ids.insert(item.id);
     for (const HistoryItem& item : detail->items)
@@ -714,38 +724,67 @@ TEST(RepositoryEngine, PublishesProgressiveConnectedHistoryView)
         if (!connected.insert(current).second) continue;
         pending.insert(pending.end(), neighbors[current].begin(), neighbors[current].end());
     }
-    EXPECT_EQ(connected.size(), detail->items.size());
+    EXPECT_LT(connected.size(), detail->items.size());
 
     // A ref/ID hit is already a complete direct search result. Do not launch
     // the repository-wide description scan (which would also match the older
     // commit named "old-description").
     engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, "old", snapshot->repository_generation}});
+    std::shared_ptr<const HistoryView> direct_preview;
     std::shared_ptr<const HistoryView> direct_search;
     const auto direct_deadline = std::chrono::steady_clock::now() + 5s;
     while (std::chrono::steady_clock::now() < direct_deadline && direct_search == nullptr)
     {
         for (const Event& event : engine.PollEvents())
             if (const auto* ready = std::get_if<HistoryReady>(&event);
-                ready != nullptr && !ready->view->skeleton && ready->view->request > detail->request)
-                direct_search = ready->view;
+                ready != nullptr && ready->view->request > detail->request)
+            {
+                if (direct_preview == nullptr) direct_preview = ready->view;
+                if (!ready->view->skeleton) direct_search = ready->view;
+            }
         std::this_thread::sleep_for(10ms);
     }
+    ASSERT_NE(direct_preview, nullptr);
+    EXPECT_TRUE(direct_preview->skeleton);
+    ASSERT_FALSE(direct_preview->items.empty());
+    EXPECT_FALSE(direct_preview->items.front().search_match);
+    const auto preview_match = std::ranges::find_if(direct_preview->items,
+        [](const HistoryItem& item) { return item.search_match; });
+    ASSERT_NE(preview_match, direct_preview->items.end());
+    EXPECT_GT(preview_match - direct_preview->items.begin(), 0);
+    EXPECT_TRUE(std::ranges::all_of(direct_preview->items,
+        [](const HistoryItem& item) { return item.revision.pushed; }));
+    EXPECT_EQ(std::ranges::count_if(direct_preview->items,
+        [](const HistoryItem& item) { return item.search_match; }), 1);
+    std::unordered_set<std::string> preview_ids;
+    for (const HistoryItem& item : direct_preview->items) preview_ids.insert(item.id);
+    for (const HistoryItem& item : direct_preview->items)
+        for (const std::string& parent : item.parents) EXPECT_TRUE(preview_ids.contains(parent));
     ASSERT_NE(direct_search, nullptr);
     EXPECT_EQ(std::ranges::count_if(direct_search->items,
         [](const HistoryItem& item) { return item.search_match; }), 1);
 
     engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, "history-0", snapshot->repository_generation}});
     std::shared_ptr<const HistoryView> searched;
+    bool saw_partial_search = false;
     const auto search_deadline = std::chrono::steady_clock::now() + 5s;
     while (std::chrono::steady_clock::now() < search_deadline && searched == nullptr)
     {
         for (const Event& event : engine.PollEvents())
             if (const auto* ready = std::get_if<HistoryReady>(&event);
                 ready != nullptr && !ready->view->skeleton && ready->view->request > direct_search->request)
-                searched = ready->view;
+            {
+                const bool has_match = std::ranges::any_of(ready->view->items, [](const HistoryItem& item) {
+                    return item.kind == HistoryItemKind::Commit && item.search_match
+                        && item.revision.description.find("history-0") != std::string::npos;
+                });
+                if (has_match) searched = ready->view;
+                else saw_partial_search = true;
+            }
         std::this_thread::sleep_for(10ms);
     }
     ASSERT_NE(searched, nullptr);
+    EXPECT_TRUE(saw_partial_search);
     EXPECT_TRUE(std::ranges::any_of(searched->items, [](const HistoryItem& item) {
         return item.kind == HistoryItemKind::Commit && item.search_match
             && item.revision.description.find("history-0") != std::string::npos;

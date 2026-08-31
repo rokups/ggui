@@ -2213,6 +2213,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         auto view = std::make_shared<HistoryView>();
         view->repository_generation = 2270;
         view->request = 1000000;
+        view->skeleton = true;
         view->search = "needle";
         for (std::size_t index = 0; index < revisions.size(); ++index)
         {
@@ -2224,6 +2225,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             item.search_match = index == 165;
             view->items.push_back(std::move(item));
         }
+        auto progressive = std::make_shared<HistoryView>(*view);
+        progressive->skeleton = false;
         application.ApplyEventForTest(HistoryReady{std::move(view)});
         context->Yield(5);
 
@@ -2236,6 +2239,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_GT((*graph)->Scroll.y, 4000.0f);
         const std::vector<ImGuiID> visible_rows = GatherItems(context, "//History", "row");
         IM_CHECK(!visible_rows.empty());
+
+        ImGui::SetScrollY(*graph, 1000.0f);
+        context->Yield(2);
+        application.ApplyEventForTest(HistoryReady{std::move(progressive)});
+        context->Yield(2);
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - 1000.0f), 1.0f);
     };
 
     test = IM_REGISTER_TEST(engine, "Navigation", "HistoryExpansionPreservesViewport");

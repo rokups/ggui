@@ -266,6 +266,7 @@ private:
     std::uint64_t _graph_generation = 0;
     std::uint64_t _history_requested_generation = 0;
     std::uint64_t _history_applied_request = 0;
+    std::uint64_t _history_search_scrolled_request = 0;
     std::string _history_requested_key;
     std::string _history_requested_filter;
     std::string _history_observed_filter;

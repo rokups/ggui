@@ -55,30 +55,84 @@ bool ContainsInsensitiveText(std::string_view text, std::string_view query)
     }).begin() != text.end();
 }
 
-std::vector<std::size_t> HistoryTopologicalOrder(const std::vector<HistoryItem>& items)
+std::vector<std::size_t> HistoryTopologicalOrder(
+    const std::vector<HistoryItem>& items, const std::vector<std::string>& preferred_heads)
 {
     std::unordered_map<std::string_view, std::size_t> indexes;
     for (std::size_t index = 0; index < items.size(); ++index) indexes.emplace(items[index].id, index);
     std::vector<std::size_t> children(items.size());
-    for (const HistoryItem& item : items)
-        for (const std::string& parent : item.parents)
-            if (const auto found = indexes.find(parent); found != indexes.end()) ++children[found->second];
-    std::vector<std::size_t> ready;
+    std::vector<std::vector<std::size_t>> neighbors(items.size());
     for (std::size_t index = 0; index < items.size(); ++index)
-        if (children[index] == 0) ready.push_back(index);
-    std::ranges::sort(ready, std::greater<>());
-    std::vector<std::size_t> result;
-    while (!ready.empty())
-    {
-        const std::size_t index = ready.back();
-        ready.pop_back();
-        result.push_back(index);
         for (const std::string& parent : items[index].parents)
-            if (const auto found = indexes.find(parent); found != indexes.end() && --children[found->second] == 0)
+            if (const auto found = indexes.find(parent); found != indexes.end())
             {
-                ready.push_back(found->second);
-                std::ranges::sort(ready, std::greater<>());
+                ++children[found->second];
+                neighbors[index].push_back(found->second);
+                neighbors[found->second].push_back(index);
             }
+
+    struct Component
+    {
+        std::vector<std::size_t> items;
+        std::int64_t timestamp = std::numeric_limits<std::int64_t>::min();
+        std::size_t priority = std::numeric_limits<std::size_t>::max();
+        std::string_view id;
+    };
+    std::vector<Component> components;
+    std::vector<bool> seen(items.size());
+    for (std::size_t start = 0; start < items.size(); ++start)
+    {
+        if (seen[start]) continue;
+        Component component;
+        std::vector<std::size_t> pending{start};
+        while (!pending.empty())
+        {
+            const std::size_t index = pending.back();
+            pending.pop_back();
+            if (seen[index]) continue;
+            seen[index] = true;
+            component.items.push_back(index);
+            if (items[index].kind == HistoryItemKind::Commit)
+                component.timestamp = std::max(component.timestamp, items[index].revision.timestamp);
+            if (const auto preferred = std::ranges::find(preferred_heads, items[index].id);
+                preferred != preferred_heads.end())
+                component.priority = std::min(component.priority,
+                    static_cast<std::size_t>(preferred - preferred_heads.begin()));
+            if (component.id.empty() || items[index].id < component.id) component.id = items[index].id;
+            for (const std::size_t neighbor : neighbors[index])
+                if (!seen[neighbor]) pending.push_back(neighbor);
+        }
+        components.push_back(std::move(component));
+    }
+    std::ranges::sort(components, [](const Component& left, const Component& right) {
+        if (left.timestamp != right.timestamp) return left.timestamp > right.timestamp;
+        if (left.priority != right.priority) return left.priority < right.priority;
+        return left.id < right.id;
+    });
+
+    std::vector<std::size_t> result;
+    for (const Component& component : components)
+    {
+        const std::size_t component_begin = result.size();
+        std::vector<std::size_t> ready;
+        for (const std::size_t index : component.items)
+            if (children[index] == 0) ready.push_back(index);
+        std::ranges::sort(ready, std::greater<>());
+        while (!ready.empty())
+        {
+            const std::size_t index = ready.back();
+            ready.pop_back();
+            result.push_back(index);
+            for (const std::string& parent : items[index].parents)
+                if (const auto found = indexes.find(parent);
+                    found != indexes.end() && --children[found->second] == 0)
+                {
+                    ready.push_back(found->second);
+                    std::ranges::sort(ready, std::greater<>());
+                }
+        }
+        if (result.size() - component_begin != component.items.size())
+            throw std::runtime_error("history graph is not acyclic");
     }
     if (result.size() != items.size()) throw std::runtime_error("history graph is not acyclic");
     return result;
@@ -344,15 +398,53 @@ void RepositoryEngine::Impl::RunHistory()
             std::vector<git_oid> selected_bookmarks;
             std::vector<git_oid> unselected_bookmarks;
             std::vector<git_oid> remote_tips;
+            std::vector<git_oid> conservatively_locked_heads;
+            std::vector<git_oid> primary_heads;
             const auto add = [](std::vector<git_oid>& values, const git_oid& oid) {
                 if (std::ranges::none_of(values, [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
                     values.push_back(oid);
+            };
+            struct BoundedReachability
+            {
+                bool matched = false;
+                bool complete = true;
+            };
+            std::size_t implicit_lookup_budget = 256;
+            const auto descends_from_any = [&](const git_oid& candidate,
+                                               const std::vector<git_oid>& ancestors) {
+                BoundedReachability result;
+                if (ancestors.empty()) return result;
+                std::deque<git_oid> pending{candidate};
+                std::unordered_set<std::string> visited;
+                while (!pending.empty() && implicit_lookup_budget > 0 && !stale())
+                {
+                    const git_oid oid = pending.front();
+                    pending.pop_front();
+                    if (!visited.insert(OidString(oid)).second) continue;
+                    --implicit_lookup_budget;
+                    if (std::ranges::any_of(ancestors,
+                            [&](const git_oid& ancestor) { return git_oid_equal(&oid, &ancestor) != 0; }))
+                    {
+                        result.matched = true;
+                        return result;
+                    }
+                    git_commit* raw_commit = nullptr;
+                    const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
+                    if (lookup == GIT_ENOTFOUND) continue;
+                    Check(lookup, "inspect bounded bookmark descendants");
+                    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                    for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
+                        pending.push_back(*git_commit_parent_id(commit.get(), index));
+                }
+                result.complete = pending.empty();
+                return result;
             };
             git_oid working{};
             std::string working_copy;
             if (gg_repository_working_copy(&working, history_gg.get()) == GIT_OK)
             {
                 add(heads, working);
+                add(primary_heads, working);
                 working_copy = OidString(working);
             }
             git_reference* raw_head = nullptr;
@@ -362,6 +454,7 @@ void RepositoryEngine::Impl::RunHistory()
                 if (const git_oid* target = git_reference_target(head.get()))
                 {
                     add(heads, *target);
+                    add(primary_heads, *target);
                 }
             }
             for (std::size_t index = 0; index < named.value.count; ++index)
@@ -386,7 +479,10 @@ void RepositoryEngine::Impl::RunHistory()
                 else if ((ref.kind == GG_NAMED_REF_LOCAL_TAG
                             || (ref.kind == GG_NAMED_REF_REMOTE_TAG && chosen_remote))
                     && selected(request.query.tags, name))
+                {
                     add(heads, ref.target);
+                    add(conservatively_locked_heads, ref.target);
+                }
             }
             // Other workspaces are visible leaf heads only when they continue a
             // selected bookmark and are not inside a branch claimed by an
@@ -394,23 +490,11 @@ void RepositoryEngine::Impl::RunHistory()
             for (std::size_t index = 0; index < workspaces.value.count; ++index)
             {
                 const git_oid& candidate = workspaces.value.items[index].working_copy;
-                bool descended = false;
-                for (const git_oid& bookmark : selected_bookmarks)
-                {
-                    const int value = git_oid_equal(&candidate, &bookmark) != 0 ? 1
-                        : git_graph_descendant_of(repository.get(), &candidate, &bookmark);
-                    Check(value, "inspect selected bookmark descendants");
-                    descended |= value != 0;
-                }
-                bool claimed = false;
-                for (const git_oid& bookmark : unselected_bookmarks)
-                {
-                    const int value = git_oid_equal(&candidate, &bookmark) != 0 ? 1
-                        : git_graph_descendant_of(repository.get(), &candidate, &bookmark);
-                    Check(value, "inspect unselected bookmark descendants");
-                    claimed |= value != 0;
-                }
-                if (descended && !claimed) add(heads, candidate);
+                const BoundedReachability selected_result = descends_from_any(candidate, selected_bookmarks);
+                const BoundedReachability unselected_result = descends_from_any(candidate, unselected_bookmarks);
+                const bool claimed = unselected_result.matched
+                    || (!unselected_result.complete && !unselected_bookmarks.empty());
+                if (selected_result.matched && !claimed) add(heads, candidate);
             }
             git_reference_iterator* raw_visible = nullptr;
             if (git_reference_iterator_glob_new(
@@ -424,27 +508,16 @@ void RepositoryEngine::Impl::RunHistory()
                     std::unique_ptr<git_reference, decltype(&git_reference_free)> ref(raw_ref, git_reference_free);
                     const git_oid* target = git_reference_target(ref.get());
                     if (target == nullptr) continue;
-                    bool descended = false;
-                    for (const git_oid& bookmark : selected_bookmarks)
-                    {
-                        const int value = git_oid_equal(target, &bookmark) != 0 ? 1
-                            : git_graph_descendant_of(repository.get(), target, &bookmark);
-                        if (value >= 0) descended |= value != 0;
-                    }
-                    bool claimed = false;
-                    for (const git_oid& bookmark : unselected_bookmarks)
-                    {
-                        const int value = git_oid_equal(target, &bookmark) != 0 ? 1
-                            : git_graph_descendant_of(repository.get(), target, &bookmark);
-                        if (value >= 0) claimed |= value != 0;
-                    }
-                    if (descended && !claimed) add(heads, *target);
+                    const BoundedReachability selected_result = descends_from_any(*target, selected_bookmarks);
+                    const BoundedReachability unselected_result = descends_from_any(*target, unselected_bookmarks);
+                    const bool claimed = unselected_result.matched
+                        || (!unselected_result.complete && !unselected_bookmarks.empty());
+                    if (selected_result.matched && !claimed) add(heads, *target);
                 }
             }
             if (stale()) continue;
 
             std::unordered_set<std::string> search_matches;
-            std::unordered_set<std::string> description_search_matches;
             if (!request.query.search.empty())
             {
                 git_oid resolved{};
@@ -484,42 +557,18 @@ void RepositoryEngine::Impl::RunHistory()
                 && cached_search_path == request.path
                 && cached_search_generation == request.query.repository_generation
                 && cached_search_text == request.query.search;
-
-            std::ranges::sort(heads, [](const git_oid& left, const git_oid& right) {
-                return git_oid_cmp(&left, &right) < 0;
-            });
-
-            // Merge bases are mandatory skeleton junctions. Multiple bases are
-            // retained for criss-cross histories; ENOTFOUND leaves independent
-            // components rather than inventing an edge.
-            std::vector<git_oid> mandatory = heads;
-            for (std::size_t left = 0; left < heads.size(); ++left)
-                for (std::size_t right = left + 1; right < heads.size(); ++right)
-                {
-                    git_oidarray bases{};
-                    const int result = git_merge_bases(&bases, repository.get(), &heads[left], &heads[right]);
-                    if (result == GIT_OK)
-                    {
-                        for (std::size_t index = 0; index < bases.count; ++index) add(mandatory, bases.ids[index]);
-                        git_oidarray_dispose(&bases);
-                    }
-                    else if (result != GIT_ENOTFOUND) Check(result, "find history merge bases");
-                }
             if (reusable_description_search)
                 for (const git_oid& oid : cached_description_matches)
                 {
                     search_matches.insert(OidString(oid));
-                    description_search_matches.insert(OidString(oid));
-                    add(mandatory, oid);
+                    add(heads, oid);
                 }
-            std::ranges::sort(mandatory, [](const git_oid& left, const git_oid& right) {
-                return git_oid_cmp(&left, &right) < 0;
-            });
 
             const auto hydrate = [&](const std::vector<git_oid>& oids) {
                 Revisions values;
                 gg_oid_array input{const_cast<git_oid*>(oids.data()), oids.size()};
-                Check(gg_repository_lookup_revisions(&values.value, history_gg.get(), input), "hydrate history revisions");
+                Check(gg_repository_lookup_revisions(&values.value, history_gg.get(), input),
+                    "hydrate history revisions");
                 std::unordered_map<std::string, Revision> result;
                 for (std::size_t index = 0; index < values.value.count; ++index)
                 {
@@ -529,262 +578,52 @@ void RepositoryEngine::Impl::RunHistory()
                 return result;
             };
 
-            // Reachability queries on a repository without a commit graph can
-            // be expensive even though the displayed set is bounded. Query
-            // only the mandatory junctions, then propagate a positive result
-            // through the honest in-view ancestry. This is exact: every
-            // propagated edge is either a direct Git parent or a collapsed
-            // relation whose reachability was proven while building it.
-            std::unordered_map<std::string, bool> remote_reachability;
-            const auto remotely_reachable = [&](const git_oid& oid) {
-                const std::string id = OidString(oid);
-                if (const auto found = remote_reachability.find(id); found != remote_reachability.end())
-                    return found->second;
-                bool pushed = false;
-                for (const git_oid& tip : remote_tips)
-                {
-                    const int reachable = git_oid_equal(&tip, &oid) != 0 ? 1
-                        : git_graph_descendant_of(repository.get(), &tip, &oid);
-                    if (reachable < 0)
-                    {
-                        // Preserve the existing conservative lock on graph
-                        // errors rather than enabling a destructive rewrite.
-                        pushed = true;
-                        break;
-                    }
-                    if (reachable != 0) { pushed = true; break; }
-                }
-                remote_reachability.emplace(id, pushed);
-                return pushed;
-            };
+            auto head_revisions = hydrate(heads);
+            std::ranges::sort(heads, [&](const git_oid& left, const git_oid& right) {
+                const Revision& left_revision = head_revisions.at(OidString(left));
+                const Revision& right_revision = head_revisions.at(OidString(right));
+                if (left_revision.timestamp != right_revision.timestamp)
+                    return left_revision.timestamp > right_revision.timestamp;
+                const bool left_primary = std::ranges::any_of(primary_heads,
+                    [&](const git_oid& oid) { return git_oid_equal(&oid, &left) != 0; });
+                const bool right_primary = std::ranges::any_of(primary_heads,
+                    [&](const git_oid& oid) { return git_oid_equal(&oid, &right) != 0; });
+                if (left_primary != right_primary) return left_primary;
+                return git_oid_cmp(&left, &right) < 0;
+            });
 
-            // The skeleton pays once to prove how mandatory junctions are
-            // related. Detailed views reuse those relations and only locate
-            // one matching materialized frontier per relation instead of
-            // repeating an ancestry query for every frontier commit.
-            std::unordered_map<std::string, std::vector<std::string>> skeleton_connections;
-
-            const auto make_view = [&](const std::vector<git_oid>& materialized, bool skeleton) {
-                auto view = std::make_shared<HistoryView>();
-                view->repository_generation = request.query.repository_generation;
-                view->request = request.request;
-                view->skeleton = skeleton;
-                view->search = request.query.search;
-                auto revisions = hydrate(materialized);
-                std::unordered_set<std::string> present;
-                for (const git_oid& oid : materialized) present.insert(OidString(oid));
-                std::unordered_map<std::string, std::string> frontier_regions;
-                std::vector<std::string> junctions;
-                for (const git_oid& oid : mandatory) junctions.push_back(OidString(oid));
-                for (const git_oid& oid : materialized)
+            // Resolving selected refs and IDs is cheap, while proving the
+            // relationship between distant heads can require walking a large
+            // repository without a commit graph. Publish every head immediately
+            // as honest disconnected components, then replace this preview once
+            // the worker has established the collapsed connections. Expansions
+            // deliberately keep the existing detailed view and scroll anchor.
+            if (request.expand.empty() && !stale())
+            {
+                auto preview = std::make_shared<HistoryView>();
+                preview->repository_generation = request.query.repository_generation;
+                preview->request = request.request;
+                preview->skeleton = true;
+                preview->search = request.query.search;
+                for (const git_oid& oid : heads)
                 {
                     const std::string id = OidString(oid);
                     HistoryItem item;
                     item.id = id;
                     item.kind = HistoryItemKind::Commit;
-                    item.revision = revisions.at(id);
+                    item.revision = head_revisions.at(id);
+                    // Reachability is intentionally deferred with the graph
+                    // proof. Keep preview commits conservatively locked rather
+                    // than enabling a rewrite on incomplete information.
+                    item.revision.pushed = true;
                     item.search_match = search_matches.contains(id);
-                    for (const std::string& parent : item.revision.parents)
-                    {
-                        if (present.contains(parent))
-                        {
-                            item.parents.push_back(parent);
-                            continue;
-                        }
-                        if (!skeleton)
-                        {
-                            const std::string region_id = "region:" + parent + ":";
-                            item.parents.push_back(region_id);
-                            frontier_regions.emplace(parent, region_id);
-                            if (std::ranges::none_of(view->items,
-                                    [&](const HistoryItem& existing) { return existing.id == region_id; }))
-                            {
-                                HistoryItem region;
-                                region.id = region_id;
-                                region.kind = HistoryItemKind::CollapsedRegion;
-                                view->items.push_back(std::move(region));
-                            }
-                            continue;
-                        }
-                        git_oid parent_oid{};
-                        Check(git_oid_fromstr(&parent_oid, parent.c_str(), git_repository_oid_type(repository.get())),
-                            "parse history frontier");
-                        std::vector<std::string> boundaries;
-                        for (const std::string& candidate : junctions)
-                        {
-                            if (candidate == id) continue;
-                            git_oid candidate_oid{};
-                            Check(git_oid_fromstr(&candidate_oid, candidate.c_str(), git_repository_oid_type(repository.get())),
-                                "parse history junction");
-                            const int related = git_oid_equal(&parent_oid, &candidate_oid) != 0 ? 1
-                                : git_graph_descendant_of(repository.get(), &parent_oid, &candidate_oid);
-                            // A shallow parent has an honest Git edge but no
-                            // local object with which to prove reachability.
-                            // Leave its region disconnected rather than
-                            // manufacturing a junction.
-                            if (related < 0) continue;
-                            if (related != 0) boundaries.push_back(candidate);
-                        }
-                        // Keep every incomparable nearest junction. This is
-                        // essential for criss-cross histories with multiple
-                        // merge bases.
-                        const std::vector<std::string> related_boundaries = boundaries;
-                        boundaries.clear();
-                        for (const std::string& candidate : related_boundaries)
-                        {
-                            git_oid candidate_oid{};
-                            Check(git_oid_fromstr(&candidate_oid, candidate.c_str(),
-                                git_repository_oid_type(repository.get())), "parse candidate junction");
-                            const bool shadowed = std::ranges::any_of(related_boundaries, [&](const std::string& other) {
-                                if (other == candidate) return false;
-                                git_oid other_oid{};
-                                Check(git_oid_fromstr(&other_oid, other.c_str(),
-                                    git_repository_oid_type(repository.get())), "parse nearer junction");
-                                const int nearer = git_graph_descendant_of(
-                                    repository.get(), &other_oid, &candidate_oid);
-                                Check(nearer, "choose history junction");
-                                return nearer != 0;
-                            });
-                            if (!shadowed) boundaries.push_back(candidate);
-                        }
-                        if (boundaries.empty()) boundaries.emplace_back();
-                        for (const std::string& boundary : boundaries)
-                        {
-                            const std::string region_id = "region:" + parent + ":" + boundary;
-                            item.parents.push_back(region_id);
-                            if (std::ranges::none_of(view->items,
-                                    [&](const HistoryItem& existing) { return existing.id == region_id; }))
-                            {
-                                HistoryItem region;
-                                region.id = region_id;
-                                region.kind = HistoryItemKind::CollapsedRegion;
-                                if (!boundary.empty()) region.parents.push_back(boundary);
-                                view->items.push_back(std::move(region));
-                            }
-                            if (!boundary.empty())
-                            {
-                                auto& connections = skeleton_connections[id];
-                                if (std::ranges::find(connections, boundary) == connections.end())
-                                    connections.push_back(boundary);
-                            }
-                        }
-                    }
-                    view->items.push_back(std::move(item));
+                    preview->items.push_back(std::move(item));
                 }
-
-                if (!skeleton)
-                {
-                    const auto find_frontier = [&](const std::string& boundary,
-                                                   const std::vector<std::string>& frontiers)
-                        -> std::optional<std::string> {
-                        git_oid boundary_oid{};
-                        Check(git_oid_fromstr(&boundary_oid, boundary.c_str(),
-                            git_repository_oid_type(repository.get())), "parse reused history junction");
-                        std::function<std::optional<std::string>(std::size_t, std::size_t)> find =
-                            [&](std::size_t begin, std::size_t end) -> std::optional<std::string> {
-                                if (begin >= end) return std::nullopt;
-                                std::vector<git_oid> descendants;
-                                descendants.reserve(end - begin);
-                                for (std::size_t index = begin; index < end; ++index)
-                                {
-                                    git_oid oid{};
-                                    if (git_oid_fromstr(&oid, frontiers[index].c_str(),
-                                            git_repository_oid_type(repository.get())) == GIT_OK)
-                                        descendants.push_back(oid);
-                                }
-                                if (descendants.empty()) return std::nullopt;
-                                const int reachable = git_graph_reachable_from_any(repository.get(), &boundary_oid,
-                                    descendants.data(), descendants.size());
-                                if (reachable <= 0) return std::nullopt;
-                                if (end - begin == 1) return frontiers[begin];
-                                const std::size_t middle = begin + (end - begin) / 2;
-                                if (auto result = find(begin, middle)) return result;
-                                return find(middle, end);
-                            };
-                        return find(0, frontiers.size());
-                    };
-
-                    for (const auto& [anchor, boundaries] : skeleton_connections)
-                    {
-                        if (!present.contains(anchor)) continue;
-                        std::vector<std::string> pending{anchor};
-                        std::unordered_set<std::string> seen;
-                        std::vector<std::string> frontiers;
-                        while (!pending.empty())
-                        {
-                            std::string current = std::move(pending.back());
-                            pending.pop_back();
-                            if (!seen.insert(current).second) continue;
-                            const auto revision = revisions.find(current);
-                            if (revision == revisions.end()) continue;
-                            for (const std::string& parent : revision->second.parents)
-                                if (present.contains(parent)) pending.push_back(parent);
-                                else if (std::ranges::find(frontiers, parent) == frontiers.end())
-                                    frontiers.push_back(parent);
-                        }
-                        for (const std::string& boundary : boundaries)
-                        {
-                            if (seen.contains(boundary)) continue;
-                            const auto frontier = find_frontier(boundary, frontiers);
-                            if (!frontier.has_value()) continue;
-                            const auto region_id = frontier_regions.find(*frontier);
-                            if (region_id == frontier_regions.end()) continue;
-                            const auto region = std::ranges::find(view->items, region_id->second, &HistoryItem::id);
-                            if (region != view->items.end()
-                                && std::ranges::find(region->parents, boundary) == region->parents.end())
-                                region->parents.push_back(boundary);
-                        }
-                    }
-
-                }
-                const std::vector<std::size_t> order = HistoryTopologicalOrder(view->items);
-                std::vector<HistoryItem> ordered;
-                ordered.reserve(view->items.size());
-                for (const std::size_t index : order) ordered.push_back(std::move(view->items[index]));
-                view->items = std::move(ordered);
-
-                std::unordered_set<std::string> pushed_items;
-                for (const git_oid& tip : remote_tips)
-                    if (present.contains(OidString(tip))) pushed_items.insert(OidString(tip));
-                const auto propagate_pushed = [&] {
-                    for (HistoryItem& item : view->items)
-                        if (pushed_items.contains(item.id))
-                        {
-                            if (item.kind == HistoryItemKind::Commit) item.revision.pushed = true;
-                            pushed_items.insert(item.parents.begin(), item.parents.end());
-                        }
-                };
-                // A visible remote tip proves all of its displayed ancestry
-                // without any graph query. Only disconnected mandatory
-                // junctions need an exact repository check.
-                propagate_pushed();
-                for (const git_oid& oid : mandatory)
-                    if (present.contains(OidString(oid)) && !pushed_items.contains(OidString(oid)))
-                    {
-                        const std::string id = OidString(oid);
-                        // Free-text matches may originate at unrelated refs.
-                        // Keep an unproven match conservatively locked rather
-                        // than delaying the search view with up to 50 deep
-                        // reachability queries. Connected matches were
-                        // already proven by propagation above.
-                        if (description_search_matches.contains(id) || remotely_reachable(oid))
-                            pushed_items.insert(id);
-                    }
-                propagate_pushed();
-                return view;
-            };
-
-            // Expansion keeps the currently rendered detailed view in place;
-            // replacing it with the sparse skeleton would cause a visible
-            // jump and destroy the scroll anchor while nearby commits load.
-            if (!stale() && request.expand.empty())
-            {
-                auto skeleton = make_view(mandatory, true);
-                if (!stale()) Post(HistoryReady{std::move(skeleton)});
+                Post(HistoryReady{std::move(preview)});
             }
             if (stale()) continue;
 
-            std::vector<git_oid> materialized = mandatory;
+            std::vector<git_oid> materialized = heads;
             std::deque<git_oid> pending(heads.begin(), heads.end());
             std::unordered_set<std::string> visited;
             std::size_t ordinary = 0;
@@ -798,7 +637,8 @@ void RepositoryEngine::Impl::RunHistory()
                 if (lookup == GIT_ENOTFOUND) continue;
                 Check(lookup, "traverse bounded history");
                 std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
-                if (std::ranges::none_of(materialized, [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
+                if (std::ranges::none_of(materialized,
+                        [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
                 {
                     materialized.push_back(oid);
                     ++ordinary;
@@ -819,7 +659,8 @@ void RepositoryEngine::Impl::RunHistory()
                 std::unordered_set<std::string> local;
                 for (std::size_t added = 0; !nearby.empty() && added < 128 && !stale();)
                 {
-                    const git_oid oid = nearby.front(); nearby.pop_front();
+                    const git_oid oid = nearby.front();
+                    nearby.pop_front();
                     if (!local.insert(OidString(oid)).second) continue;
                     git_commit* raw_commit = nullptr;
                     const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
@@ -828,14 +669,79 @@ void RepositoryEngine::Impl::RunHistory()
                     std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
                     if (std::ranges::none_of(materialized,
                             [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
-                    { materialized.push_back(oid); ++added; }
+                    {
+                        materialized.push_back(oid);
+                        ++added;
+                    }
                     for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
                         nearby.push_back(*git_commit_parent_id(commit.get(), index));
                 }
             }
 
+            const auto make_view = [&] {
+                auto view = std::make_shared<HistoryView>();
+                view->repository_generation = request.query.repository_generation;
+                view->request = request.request;
+                view->search = request.query.search;
+                auto revisions = hydrate(materialized);
+                std::unordered_set<std::string> present;
+                for (const git_oid& oid : materialized) present.insert(OidString(oid));
+                std::unordered_set<std::string> regions;
+                for (const git_oid& oid : materialized)
+                {
+                    const std::string id = OidString(oid);
+                    HistoryItem item;
+                    item.id = id;
+                    item.kind = HistoryItemKind::Commit;
+                    item.revision = revisions.at(id);
+                    item.search_match = search_matches.contains(id);
+                    for (const std::string& parent : item.revision.parents)
+                    {
+                        if (present.contains(parent))
+                        {
+                            item.parents.push_back(parent);
+                            continue;
+                        }
+                        const std::string region_id = "region:" + parent + ":";
+                        item.parents.push_back(region_id);
+                        if (regions.insert(region_id).second)
+                        {
+                            HistoryItem region;
+                            region.id = region_id;
+                            region.kind = HistoryItemKind::CollapsedRegion;
+                            view->items.push_back(std::move(region));
+                        }
+                    }
+                    view->items.push_back(std::move(item));
+                }
+
+                std::vector<std::string> preferred_heads;
+                for (const git_oid& oid : heads) preferred_heads.push_back(OidString(oid));
+                const std::vector<std::size_t> order = HistoryTopologicalOrder(view->items, preferred_heads);
+                std::vector<HistoryItem> ordered;
+                ordered.reserve(view->items.size());
+                for (const std::size_t index : order) ordered.push_back(std::move(view->items[index]));
+                view->items = std::move(ordered);
+
+                std::unordered_set<std::string> pushed_items = search_matches;
+                for (const git_oid& oid : conservatively_locked_heads)
+                    pushed_items.insert(OidString(oid));
+                for (const git_oid& tip : remote_tips)
+                    if (present.contains(OidString(tip))) pushed_items.insert(OidString(tip));
+                for (HistoryItem& item : view->items)
+                    if (pushed_items.contains(item.id))
+                    {
+                        if (item.kind == HistoryItemKind::Commit) item.revision.pushed = true;
+                        pushed_items.insert(item.parents.begin(), item.parents.end());
+                    }
+                return view;
+            };
+
+            if (!stale()) Post(HistoryReady{make_view()});
+
             // Description search is the only operation allowed to scan beyond
-            // the bounded graph. It is latest-wins and stops after 50 matches.
+            // the bounded graph. It remains latest-wins, stops after 50
+            // matches, and publishes useful partial results while walking.
             if (!request.query.search.empty() && !direct_search_match
                 && !reusable_description_search && !stale())
             {
@@ -845,9 +751,14 @@ void RepositoryEngine::Impl::RunHistory()
                 std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
                 git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL);
                 Check(git_revwalk_push_glob(walk.get(), "refs/*"), "search repository history");
-                git_oid oid{};
-                while (search_matches.size() < 50 && !stale() && git_revwalk_next(&oid, walk.get()) == GIT_OK)
+                auto last_publish = std::chrono::steady_clock::now();
+                bool unpublished_matches = false;
+                while (search_matches.size() < 50 && !stale())
                 {
+                    git_oid oid{};
+                    const int next = git_revwalk_next(&oid, walk.get());
+                    if (next == GIT_ITEROVER) break;
+                    Check(next, "search repository history");
                     git_commit* raw_commit = nullptr;
                     if (git_commit_lookup(&raw_commit, repository.get(), &oid) != GIT_OK) continue;
                     std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
@@ -856,28 +767,31 @@ void RepositoryEngine::Impl::RunHistory()
                     {
                         const std::string id = OidString(oid);
                         search_matches.insert(id);
-                        description_search_matches.insert(id);
                         found_description_matches.push_back(oid);
                         add(materialized, oid);
-                        // Treat an older match as a junction so the nearest
-                        // collapsed frontier connects to it instead of
-                        // rendering related history as a separate component.
-                        add(mandatory, oid);
+                        unpublished_matches = true;
+                        const auto now = std::chrono::steady_clock::now();
+                        if (found_description_matches.size() == 1
+                            || now - last_publish >= std::chrono::milliseconds(100))
+                        {
+                            if (!stale()) Post(HistoryReady{make_view()});
+                            last_publish = now;
+                            unpublished_matches = false;
+                        }
                     }
                 }
                 if (!stale())
                 {
+                    if (unpublished_matches) Post(HistoryReady{make_view()});
                     cached_search_path = request.path;
                     cached_search_text = request.query.search;
                     cached_search_generation = request.query.repository_generation;
                     cached_description_matches = std::move(found_description_matches);
                 }
             }
-            if (!stale())
-            {
-                auto detail = make_view(materialized, false);
-                if (!stale()) Post(HistoryReady{std::move(detail)});
-            }
+            if (stale()) continue;
+
+
         }
         catch (const std::exception& error)
         {

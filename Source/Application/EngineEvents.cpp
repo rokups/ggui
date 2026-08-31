@@ -55,6 +55,7 @@ void Application::ApplyEvent(Event event)
                         _history_hovered_track = -1;
                         _history_hovered_commit_row = -1;
                         _history_requested_generation = 0;
+                        _history_search_scrolled_request = 0;
                         _history_requested_key.clear();
                         _history_requested_filter.clear();
                         _history_anchor.clear();
@@ -147,7 +148,8 @@ void Application::ApplyEvent(Event event)
                         }
                         _history_anchor.clear();
                     }
-                    else if (!_history_view->skeleton && !_history_view->search.empty())
+                    else if (!_history_view->search.empty()
+                        && _history_search_scrolled_request != _history_view->request)
                     {
                         const auto match = std::ranges::find_if(_history_view->items,
                             [](const HistoryItem& item) { return item.search_match; });
@@ -156,6 +158,7 @@ void Application::ApplyEvent(Event event)
                             _history_scroll_target = static_cast<float>(match - _history_view->items.begin())
                                 * kRowHeight;
                             _history_scroll_frames = 3;
+                            _history_search_scrolled_request = _history_view->request;
                         }
                     }
                     if (_selected_revision.empty() && !_history_revisions.empty())
