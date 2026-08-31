@@ -28,6 +28,38 @@ struct Revision
     std::string author_email{};
 };
 
+enum class HistoryItemKind { Commit, CollapsedRegion };
+
+struct HistoryItem
+{
+    // Stable within a repository generation. Commit item IDs are their OIDs;
+    // collapsed IDs identify the ancestry interval they summarize.
+    std::string id;
+    HistoryItemKind kind = HistoryItemKind::Commit;
+    Revision revision;
+    // Item IDs, never raw OIDs outside this view.
+    std::vector<std::string> parents;
+    bool search_match = false;
+};
+
+struct HistoryView
+{
+    std::uint64_t repository_generation = 0;
+    std::uint64_t request = 0;
+    bool skeleton = false;
+    std::string search;
+    std::vector<HistoryItem> items;
+};
+
+struct HistoryQuery
+{
+    std::vector<std::string> bookmarks;
+    std::vector<std::string> tags;
+    std::vector<std::string> remotes;
+    std::string search;
+    std::uint64_t repository_generation = 0;
+};
+
 struct NamedRef
 {
     std::string name;
@@ -77,10 +109,14 @@ struct Conflict
 
 struct RepoSnapshot
 {
+    enum class WorktreeState { Unscanned, Scanning, Ready, Stale };
     std::uint64_t generation = 0;
+    std::uint64_t repository_generation = 0;
     std::string root;
     std::string working_copy;
     std::string head;
+    // Compatibility storage for synthetic snapshots injected by UI tests.
+    // RepositoryEngine never publishes history here; HistoryReady owns it.
     std::vector<Revision> revisions;
     std::vector<NamedRef> refs;
     std::vector<StatusEntry> status;
@@ -88,6 +124,7 @@ struct RepoSnapshot
     std::vector<Workspace> workspaces;
     std::vector<Remote> remotes;
     std::vector<Conflict> conflicts;
+    WorktreeState worktree_state = WorktreeState::Unscanned;
     bool can_undo = false;
     bool can_redo = false;
 };

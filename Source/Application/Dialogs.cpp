@@ -33,8 +33,8 @@ void Application::OpenDialog(Dialog dialog)
     if (dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
-            _snapshot->revisions, [this](const Revision& revision) { return revision.oid == _selected_revision; });
-        if (selected != _snapshot->revisions.end())
+            _history_revisions, [this](const Revision& revision) { return revision.oid == _selected_revision; });
+        if (selected != _history_revisions.end())
         {
             _input_primary = selected->description;
             _input_secondary = selected->author;
@@ -372,13 +372,15 @@ void Application::RenderDialogs()
             ? _pending_drop.entire_branch ? "Squash branch" : "Squash"
             : _pending_drop.action == DropAction::Rebase
             ? _pending_drop.entire_branch ? "Rebase branch" : "Rebase"
-            : _pending_drop.action == DropAction::ReorderAfter ? "Move after" : "Move before";
+            : _pending_drop.action == DropAction::ReorderBefore
+            ? _pending_drop.copy ? "Copy as child" : "Move as child"
+            : _pending_drop.copy ? "Copy as parent" : "Move as parent";
         TextLabelledId(std::string(action) + " ", _pending_drop.source, RevisionPrefix(_pending_drop.source),
             CommitIdColor(_pending_drop.source == _snapshot->working_copy));
         TextLabelledId("Target: ", _pending_drop.target, RevisionPrefix(_pending_drop.target),
             CommitIdColor(_pending_drop.target == _snapshot->working_copy));
         int affected = 0;
-        for (const Revision& revision : _snapshot->revisions)
+        for (const Revision& revision : _history_revisions)
             affected += std::ranges::find(revision.parents, _pending_drop.source) != revision.parents.end();
         int refs = 0;
         for (const NamedRef& ref : _snapshot->refs)
@@ -524,7 +526,7 @@ void Application::SubmitDialog()
             _engine.Enqueue(Rebase{_pending_drop.source, _pending_drop.target, _pending_drop.entire_branch});
         else
             _engine.Enqueue(Reorder{
-                _pending_drop.source, _pending_drop.target, DropPlacement(_pending_drop.action)});
+                _pending_drop.source, _pending_drop.target, DropPlacement(_pending_drop.action), _pending_drop.copy});
         break;
     case Dialog::ConfirmLocked:
         for (Command& command : _pending_commands)

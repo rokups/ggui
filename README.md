@@ -4,6 +4,22 @@
 [`gg`](https://github.com/rokups/gg) change-oriented Git workflow. It uses
 Dear ImGui, SDL3, OpenGL, libgg, and libgit2.
 
+Repository opening publishes refs before the working-tree scan completes and
+builds History on a separate latest-wins worker. History first displays a
+connected skeleton for the current workspace and selected heads, then replaces
+it with up to 256 nearby commits. Ellipsis rows are real collapsed ancestry
+regions: selecting one adds up to 128 nearby commits while preserving the
+viewport anchor, and both the row and toolbar report that expansion is
+loading. Very fast expansions leave a brief “Commits loaded” acknowledgement.
+Collapsed regions never imply a relationship between unrelated
+histories and never require a full-history count.
+
+History search is debounced and runs in the repository worker. IDs, aliases,
+and refs resolve directly; descriptions are scanned only when needed, with at
+most 50 matches. Matches are highlighted and pinned into the connected graph,
+so searching does not hide the commits and collapsed regions required to
+explain their ancestry.
+
 ## Build
 
 Install `gg` to a prefix, then configure ggui with that prefix:
@@ -71,8 +87,10 @@ applies. Working-copy file menus can also delete the file from disk.
 Conflicted files stay in the normal Changes list with a red **C**. Their diff
 shows the stored conflict markers. Double-click a conflict, or use its context
 menu, to open the configured Git merge tool with base, local, and remote
-inputs. When the tool closes, ggui asks before it writes the result and marks
-the file resolved. Historical conflicts are resolved in their selected graph
+inputs. External Diff uses the same merge path for conflicted files instead of
+showing all stored sides as one custom-marker file. When the tool closes, ggui
+asks before it writes the result and marks the file resolved. Historical
+conflicts are resolved in their selected graph
 revision, with descendants restacked instead of copying over unrelated files.
 Right-click a text diff to move the clicked line, the selected lines, or
 the containing hunk to an adjacent parent or child change; unavailable targets
@@ -90,6 +108,16 @@ current repository without changing it and returns to the recent-repository
 welcome screen.
 
 The toolbar shows the closest bookmark reachable from the working-copy change.
+The Bookmarks panel controls which branches are visible in History: click to
+add or remove a branch, or Ctrl-click to show only that branch. At least one
+bookmark stays selected whenever bookmarks exist.
+No tags are selected by default. Select tags in the Tags panel to ensure their
+tagged history is found and revealed, or Ctrl-click to surface only one.
+Tags and bookmarks on commits already present in History are always shown as
+pills regardless of selection, with distinct local and remote colors. Distant tagged history stays behind collapsed
+region rows, including the path that connects it back to selected bookmark
+history.
+Bookmark, tag, and remote selections are remembered per repository.
 In History, **Up/Down** select the adjacent visible change and **N** creates a
 new child of the selected change. Author email is available as a tooltip and
 the author row's context menu supports copying or editing its identity.

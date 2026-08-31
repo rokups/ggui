@@ -2,24 +2,34 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <algorithm>
 #include <memory>
+#include <tuple>
 #include <utility>
 
 namespace Ggui
 {
 using namespace RepositoryInternal;
 
-void RepositoryEngine::Impl::Sync(bool report_progress)
+bool RepositoryEngine::Impl::Sync(bool report_progress, const std::vector<std::string>& paths)
 {
     if (gg == nullptr)
-        return;
+        return false;
     gg_operation_options options = OperationOptions(report_progress);
     Check(gg_repository_adopt_git_history_ex(gg, false, &options), "adopt external Git history");
     int changed = 0;
-    Check(gg_repository_snapshot_working_copy(&changed, gg, &options), "snapshot working copy");
+    if (paths.empty())
+        Check(gg_repository_snapshot_working_copy(&changed, gg, &options), "snapshot working copy");
+    else
+    {
+        StringArray selected(paths);
+        Check(gg_repository_snapshot_working_copy_paths(&changed, gg, selected.Get(), &options),
+            "snapshot working copy paths");
+    }
+    return changed != 0;
 }
 
-std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
+std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_worktree)
 {
     auto result = std::make_shared<RepoSnapshot>();
     result->generation = ++generation;
@@ -38,31 +48,6 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
             result->head = OidString(*target);
     }
 
-    gg_revision_query_options query = GG_REVISION_QUERY_OPTIONS_INIT;
-    query.revisions = "ancestors(all() | remote_bookmarks())";
-    Revisions revisions;
-    Check(gg_repository_revisions(&revisions.value, gg, &query), "load revisions");
-    result->revisions.reserve(revisions.value.count);
-    for (size_t index = 0; index < revisions.value.count; ++index)
-    {
-        const gg_revision& source = revisions.value.items[index];
-        Revision value;
-        value.oid = OidString(source.oid);
-        for (size_t parent = 0; parent < source.parents.count; ++parent)
-            value.parents.push_back(OidString(source.parents.ids[parent]));
-        value.aliases.reserve(source.aliases.count);
-        for (size_t alias = 0; alias < source.aliases.count; ++alias)
-            value.aliases.push_back(OidString(source.aliases.ids[alias]));
-        value.description = source.description == nullptr ? "" : source.description;
-        value.author = source.author == nullptr || source.author->name == nullptr ? "" : source.author->name;
-        value.author_email = source.author == nullptr || source.author->email == nullptr ? "" : source.author->email;
-        value.timestamp = source.committer == nullptr ? 0 : source.committer->when.time;
-        value.working_copy = value.oid == result->working_copy;
-        value.conflicted = source.has_conflicts != 0;
-        value.empty = CommitIsEmpty(git.get(), source.oid);
-        result->revisions.push_back(std::move(value));
-    }
-
     NamedRefs refs;
     Check(gg_repository_named_refs(&refs.value, gg), "load refs");
     result->refs.reserve(refs.value.count);
@@ -73,18 +58,26 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
             source.remote == nullptr ? "" : source.remote, OidString(source.target), source.kind,
             source.tracked != 0, source.conflicted != 0});
     }
-    MarkPushedRevisions(result->revisions, result->refs, git.get());
-
-    gg_status_options status_options = GG_STATUS_OPTIONS_INIT;
-    Status status;
-    Check(gg_repository_status(&status.value, gg, &status_options), "load status");
-    result->status.reserve(status.value.entry_count);
-    for (size_t index = 0; index < status.value.entry_count; ++index)
+    result->worktree_state = include_worktree || worktree_ready
+        ? RepoSnapshot::WorktreeState::Ready
+        : RepoSnapshot::WorktreeState::Unscanned;
+    if (include_worktree)
     {
-        const gg_status_entry& source = status.value.entries[index];
-        result->status.push_back({source.old_path == nullptr ? "" : source.old_path,
-            source.new_path == nullptr ? "" : source.new_path, source.status, source.conflicted != 0});
+        gg_status_options status_options = GG_STATUS_OPTIONS_INIT;
+        Status status;
+        Check(gg_repository_status(&status.value, gg, &status_options), "load status");
+        result->status.reserve(status.value.entry_count);
+        for (size_t index = 0; index < status.value.entry_count; ++index)
+        {
+            const gg_status_entry& source = status.value.entries[index];
+            result->status.push_back({source.old_path == nullptr ? "" : source.old_path,
+                source.new_path == nullptr ? "" : source.new_path, source.status, source.conflicted != 0});
+        }
+        cached_status = result->status;
+        worktree_ready = true;
     }
+    else if (worktree_ready)
+        result->status = cached_status;
 
     Operations operations;
     Check(gg_repository_operations(&operations.value, gg, 200), "load operations");
@@ -131,13 +124,33 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot()
         Check(gg_repository_conflicts(&conflicts.value, gg, &working), "load conflicts");
         AppendConflicts(result->conflicts, conflicts.value);
     }
+    {
+        std::lock_guard lock(snapshot_mutex);
+        const bool same_topology = latest_snapshot != nullptr
+            && latest_snapshot->root == result->root
+            && latest_snapshot->working_copy == result->working_copy
+            && latest_snapshot->head == result->head
+            && latest_snapshot->refs.size() == result->refs.size()
+            && std::ranges::equal(latest_snapshot->refs, result->refs, {},
+                [](const NamedRef& ref) { return std::tie(ref.name, ref.remote, ref.target, ref.kind); },
+                [](const NamedRef& ref) { return std::tie(ref.name, ref.remote, ref.target, ref.kind); });
+        result->repository_generation = same_topology && latest_snapshot != nullptr
+            ? latest_snapshot->repository_generation : ++topology_generation;
+        latest_snapshot = result;
+    }
     return result;
 }
 
-void RepositoryEngine::Impl::PublishSnapshot()
+void RepositoryEngine::Impl::PublishSnapshot(bool include_worktree)
 {
     if (gg != nullptr)
-        Post(SnapshotReady{ReadSnapshot()});
+    {
+        std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree);
+        RequestClosestBookmark(snapshot);
+        // History is request-versioned separately. The UI rebuilds it with
+        // its persisted head selections after observing this generation.
+        Post(SnapshotReady{std::move(snapshot)});
+    }
 }
 
 } // namespace Ggui

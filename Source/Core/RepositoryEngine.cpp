@@ -29,6 +29,41 @@ void RepositoryEngine::Enqueue(Command command)
     if (_impl->test_commands_suppressed)
         return;
 #endif
+    if (auto* rebuild = std::get_if<RebuildHistory>(&command))
+    {
+        _impl->RequestHistory(std::move(rebuild->query));
+        return;
+    }
+    if (auto* expand = std::get_if<ExpandHistoryRegion>(&command))
+    {
+        HistoryQuery query;
+        {
+            std::lock_guard lock(_impl->history_mutex);
+            query = _impl->active_history_query;
+        }
+        _impl->RequestHistory(std::move(query), std::move(expand->id));
+        return;
+    }
+    if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command))
+    {
+        const std::uint64_t request = ++_impl->inspector_request;
+        {
+            std::lock_guard lock(_impl->inspector_mutex);
+            // Reads are latest-wins. Running reads are allowed to finish, but
+            // their generation check prevents them from publishing stale UI.
+            _impl->inspector_requests.clear();
+            RepositoryEngine::Impl::InspectorRequest queued;
+            queued.session = _impl->session.load();
+            queued.request = request;
+            if (auto* diff = std::get_if<LoadDiff>(&command))
+                queued.command = std::move(*diff);
+            else
+                queued.command = std::move(std::get<LoadFileContent>(command));
+            _impl->inspector_requests.push_back(std::move(queued));
+        }
+        _impl->inspector_cv.notify_one();
+        return;
+    }
     {
         std::lock_guard lock(_impl->queue_mutex);
         if (std::holds_alternative<LoadDiff>(command))
@@ -36,7 +71,9 @@ void RepositoryEngine::Enqueue(Command command)
                 [](const Command& queued) { return std::holds_alternative<LoadDiff>(queued); });
         else if (std::holds_alternative<CloseRepository>(command))
             std::erase_if(_impl->commands, [](const Command& queued) {
-                return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<Refresh>(queued);
+                return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<Refresh>(queued)
+                    || std::holds_alternative<RebuildHistory>(queued)
+                    || std::holds_alternative<ExpandHistoryRegion>(queued);
             });
         _impl->commands.push_back(std::move(command));
     }
@@ -54,45 +91,25 @@ std::vector<Event> RepositoryEngine::PollEvents()
 BookmarkRelation ClassifyBookmarkRelation(
     const RepoSnapshot& snapshot, std::string_view local, std::string_view remote)
 {
-    std::unordered_map<std::string_view, const Revision*> revisions;
-    for (const Revision& revision : snapshot.revisions)
-        revisions.emplace(revision.oid, &revision);
-    if (!revisions.contains(local) || !revisions.contains(remote))
+    git_repository* raw = nullptr;
+    if (git_repository_open_ext(&raw, snapshot.root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
         return BookmarkRelation::Unavailable;
-    if (local == remote)
+    RepositoryInternal::GitRepositoryPtr repository(raw);
+    git_oid local_oid{};
+    git_oid remote_oid{};
+    const git_oid_t type = git_repository_oid_type(repository.get());
+    if (git_oid_fromstr(&local_oid, std::string(local).c_str(), type) != GIT_OK
+        || git_oid_fromstr(&remote_oid, std::string(remote).c_str(), type) != GIT_OK)
+        return BookmarkRelation::Unavailable;
+    if (git_oid_equal(&local_oid, &remote_oid) != 0)
         return BookmarkRelation::Synchronized;
-    const auto is_ancestor = [&](std::string_view ancestor, std::string_view descendant) -> std::optional<bool> {
-        std::vector<std::string_view> pending{descendant};
-        std::unordered_set<std::string_view> visited;
-        bool complete = true;
-        while (!pending.empty())
-        {
-            const std::string_view current = pending.back();
-            pending.pop_back();
-            if (!visited.emplace(current).second)
-                continue;
-            if (current == ancestor)
-                return true;
-            const auto revision = revisions.find(current);
-            if (revision == revisions.end())
-            {
-                complete = false;
-                continue;
-            }
-            for (const std::string& parent : revision->second->parents)
-                pending.push_back(parent);
-        }
-        return complete ? std::optional<bool>{false} : std::nullopt;
-    };
-
-    const std::optional<bool> local_is_ancestor = is_ancestor(local, remote);
-    const std::optional<bool> remote_is_ancestor = is_ancestor(remote, local);
-    if (local_is_ancestor == true)
+    const int local_is_ancestor = git_graph_descendant_of(repository.get(), &remote_oid, &local_oid);
+    const int remote_is_ancestor = git_graph_descendant_of(repository.get(), &local_oid, &remote_oid);
+    if (local_is_ancestor < 0 || remote_is_ancestor < 0) return BookmarkRelation::Unavailable;
+    if (local_is_ancestor != 0)
         return BookmarkRelation::RemoteAhead;
-    if (remote_is_ancestor == true)
+    if (remote_is_ancestor != 0)
         return BookmarkRelation::LocalAhead;
-    if (!local_is_ancestor.has_value() || !remote_is_ancestor.has_value())
-        return BookmarkRelation::Unavailable;
     return BookmarkRelation::Diverged;
 }
 
@@ -200,14 +217,20 @@ std::vector<std::size_t> UniquePrefixLengths(const std::vector<std::string>& val
         const std::string& second = values[order[right]];
         return static_cast<std::size_t>(std::ranges::mismatch(first, second).in1 - first.begin());
     };
-    for (std::size_t position = 0; position < order.size(); ++position)
+    for (std::size_t first = 0; first < order.size();)
     {
+        std::size_t last = first + 1;
+        while (last < order.size() && values[order[last]] == values[order[first]])
+            ++last;
         std::size_t required = 1;
-        if (position != 0)
-            required = std::max(required, common(position - 1, position) + 1);
-        if (position + 1 != order.size())
-            required = std::max(required, common(position, position + 1) + 1);
-        result[order[position]] = std::min(values[order[position]].size(), std::max(minimum, required));
+        if (first != 0)
+            required = std::max(required, common(first - 1, first) + 1);
+        if (last != order.size())
+            required = std::max(required, common(last - 1, last) + 1);
+        for (std::size_t position = first; position < last; ++position)
+            result[order[position]] =
+                std::min(values[order[position]].size(), std::max(minimum, required));
+        first = last;
     }
     return result;
 }

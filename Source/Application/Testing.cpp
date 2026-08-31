@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -74,6 +75,41 @@ const std::string& Application::SelectedFileForTest() const
 const std::vector<std::string>& Application::SelectedRevisionsForTest() const
 {
     return _selected_revisions;
+}
+
+const std::vector<std::string>& Application::VisibleBookmarksForTest() const
+{
+    return _visible_bookmarks;
+}
+
+const std::vector<std::string>& Application::SelectedTagsForTest() const
+{
+    return _selected_tags;
+}
+
+const std::vector<std::string>& Application::SelectedRemotesForTest() const
+{
+    return _selected_remotes;
+}
+
+std::vector<std::string> Application::VisibleHistoryRevisionsForTest() const
+{
+    std::vector<std::string> result;
+    if (_snapshot == nullptr) return result;
+    result.reserve(_visible_revisions.size());
+    for (const int index : _visible_revisions)
+        result.push_back(_history_revisions[static_cast<std::size_t>(index)].oid);
+    return result;
+}
+
+std::size_t Application::RenderedHistoryRowsForTest() const
+{
+    return _rendered_history_rows;
+}
+
+const std::string& Application::ActiveOperationForTest() const
+{
+    return _active_operation;
 }
 
 bool Application::DiffSideBySideForTest() const
@@ -180,6 +216,11 @@ std::pair<int, bool> Application::PendingDropActionForTest() const
     return {static_cast<int>(_pending_drop.action), _pending_drop.entire_branch};
 }
 
+bool Application::PendingDropCopyForTest() const
+{
+    return _pending_drop.copy;
+}
+
 void Application::ShowWorkspaceRenameForTest()
 {
     OpenDialog(Dialog::WorkspaceRename);
@@ -198,11 +239,43 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 #ifdef GGUI_TESTING
     _engine.SetCommandsSuppressedForTest(true);
 #endif
+    std::vector<Revision> revisions = std::move(snapshot.revisions);
+    if (snapshot.repository_generation == 0)
+        snapshot.repository_generation = snapshot.generation == 0 ? 1 : snapshot.generation;
     _snapshot = std::make_shared<RepoSnapshot>(std::move(snapshot));
+    _history_refs_by_revision.clear();
+    for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
+        _history_refs_by_revision[_snapshot->refs[index].target].push_back(index);
+    auto view = std::make_shared<HistoryView>();
+    view->repository_generation = _snapshot->repository_generation;
+    view->request = ++_history_applied_request;
+    std::unordered_set<std::string> ids;
+    for (const Revision& revision : revisions) ids.insert(revision.oid);
+    for (Revision& revision : revisions)
+    {
+        HistoryItem item;
+        item.id = revision.oid;
+        item.kind = HistoryItemKind::Commit;
+        item.revision = std::move(revision);
+        for (const std::string& parent : item.revision.parents)
+            if (ids.contains(parent)) item.parents.push_back(parent);
+        view->items.push_back(std::move(item));
+    }
+    _history_view = view;
+    _history_revisions.clear();
+    _visible_revisions.clear();
+    std::vector<GraphNode> nodes;
+    for (const HistoryItem& item : view->items)
+    {
+        _visible_revisions.push_back(static_cast<int>(_history_revisions.size()));
+        _history_revisions.push_back(item.revision);
+        nodes.push_back({item.id, item.parents});
+    }
+    _graph_rows = BuildGraphLayout(nodes);
     RebuildIdPrefixes();
     const std::string& current = CurrentCommit(*_snapshot);
     _selected_revision = current.empty()
-        ? (_snapshot->revisions.empty() ? "" : _snapshot->revisions.front().oid)
+        ? (_history_revisions.empty() ? "" : _history_revisions.front().oid)
         : current;
     _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
                                                      : std::vector{_selected_revision};
@@ -217,6 +290,54 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
     _diff_loading = false;
     _graph_generation = 0;
+    _graph_filter.clear();
+    _history_observed_filter.clear();
+    _history_requested_filter.clear();
+    _history_anchor.clear();
+    _history_expansion_pending.clear();
+    _history_expansion_feedback_until = {};
+    _visible_bookmarks.clear();
+    _visible_bookmarks_user_selected = false;
+    _selected_tags.clear();
+    _selected_remotes.clear();
+    _selected_remotes_user_selected = false;
+    _built_bookmarks.clear();
+}
+
+bool Application::HistoryLoadPendingForTest() const
+{
+    return !_reveal_revision.empty() && !RevealRevisionLoaded();
+}
+
+bool Application::HistoryExpansionPendingForTest() const
+{
+    return !_history_expansion_pending.empty();
+}
+
+bool Application::HistoryExpansionFeedbackForTest() const
+{
+    return !_history_expansion_pending.empty()
+        || std::chrono::steady_clock::now() < _history_expansion_feedback_until;
+}
+
+void Application::CancelHistorySearchForTest()
+{
+    CancelHistorySearch();
+}
+
+const std::string& Application::ErrorMessageForTest() const
+{
+    return _error_message;
+}
+
+const std::vector<Revision>& Application::HistoryRevisionsForTest() const
+{
+    return _history_revisions;
+}
+
+void Application::CreateChangeForTest(const std::string& parent)
+{
+    CreateChange(parent);
 }
 
 void Application::ClearSnapshotForTest()
@@ -315,10 +436,10 @@ int Application::DropPlacementForTest(int action)
     return DropPlacement(static_cast<DropAction>(std::clamp(action, 0, 3)));
 }
 
-std::string Application::DropTooltipForTest(int action, bool entire_branch)
+std::string Application::DropTooltipForTest(int action, bool entire_branch, bool copy)
 {
     return std::string(
-        DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), entire_branch));
+        DropTooltip(static_cast<DropAction>(std::clamp(action, 0, 3)), entire_branch, copy));
 }
 
 const std::string& Application::PendingEditorRevisionForTest() const

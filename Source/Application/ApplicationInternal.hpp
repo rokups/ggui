@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -29,10 +30,27 @@ extern "C" const unsigned int ggui_diff_font_data_len;
 namespace ApplicationInternal
 {
 
+SDL_Rect FitWindowToDisplays(SDL_Rect window, std::span<const SDL_Rect> displays);
+
 inline constexpr float kRowHeight = 34.0f;
-inline constexpr float kLaneWidth = 20.0f;
+inline constexpr float kLaneWidth = 12.0f;
 inline constexpr float kDotRadius = 5.0f;
 inline constexpr float kGraphPadding = 12.0f;
+
+inline float HistoryLaneWidth(float available_width, int columns)
+{
+    if (columns <= 0) return kLaneWidth;
+    // Keep the graph compact, like traditional commit-log renderers, while
+    // still compressing unusually wide merge histories enough to leave the
+    // description useful.
+    const float graph_budget = std::max(1.0f, available_width * 0.35f - kGraphPadding * 2.0f);
+    return std::clamp(graph_budget / static_cast<float>(columns), 3.0f, kLaneWidth);
+}
+
+inline float HistoryContentOffset(float lane_width, int row_columns)
+{
+    return std::max(1, row_columns) * lane_width + kGraphPadding * 2.0f + 8.0f;
+}
 
 inline constexpr ImU32 kTextMuted = IM_COL32(125, 133, 144, 255);
 inline constexpr ImU32 kBadgeTextMuted = IM_COL32(255, 255, 255, 145);

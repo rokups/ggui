@@ -8,11 +8,168 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 namespace Ggui
 {
 using namespace ApplicationInternal;
+
+void Application::EnsureRemoteSelection()
+{
+    if (_snapshot == nullptr)
+    {
+        _selected_remotes.clear();
+        return;
+    }
+    std::erase_if(_selected_remotes, [this](const std::string& name) {
+        return std::ranges::find(_snapshot->remotes, name, &Remote::name) == _snapshot->remotes.end();
+    });
+    if (_selected_remotes.empty())
+        _selected_remotes_user_selected = false;
+    if (_selected_remotes_user_selected || _snapshot->remotes.empty())
+        return;
+    const auto origin = std::ranges::find(_snapshot->remotes, "origin", &Remote::name);
+    if (origin != _snapshot->remotes.end())
+        _selected_remotes = {origin->name};
+    else if (_selected_remotes.empty())
+        _selected_remotes = {_snapshot->remotes.front().name};
+}
+
+bool Application::IsSelectedRemote(std::string_view remote) const
+{
+    return std::ranges::find(_selected_remotes, remote) != _selected_remotes.end();
+}
+
+bool Application::IsVisibleBookmarkRef(const NamedRef& ref) const
+{
+    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+        || (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && IsSelectedRemote(ref.remote));
+}
+
+void Application::RestoreRepositorySelections(const std::string& root)
+{
+    _selected_remotes.clear();
+    _selected_remotes_user_selected = false;
+    if (const auto found = _repository_selected_remotes.find(root);
+        found != _repository_selected_remotes.end())
+    {
+        _selected_remotes = found->second;
+        _selected_remotes_user_selected = true;
+    }
+    EnsureRemoteSelection();
+
+    _visible_bookmarks.clear();
+    _visible_bookmarks_user_selected = false;
+    if (const auto found = _repository_visible_bookmarks.find(root);
+        found != _repository_visible_bookmarks.end())
+    {
+        _visible_bookmarks = found->second;
+        _visible_bookmarks_user_selected = true;
+    }
+    EnsureVisibleBookmarkSelection();
+
+    _selected_tags.clear();
+    if (const auto found = _repository_selected_tags.find(root);
+        found != _repository_selected_tags.end())
+        _selected_tags = found->second;
+    EnsureTagSelection();
+}
+
+void Application::RememberRepositorySelections()
+{
+    if (_snapshot == nullptr || _snapshot->root.empty())
+        return;
+    _repository_selected_remotes[_snapshot->root] = _selected_remotes;
+    _repository_visible_bookmarks[_snapshot->root] = _visible_bookmarks;
+    _repository_selected_tags[_snapshot->root] = _selected_tags;
+}
+
+void Application::EnsureTagSelection()
+{
+    if (_snapshot == nullptr)
+    {
+        _selected_tags.clear();
+        return;
+    }
+    std::erase_if(_selected_tags, [this](const std::string& name) {
+        return std::ranges::none_of(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.name == name
+                && (ref.kind == GG_NAMED_REF_LOCAL_TAG || ref.kind == GG_NAMED_REF_REMOTE_TAG);
+        });
+    });
+}
+
+void Application::EnsureVisibleBookmarkSelection()
+{
+    if (_snapshot == nullptr)
+    {
+        _visible_bookmarks.clear();
+        return;
+    }
+    const auto exists = [this](const std::string& name) {
+        return std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.name == name && IsVisibleBookmarkRef(ref);
+        });
+    };
+    std::erase_if(_visible_bookmarks, [&](const std::string& name) { return !exists(name); });
+    if (_visible_bookmarks.empty())
+        _visible_bookmarks_user_selected = false;
+    if (_visible_bookmarks_user_selected)
+        return;
+
+    const std::string current = CurrentCommit(*_snapshot);
+    std::vector<std::string> pending{current};
+    std::unordered_set<std::string> visited;
+    const NamedRef* closest = nullptr;
+    for (std::size_t index = 0; index < pending.size() && closest == nullptr; ++index)
+    {
+        if (!visited.emplace(pending[index]).second)
+            continue;
+        const auto bookmark = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.target == pending[index] && IsVisibleBookmarkRef(ref);
+        });
+        if (bookmark != _snapshot->refs.end())
+            closest = &*bookmark;
+        else if (const auto revision = std::ranges::find(_history_revisions, pending[index], &Revision::oid);
+            revision != _history_revisions.end())
+            pending.insert(pending.end(), revision->parents.begin(), revision->parents.end());
+    }
+    if (closest != nullptr)
+    {
+        _visible_bookmarks = {closest->name};
+        return;
+    }
+    if (!_visible_bookmarks.empty())
+        return;
+    const auto first = std::ranges::find_if(
+        _snapshot->refs, [this](const NamedRef& ref) { return IsVisibleBookmarkRef(ref); });
+    if (first != _snapshot->refs.end())
+        _visible_bookmarks.push_back(first->name);
+}
+
+std::string Application::VisibleBookmarksKey() const
+{
+    std::vector<std::string> names = _visible_bookmarks;
+    std::ranges::sort(names);
+    std::string result;
+    for (const std::string& name : names)
+    {
+        result += name;
+        result.push_back('\n');
+    }
+    names = _selected_remotes;
+    std::ranges::sort(names);
+    for (const std::string& name : names)
+        result += "remote:" + name + '\n';
+    names = _selected_tags;
+    std::ranges::sort(names);
+    for (const std::string& name : names)
+        result += "tag:" + name + '\n';
+    if (!_reveal_revision.empty())
+        result += "reveal:" + _reveal_revision + '\n';
+    return result;
+}
 
 void Application::RenderBookmarks()
 {
@@ -32,9 +189,16 @@ void Application::RenderBookmarks()
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
 
+    EnsureRemoteSelection();
+    EnsureVisibleBookmarkSelection();
+
+    std::vector<NamedRef> bookmark_refs;
+    std::ranges::copy_if(_snapshot->refs, std::back_inserter(bookmark_refs),
+        [this](const NamedRef& ref) { return IsVisibleBookmarkRef(ref); });
+
     // Unique bookmark names
     std::vector<std::string> names;
-    for (const NamedRef& ref : _snapshot->refs)
+    for (const NamedRef& ref : bookmark_refs)
     {
         if ((ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
             || std::ranges::find(names, ref.name) != names.end())
@@ -42,24 +206,36 @@ void Application::RenderBookmarks()
         names.push_back(ref.name);
     }
 
-    // Bookmark rows
+    // Bookmark rows. Keep the controls above fixed while long bookmark lists
+    // scroll independently.
+    ImGui::BeginChild("bookmark list", {}, ImGuiChildFlags_Borders);
     for (const std::string& name : names)
     {
         if (!ContainsInsensitive(name, _bookmark_filter))
             continue;
-        const auto local = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+        const auto local = std::ranges::find_if(bookmark_refs, [&](const NamedRef& ref) {
             return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
         });
-        const auto remote_ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+        const auto remote_ref = std::ranges::find_if(bookmark_refs, [&](const NamedRef& ref) {
             return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
         });
-        const NamedRef& ref = local != _snapshot->refs.end() ? *local : *remote_ref;
-        const std::string remotes = RefRemotes(_snapshot->refs, name, GG_NAMED_REF_REMOTE_BOOKMARK);
+        const NamedRef& ref = local != bookmark_refs.end() ? *local : *remote_ref;
+        const std::string remotes = RefRemotes(bookmark_refs, name, GG_NAMED_REF_REMOTE_BOOKMARK);
         ImGui::PushID(name.c_str());
         bool elided = false;
-        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
-                BookmarkBadgeColor(name, _snapshot->refs), {}, &elided))
-            SelectRevision(ref.target);
+        const auto selected = std::ranges::find(_visible_bookmarks, name);
+        if (BadgedSelectable(name, selected != _visible_bookmarks.end(), 36.0f,
+                BookmarkBadgeColor(name, bookmark_refs), {}, &elided))
+        {
+            _visible_bookmarks_user_selected = true;
+            if (ImGui::GetIO().KeyCtrl)
+                _visible_bookmarks = {name};
+            else if (selected == _visible_bookmarks.end())
+                _visible_bookmarks.push_back(name);
+            else if (_visible_bookmarks.size() > 1)
+                _visible_bookmarks.erase(selected);
+            RememberRepositorySelections();
+        }
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -73,14 +249,12 @@ void Application::RenderBookmarks()
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(name.c_str());
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
-            const auto tracked = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
+            const auto tracked = std::ranges::find_if(bookmark_refs, [&](const NamedRef& candidate) {
                 return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name;
             });
-            const std::string remote = tracked != _snapshot->refs.end() ? tracked->remote
-                : std::ranges::any_of(_snapshot->remotes, [](const Remote& candidate) { return candidate.name == "origin"; })
-                ? "origin"
-                : _snapshot->remotes.empty() ? "" : _snapshot->remotes.front().name;
-            const bool has_local = local != _snapshot->refs.end();
+            const std::string remote = tracked != bookmark_refs.end() ? tracked->remote
+                : _selected_remotes.empty() ? "" : _selected_remotes.front();
+            const bool has_local = local != bookmark_refs.end();
             if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, has_local && !remote.empty()))
                 _engine.Enqueue(Push{name, remote});
             if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
@@ -147,6 +321,7 @@ void Application::RenderBookmarks()
         }
         ImGui::PopID();
     }
+    ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::End();
 }
@@ -167,6 +342,8 @@ void Application::RenderTags()
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##tag filter", "Filter tags", &_tag_filter);
+
+    EnsureTagSelection();
 
     // Unique tag names
     std::vector<std::string> names;
@@ -193,9 +370,26 @@ void Application::RenderTags()
         const std::string remotes = RefRemotes(_snapshot->refs, name, GG_NAMED_REF_REMOTE_TAG);
         ImGui::PushID(name.c_str());
         bool elided = false;
-        if (BadgedSelectable(name, ref.target == _selected_revision, 36.0f,
+        const auto selected = std::ranges::find(_selected_tags, name);
+        if (BadgedSelectable(name, selected != _selected_tags.end(), 36.0f,
                 RefBadgeColor(ref, _snapshot->refs), {}, &elided))
-            SelectRevision(ref.target);
+        {
+            bool reveal = false;
+            if (ImGui::GetIO().KeyCtrl)
+            {
+                _selected_tags = {name};
+                reveal = true;
+            }
+            else if (selected == _selected_tags.end())
+            {
+                _selected_tags.push_back(name);
+                reveal = true;
+            }
+            else
+                _selected_tags.erase(selected);
+            RememberRepositorySelections();
+            if (reveal) RevealRevision(ref.target);
+        }
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -323,13 +517,29 @@ void Application::RenderRemotes()
     if (ActionButton(ICON_MS_ADD, "Add remote", ImVec2(-1.0f, 0.0f))) OpenDialog(Dialog::RemoteAdd);
     ImGui::EndDisabled();
 
+    EnsureRemoteSelection();
+
     // Remote rows
+    ImGui::BeginChild("remote list", {}, ImGuiChildFlags_Borders);
     for (const Remote& remote : _snapshot->remotes)
     {
         ImGui::PushID(&remote);
         const bool separate_push = !remote.push_url.empty() && remote.push_url != remote.fetch_url;
         bool elided = false;
-        BadgedSelectable(remote.name, false, separate_push ? 56.0f : 40.0f, kBadgeRemote, {}, &elided);
+        const auto selected = std::ranges::find(_selected_remotes, remote.name);
+        if (BadgedSelectable(remote.name, selected != _selected_remotes.end(),
+                separate_push ? 56.0f : 40.0f, kBadgeRemote, {}, &elided))
+        {
+            _selected_remotes_user_selected = true;
+            if (ImGui::GetIO().KeyCtrl)
+                _selected_remotes = {remote.name};
+            else if (selected == _selected_remotes.end())
+                _selected_remotes.push_back(remote.name);
+            else if (_selected_remotes.size() > 1)
+                _selected_remotes.erase(selected);
+            EnsureVisibleBookmarkSelection();
+            RememberRepositorySelections();
+        }
         const bool hovered = ImGui::IsItemHovered();
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -365,6 +575,7 @@ void Application::RenderRemotes()
         }
         ImGui::PopID();
     }
+    ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::End();
 }

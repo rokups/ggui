@@ -6,42 +6,48 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <chrono>
+#include <limits>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 namespace Ggui
 {
 using namespace ApplicationInternal;
 
-void Application::RebuildGraph()
+void Application::UpdateGraphBuild()
 {
-    _visible_revisions.clear();
-    std::vector<GraphNode> nodes;
-    for (int index = 0; index < static_cast<int>(_snapshot->revisions.size()); ++index)
+    if (_snapshot == nullptr) return;
+    EnsureRemoteSelection();
+    EnsureVisibleBookmarkSelection();
+    EnsureTagSelection();
+    const std::string key = VisibleBookmarksKey();
+    const auto now = std::chrono::steady_clock::now();
+    if (_history_observed_filter != _graph_filter)
     {
-        const Revision& revision = _snapshot->revisions[index];
-        bool matches = _graph_filter.empty() || ContainsInsensitive(revision.description, _graph_filter)
-            || ContainsInsensitive(revision.oid, _graph_filter)
-            || std::ranges::any_of(revision.aliases,
-                [&](const std::string& alias) { return ContainsInsensitive(alias, _graph_filter); });
-        if (!matches)
-        {
-            matches = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-                return ref.target == revision.oid && ContainsInsensitive(ReferenceLabel(ref), _graph_filter);
-            });
-        }
-        if (matches)
-        {
-            _visible_revisions.push_back(index);
-            nodes.push_back({revision.oid, revision.parents});
-        }
+        _history_observed_filter = _graph_filter;
+        _history_filter_changed = now;
     }
-    _graph_rows = BuildGraphLayout(nodes);
-    _graph_generation = _snapshot->generation;
-    _built_filter = _graph_filter;
+    const bool filter_ready = _graph_filter.empty()
+        || now - _history_filter_changed >= std::chrono::milliseconds(200);
+    if (!filter_ready) return;
+    if (_history_requested_generation == _snapshot->repository_generation
+        && _history_requested_key == key && _history_requested_filter == _graph_filter)
+        return;
+    HistoryQuery query;
+    query.bookmarks = _visible_bookmarks;
+    query.tags = _selected_tags;
+    query.remotes = _selected_remotes;
+    query.search = _graph_filter;
+    query.repository_generation = _snapshot->repository_generation;
+    _engine.Enqueue(RebuildHistory{std::move(query)});
+    _history_requested_generation = _snapshot->repository_generation;
+    _history_requested_key = key;
+    _history_requested_filter = _graph_filter;
 }
 
 void Application::RebuildIdPrefixes()
@@ -53,18 +59,39 @@ void Application::RebuildIdPrefixes()
             destination.emplace(values[index], lengths[index]);
     };
     std::vector<std::string> revision_ids;
-    revision_ids.reserve(_snapshot->revisions.size());
-    for (const Revision& revision : _snapshot->revisions)
+    for (const Revision& revision : _history_revisions)
     {
         revision_ids.push_back(revision.oid);
         revision_ids.insert(revision_ids.end(), revision.aliases.begin(), revision.aliases.end());
     }
     std::vector<std::string> operation_ids;
-    operation_ids.reserve(_snapshot->operations.size());
-    for (const Operation& operation : _snapshot->operations)
-        operation_ids.push_back(operation.oid);
+    for (const Operation& operation : _snapshot->operations) operation_ids.push_back(operation.oid);
     build(revision_ids, _revision_prefixes);
     build(operation_ids, _operation_prefixes);
+}
+
+bool Application::RevealRevisionLoaded() const
+{
+    return !_reveal_revision.empty() && std::ranges::any_of(_history_revisions, [this](const Revision& revision) {
+        return revision.oid == _reveal_revision
+            || std::ranges::find(revision.aliases, _reveal_revision) != revision.aliases.end();
+    });
+}
+
+bool Application::HistoryTargetConnected(std::string_view target) const
+{
+    return _history_view != nullptr && std::ranges::any_of(_history_view->items, [&](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit && (item.revision.oid == target
+            || std::ranges::find(item.revision.aliases, target) != item.revision.aliases.end());
+    });
+}
+
+void Application::ExpandGraphRow(std::size_t visible_row, bool)
+{
+    if (_history_view == nullptr || visible_row >= _history_view->items.size()) return;
+    const HistoryItem& item = _history_view->items[visible_row];
+    if (item.kind == HistoryItemKind::CollapsedRegion)
+        _engine.Enqueue(ExpandHistoryRegion{item.id});
 }
 
 std::size_t Application::RevisionPrefix(const std::string& oid) const
@@ -81,537 +108,351 @@ std::size_t Application::OperationPrefix(const std::string& oid) const
 
 void Application::RenderHistory()
 {
-    // History window and filter
     if (!_reveal_revision.empty()) ImGui::SetNextWindowFocus();
-    if (!ImGui::Begin("History", &_show_history))
-    {
-        ImGui::End();
-        return;
-    }
-    const bool actions_locked = !_active_operation.empty();
+    if (!ImGui::Begin("History", &_show_history)) { ImGui::End(); return; }
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##graph filter", "Filter changes, IDs, bookmarks, tags", &_graph_filter);
-    if (_graph_generation != _snapshot->generation || _built_filter != _graph_filter)
-        RebuildGraph();
-
-    // Scrollable revision graph
+    ImGui::InputTextWithHint("##graph filter", "Search changes, IDs, bookmarks, tags", &_graph_filter);
+    UpdateGraphBuild();
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
 
-    // Reveal requested revision
-    if (!_reveal_revision.empty())
+    const bool usable = _history_view != nullptr
+        && _history_view->items.size() == _graph_rows.size()
+        && _history_view->items.size() == _visible_revisions.size();
+    if (!_reveal_revision.empty() && usable)
     {
-        const auto target = std::ranges::find_if(_visible_revisions, [&](int index) {
-            return _snapshot->revisions[index].oid == _reveal_revision;
+        const auto found = std::ranges::find_if(_history_view->items, [this](const HistoryItem& item) {
+            return item.kind == HistoryItemKind::Commit && (item.revision.oid == _reveal_revision
+                || std::ranges::find(item.revision.aliases, _reveal_revision) != item.revision.aliases.end());
         });
-        if (target != _visible_revisions.end())
+        if (found != _history_view->items.end())
         {
-            const float row = static_cast<float>(target - _visible_revisions.begin()) * kRowHeight;
-            const float viewport = ImGui::GetContentRegionAvail().y;
-            ImGui::SetScrollY(std::max(0.0f, row - (viewport - kRowHeight) * 0.5f));
+            const float row = static_cast<float>(found - _history_view->items.begin()) * kRowHeight;
+            ImGui::SetScrollY(std::max(0.0f, row - ImGui::GetContentRegionAvail().y * 0.5f));
+            SelectRevision(found->revision.oid);
+            _reveal_revision.clear();
         }
-        _reveal_revision.clear();
     }
 
-    // History keyboard actions and revision navigation
     const ImGuiIO& io = ImGui::GetIO();
-    const bool history_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
-    const bool action_hotkeys = history_focused && !io.WantTextInput && !io.KeyCtrl && !io.KeySuper
-        && _dialog == Dialog::None && _active_operation.empty() && !_selected_revision.empty();
-    if (action_hotkeys)
+    const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    if (usable && focused && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper
+        && (ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat)
+            || ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat)))
     {
-        if (!io.KeyAlt && !io.KeyShift)
-        {
-            if (ImGui::IsKeyPressed(ImGuiKey_E))
-                _engine.Enqueue(Edit{_selected_revision});
-            if (ImGui::IsKeyPressed(ImGuiKey_N))
-                CreateChange(_selected_revision);
-            if (ImGui::IsKeyPressed(ImGuiKey_D))
-                _engine.Enqueue(Duplicate{_selected_revision, false});
-            if (ImGui::IsKeyPressed(ImGuiKey_A))
-                RequestAbandon(_selected_revision);
-        }
-        if (!io.KeyAlt && io.KeyShift)
-        {
-            if (ImGui::IsKeyPressed(ImGuiKey_D))
-                _engine.Enqueue(Duplicate{_selected_revision, true});
-            if (ImGui::IsKeyPressed(ImGuiKey_A))
-                RequestAbandon(_selected_revision, true);
-            if (ImGui::IsKeyPressed(ImGuiKey_S))
-                OpenDialog(Dialog::Squash);
-        }
-        if (io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S))
-            OpenDialog(Dialog::Split);
-    }
-    const bool keyboard_navigation = !io.WantTextInput && !io.KeyCtrl && !io.KeyShift && !io.KeyAlt && !io.KeySuper
-        && history_focused;
-    const ImGuiID navigation_owner = ImGui::GetID("history arrow navigation");
-    if (keyboard_navigation)
-    {
-        ImGui::SetKeyOwner(ImGuiKey_UpArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
-        ImGui::SetKeyOwner(ImGuiKey_DownArrow, navigation_owner, ImGuiInputFlags_LockThisFrame);
-    }
-    const bool navigate_up = keyboard_navigation
-        && ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat, navigation_owner);
-    const bool navigate_down = keyboard_navigation
-        && ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat, navigation_owner);
-    if ((navigate_up || navigate_down) && !_visible_revisions.empty())
-    {
-        const int direction = navigate_down ? 1 : -1;
-        const auto selected = std::ranges::find_if(_visible_revisions, [&](int index) {
-            return _snapshot->revisions[index].oid == _selected_revision;
-        });
-        const int current = selected == _visible_revisions.end()
-            ? (direction > 0 ? -1 : static_cast<int>(_visible_revisions.size()))
-            : static_cast<int>(selected - _visible_revisions.begin());
-        const int target = std::clamp(current + direction, 0, static_cast<int>(_visible_revisions.size()) - 1);
-        if (target != current)
-        {
-            SelectRevision(_snapshot->revisions[_visible_revisions[static_cast<std::size_t>(target)]].oid);
-            const float target_y = target * kRowHeight;
-            const float viewport = ImGui::GetContentRegionAvail().y;
-            if (target_y < ImGui::GetScrollY())
-                ImGui::SetScrollY(target_y);
-            else if (target_y + kRowHeight > ImGui::GetScrollY() + viewport)
-                ImGui::SetScrollY(target_y + kRowHeight - viewport);
-        }
+        const int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
+        int current = -1;
+        for (int index = 0; index < static_cast<int>(_history_view->items.size()); ++index)
+            if (_history_view->items[static_cast<std::size_t>(index)].kind == HistoryItemKind::Commit
+                && _history_view->items[static_cast<std::size_t>(index)].revision.oid == _selected_revision)
+                current = index;
+        for (int index = current + direction; index >= 0
+            && index < static_cast<int>(_history_view->items.size()); index += direction)
+            if (_history_view->items[static_cast<std::size_t>(index)].kind == HistoryItemKind::Commit)
+            {
+                SelectRevision(_history_view->items[static_cast<std::size_t>(index)].revision.oid);
+                ImGui::SetScrollY(std::max(0.0f, index * kRowHeight - ImGui::GetContentRegionAvail().y * 0.5f));
+                break;
+            }
     }
 
-    // History draws custom drop indicators for its rows and final drop zone.
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    int graph_columns = 1;
+    for (const GraphRow& row : _graph_rows) graph_columns = std::max(graph_columns, GraphColumnCount(row));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    // The stock ImGui target frame obscures both the graph and our action-specific
+    // feedback. History renders a precise insertion line or commit-content border instead.
     ImGui::PushStyleColor(ImGuiCol_DragDropTarget, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_DragDropTargetBg, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-
-    // Visible revision rows
+    std::optional<std::pair<ImVec2, ImVec2>> reorder_marker;
     ImGuiListClipper clipper;
-    clipper.Begin(static_cast<int>(_visible_revisions.size()), kRowHeight);
-    ImDrawList* draw = ImGui::GetWindowDrawList();
+    clipper.Begin(usable ? static_cast<int>(_history_view->items.size()) : 0, kRowHeight);
+    _rendered_history_rows = 0;
     while (clipper.Step())
-    {
-        for (int visible = clipper.DisplayStart; visible < clipper.DisplayEnd; ++visible)
+        for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
         {
-            const Revision& revision = _snapshot->revisions[_visible_revisions[visible]];
-            const GraphRow& row = _graph_rows[visible];
-            ImGui::PushID(revision.oid.c_str());
-            const int row_column_count = GraphColumnCount(row);
+            ++_rendered_history_rows;
+            const HistoryItem& item = _history_view->items[static_cast<std::size_t>(index)];
+            const GraphRow& row = _graph_rows[static_cast<std::size_t>(index)];
+            ImGui::PushID(item.id.c_str());
             const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
-            ImGui::InvisibleButton("row", ImVec2(width, kRowHeight),
-                ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+            const bool region = item.kind == HistoryItemKind::CollapsedRegion;
+            if (region)
+                ImGui::Dummy(ImVec2(width, kRowHeight));
+            else
+                ImGui::InvisibleButton("row", ImVec2(width, kRowHeight),
+                    ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
             const ImVec2 minimum = ImGui::GetItemRectMin();
             const ImVec2 maximum = ImGui::GetItemRectMax();
             const float center = (minimum.y + maximum.y) * 0.5f;
-            const bool selected = std::ranges::find(_selected_revisions, revision.oid) != _selected_revisions.end();
-            const bool current = revision.oid == CurrentCommit(*_snapshot);
-            const bool hovered = ImGui::IsItemHovered();
-            if (ImGui::IsItemClicked()) SelectRevision(revision.oid, ImGui::GetIO().KeyCtrl);
+            const float lane_width = HistoryLaneWidth(width, graph_columns);
+            const bool hovered = region ? ImGui::IsMouseHoveringRect(minimum, maximum)
+                                        : ImGui::IsItemHovered();
+            const bool clicked = !region && ImGui::IsItemClicked();
+            const bool region_clicked = region && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            const bool selected = !region
+                && std::ranges::find(_selected_revisions, item.revision.oid) != _selected_revisions.end();
+            const ImU32 background = selected ? kRowSelected : hovered ? kRowHover : kRowBackground;
+            draw->AddRectFilled(minimum, maximum, background, 5.0f);
+            if (item.search_match) draw->AddRect(minimum, maximum, IM_COL32(220, 170, 70, 255), 5.0f, 0, 2.0f);
 
-            // Revision drag source
-            if (!actions_locked && ImGui::BeginDragDropSource(
-                    ImGuiDragDropFlags_SourceAllowNullID | ImGuiDragDropFlags_SourceNoPreviewTooltip))
+            const float graph_left = minimum.x + kGraphPadding;
+            const auto lane_x = [&](int column) { return graph_left + column * lane_width + lane_width * 0.5f; };
+            const auto color = [](int track) { return kLaneColors[static_cast<std::size_t>(track) % kLaneColors.size()]; };
+            const float dot_x = lane_x(row.column);
+            // Route pass-by lanes by their stable track identity instead of
+            // joining whatever happens to occupy the same column above and
+            // below this row. Curves make column compaction readable without
+            // implying a relationship to the commit bullet.
+            for (std::size_t before = 0; before < row.tracks_before.size(); ++before)
             {
-                const bool choose_action = ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Right;
-                ImGui::SetDragDropPayload(
-                    choose_action ? "GGUI_CHANGE_ACTION" : "GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
-                ImGui::EndDragDropSource();
+                const int track = row.tracks_before[before];
+                if (track == row.track)
+                {
+                    draw->AddBezierQuadratic({lane_x(static_cast<int>(before)), minimum.y},
+                        {lane_x(static_cast<int>(before)), center}, {dot_x, center}, color(track), 2.0f);
+                    continue;
+                }
+                auto after = std::ranges::find(row.tracks_after, track);
+                if (after != row.tracks_after.end())
+                {
+                    const int after_column = static_cast<int>(after - row.tracks_after.begin());
+                    draw->AddBezierCubic({lane_x(static_cast<int>(before)), minimum.y},
+                        {lane_x(static_cast<int>(before)), center}, {lane_x(after_column), center},
+                        {lane_x(after_column), maximum.y}, color(track), 2.0f);
+                }
+            }
+            for (std::size_t parent_index = 0; parent_index < row.parent_columns.size(); ++parent_index)
+            {
+                const int parent = row.parent_columns[parent_index];
+                draw->AddBezierQuadratic({dot_x, center}, {lane_x(parent), center},
+                    {lane_x(parent), maximum.y}, color(row.parent_tracks[parent_index]), 2.0f);
             }
 
-            // Revision and file drop target
+            const float content_x = minimum.x
+                + HistoryContentOffset(lane_width, GraphColumnCount(row));
+            if (region)
+            {
+                draw->AddCircleFilled({dot_x, center}, std::min(3.0f, lane_width * 0.3f), kTextMuted);
+                const std::string label = _history_expansion_pending == item.id ? "Loading..." : "...";
+                const ImVec2 after_row = ImGui::GetCursorScreenPos();
+                const ImVec2 label_size = ImGui::CalcTextSize(label.c_str());
+                const ImVec2 label_position{content_x, center - label_size.y * 0.5f};
+                ImGui::SetCursorScreenPos(label_position);
+                const bool expand = ImGui::InvisibleButton(label.c_str(), label_size);
+                const bool show_more_hovered = ImGui::IsItemHovered();
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                const ImGuiID show_more_id = ImGui::GetItemID();
+#endif
+                if (show_more_hovered)
+                {
+                    ImGui::BeginTooltip(); ImGui::TextUnformatted("Show more"); ImGui::EndTooltip();
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                    ImGuiContext& g = *GImGui;
+                    ImGuiTestEngineHook_ItemInfo(
+                        &g, show_more_id, "Show more", g.LastItemData.StatusFlags);
+#endif
+                }
+                draw->AddText(label_position,
+                    show_more_hovered ? IM_COL32(90, 150, 255, 255) : kTextMuted, label.c_str());
+                ImGui::SetCursorScreenPos(after_row);
+                if ((expand || region_clicked) && _history_expansion_pending.empty())
+                {
+                    int anchor = index - 1;
+                    while (anchor >= 0
+                        && _history_view->items[static_cast<std::size_t>(anchor)].kind != HistoryItemKind::Commit)
+                        --anchor;
+                    if (anchor < 0)
+                    {
+                        anchor = index + 1;
+                        while (anchor < static_cast<int>(_history_view->items.size())
+                            && _history_view->items[static_cast<std::size_t>(anchor)].kind
+                                != HistoryItemKind::Commit)
+                            ++anchor;
+                    }
+                    if (anchor >= 0 && anchor < static_cast<int>(_history_view->items.size()))
+                    {
+                        _history_anchor = _history_view->items[static_cast<std::size_t>(anchor)].revision.oid;
+                        _history_anchor_offset = anchor * kRowHeight - ImGui::GetScrollY();
+                    }
+                    _history_expansion_pending = item.id;
+                    _engine.Enqueue(ExpandHistoryRegion{item.id});
+                }
+                ImGui::PopID();
+                continue;
+            }
+
+            const Revision& revision = item.revision;
+            if (clicked) SelectRevision(revision.oid, io.KeyCtrl);
+            draw->AddCircleFilled({dot_x, center}, std::min(kDotRadius, lane_width * 0.35f),
+                revision.conflicted ? kStatusConflict : revision.working_copy ? kWorkingCommitId
+                    : revision.pushed ? kStatusPushed : kStatusUnpushed);
+            const std::string title = FirstLine(revision.description);
+            ImVec2 cursor{content_x, center - ImGui::GetTextLineHeight() * 0.5f};
+            std::vector<std::pair<std::string, ImU32>> badges;
+            if (const auto refs = _history_refs_by_revision.find(revision.oid);
+                refs != _history_refs_by_revision.end())
+                for (const std::size_t ref_index : refs->second)
+                {
+                    const NamedRef& ref = _snapshot->refs[ref_index];
+                    const bool remote = ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK
+                        || ref.kind == GG_NAMED_REF_REMOTE_TAG;
+                    const ImU32 badge_color = remote ? kBadgeRemote
+                        : ref.kind == GG_NAMED_REF_LOCAL_TAG ? kBadgeTag : kBadgeBookmark;
+                    badges.emplace_back(ReferenceLabel(ref), badge_color);
+                }
+            const std::string_view shown = title.empty() ? "(no description)" : std::string_view(title);
+            const float content_right = maximum.x - 12.0f;
+            float badge_width = 0.0f;
+            for (const auto& [label, color] : badges)
+            {
+                (void)color;
+                badge_width += ImGui::CalcTextSize(label.c_str()).x + FontPx(20.0f);
+            }
+            const float message_right = badges.empty() ? content_right
+                : std::max(content_x, content_right - badge_width - FontPx(6.0f));
+            DrawElidedText(draw, cursor, message_right, shown, ImGui::GetColorU32(ImGuiCol_Text));
+            cursor.x += std::min(ImGui::CalcTextSize(shown.data(), shown.data() + shown.size()).x,
+                std::max(0.0f, message_right - cursor.x));
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+            {
+                ImGuiContext& g = *GImGui;
+                const ImGuiID message_id = ImGui::GetID("commit message");
+                const ImRect message_rect({content_x, minimum.y}, {cursor.x, maximum.y});
+                IMGUI_TEST_ENGINE_ITEM_ADD(message_id, message_rect, nullptr);
+                ImGuiTestEngineHook_ItemInfo(
+                    &g, message_id, std::string(shown).c_str(), ImGuiItemStatusFlags_None);
+            }
+#endif
+            if (!badges.empty()) cursor.x += FontPx(6.0f);
+            for (const auto& [ref_label, badge_color] : badges)
+            {
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                const ImVec2 badge_start = cursor;
+#endif
+                DrawBadge(draw, cursor, center, ref_label, badge_color);
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                {
+                    ImGuiContext& g = *GImGui;
+                    const std::string item_label = "ref:" + ref_label;
+                    const ImGuiID badge_id = ImGui::GetID(item_label.c_str());
+                    const ImRect badge_rect({badge_start.x, minimum.y}, {cursor.x, maximum.y});
+                    IMGUI_TEST_ENGINE_ITEM_ADD(badge_id, badge_rect, nullptr);
+                    ImGuiTestEngineHook_ItemInfo(
+                        &g, badge_id, ref_label.c_str(), ImGuiItemStatusFlags_None);
+                }
+#endif
+            }
+
+            const bool actions_locked = !_active_operation.empty();
+            if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
+            {
+                // Ctrl is the copy modifier during a drag, not a request to
+                // toggle the dragged commit out of the current selection.
+                if (io.KeyCtrl
+                    && std::ranges::find(_selected_revisions, revision.oid) == _selected_revisions.end())
+                    SelectRevision(revision.oid, true);
+                ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
+                ImGui::EndDragDropSource();
+            }
             std::optional<DropAction> hovered_drop;
-            ImVec2 drop_zone_minimum{};
-            ImVec2 drop_zone_maximum{};
-            ImU32 drop_outline_color = 0;
-            bool hovered_action_drop = false;
+            bool hovered_entire_branch = false;
+            bool hovered_copy = false;
             if (!actions_locked && ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
                 const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
-                bool hovered_entire_branch = false;
                 if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
                 {
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
                         : ratio >= 0.8f                 ? DropAction::ReorderAfter
-                        : ImGui::GetIO().KeyAlt         ? DropAction::Rebase
-                                                       : DropAction::Squash;
-                    hovered_entire_branch = ratio >= 0.2f && ratio < 0.8f && ImGui::GetIO().KeyShift;
-                    const std::string_view hint = ratio >= 0.2f && ratio < 0.8f
-                        ? "No modifier: squash change | Shift: squash entire branch\n"
-                          "Alt: rebase change | Alt+Shift: rebase entire branch"
-                        : std::string_view{};
-                    RenderRevisionTooltip(
-                        DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
+                        : io.KeyAlt                     ? DropAction::Rebase
+                                                        : DropAction::Squash;
+                    hovered_entire_branch = ratio >= 0.2f && ratio < 0.8f && io.KeyShift;
+                    const bool reorder = *hovered_drop == DropAction::ReorderBefore
+                        || *hovered_drop == DropAction::ReorderAfter;
+                    hovered_copy = reorder && io.KeyCtrl;
+                    if (reorder)
+                    {
+                        RenderRevisionTooltip(
+                            DropTooltip(*hovered_drop, false, hovered_copy), revision.oid);
+                    }
+                    else
+                    {
+                        const std::string_view hint =
+                            "No modifier: squash change | Shift: squash entire branch\n"
+                            "Alt: rebase change | Alt+Shift: rebase entire branch";
+                        RenderRevisionTooltip(
+                            DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
+                    }
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
-                    _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, *hovered_drop,
-                        hovered_entire_branch};
-                    if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
-                }
-                hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
-                if (hovered_action_drop)
-                    RenderRevisionTooltip("Choose an action for", revision.oid);
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
-                {
-                    _pending_drop = {static_cast<const char*>(payload->Data), revision.oid, DropAction::ReorderBefore};
-                    _open_drop_actions = _pending_drop.source != _pending_drop.target;
-                }
-                if (_compare_to.empty())
-                {
-                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
+                    const std::string source = static_cast<const char*>(payload->Data);
+                    if (source != revision.oid && hovered_drop.has_value())
                     {
-                        const char* source = static_cast<const char*>(payload->Data);
-                        const char* path = source + std::char_traits<char>::length(source) + 1;
-                        if (source != revision.oid && path < source + payload->DataSize && *path != '\0')
-                            QueueCommands({MoveFiles{source, revision.oid, {path}}}, {source, revision.oid},
-                                "Moving this file will rewrite a locked source or destination commit.");
+                        _pending_drop = {
+                            source, revision.oid, *hovered_drop, hovered_entire_branch, hovered_copy};
+                        OpenDialog(Dialog::ConfirmDrop);
                     }
                 }
                 ImGui::EndDragDropTarget();
             }
-
-            // Revision context menu
-            if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
+            if (hovered_drop == DropAction::ReorderBefore || hovered_drop == DropAction::ReorderAfter)
+            {
+                const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
+                constexpr float rounding = 4.0f;
+                const float marker_y = hovered_drop == DropAction::ReorderBefore ? minimum.y : maximum.y;
+                draw->AddRect({marker_left, minimum.y + 1.0f},
+                    {maximum.x - 1.0f, maximum.y - 1.0f}, IM_COL32(70, 120, 210, 190), rounding,
+                    ImDrawFlags_None, 2.0f);
+                // Draw the insertion line after all rows. A following row's
+                // background otherwise covers half of a bottom-edge marker.
+                reorder_marker = std::pair{ImVec2(marker_left + rounding, marker_y),
+                    ImVec2(maximum.x - 1.0f - rounding, marker_y)};
+            }
+            else if (hovered_drop.has_value())
+            {
+                const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
+                const ImU32 marker_color = *hovered_drop == DropAction::Squash
+                    ? IM_COL32(220, 170, 70, 230) : IM_COL32(90, 150, 255, 230);
+                draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
+                    marker_color, 4.0f, ImDrawFlags_None, 2.0f);
+            }
+            if (ImGui::BeginPopupContextItem("change context"))
             {
                 ImGui::BeginDisabled(actions_locked);
-                if (ActionMenuItem(ICON_MS_ADD, "New", "N"))
-                {
-                    SelectRevision(revision.oid);
-                    CreateChange(revision.oid);
-                }
+                if (ActionMenuItem(ICON_MS_ADD, "New", "N")) { SelectRevision(revision.oid); CreateChange(revision.oid); }
                 RenderSelectedChangeActions(revision.oid, true);
-
                 ImGui::Separator();
-                const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
                 if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark..."))
-                {
-                    SelectRevision(revision.oid);
-                    OpenDialog(Dialog::Bookmark);
-                }
-                const bool can_move_bookmark = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid;
-                });
-                const std::string move_bookmark = IconLabel(ICON_MS_MOVE_ITEM, "Move bookmark here");
-                if (ImGui::BeginMenu(move_bookmark.c_str(), can_move_bookmark))
-                {
-                    for (const NamedRef& ref : _snapshot->refs)
-                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
-                            && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
-                        {
-                            const BookmarkRelation relation =
-                                ClassifyBookmarkRelation(*_snapshot, ref.target, revision.oid);
-                            if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
-                            {
-                                OpenDialog(Dialog::ConfirmBookmarkMove);
-                                _input_primary = ref.name;
-                                _input_secondary = ref.target;
-                                _input_tertiary = revision.oid;
-                                _dialog_snapshot_generation = _snapshot->generation;
-                            }
-                            else
-                                _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
-                        }
-                    ImGui::EndMenu();
-                }
-                const std::string delete_bookmark = IconLabel(ICON_MS_DELETE, "Delete bookmark");
-                if (ImGui::BeginMenu(delete_bookmark.c_str(), bookmark != nullptr))
-                {
-                    for (const NamedRef& ref : _snapshot->refs)
-                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid
-                            && ActionMenuItem(ICON_MS_DELETE, ref.name))
-                            _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
-                    ImGui::EndMenu();
-                }
-
-                ImGui::Separator();
-                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
-                if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
-                        bookmark != nullptr && !remote.empty()))
-                    _engine.Enqueue(Push{bookmark->name, remote});
-                if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
-                        bookmark != nullptr && !_snapshot->remotes.empty()))
-                {
-                    OpenDialog(Dialog::PushTo);
-                    _input_primary = remote;
-                    _input_secondary = bookmark->name;
-                }
+                { SelectRevision(revision.oid); OpenDialog(Dialog::Bookmark); }
                 ImGui::EndDisabled();
-
                 ImGui::Separator();
-                const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
-                if (ImGui::BeginMenu(copy_label.c_str()))
-                {
-                    IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
-                    for (std::size_t index = 0; index < revision.aliases.size(); ++index)
-                        IdCopyMenuItems("alias " + std::to_string(index + 1), revision.aliases[index],
-                            RevisionPrefix(revision.aliases[index]));
-                    if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
-                            !revision.description.empty()))
-                        ImGui::SetClipboardText(revision.description.c_str());
-                    ImGui::EndMenu();
-                }
+                IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
                 ImGui::EndPopup();
             }
-
-            // Row background and drop feedback
-            const float graph_width = row_column_count * kLaneWidth + kGraphPadding * 2.0f;
-            const ImU32 row_fill = _dark_theme
-                ? hovered ? kRowHover : kRowBackground
-                : ImGui::GetColorU32(hovered ? ImGuiCol_HeaderHovered : ImGuiCol_WindowBg);
-            const ImVec2 row_maximum(selected ? draw->GetClipRectMax().x + 6.0f : maximum.x, maximum.y);
-            const ImDrawFlags row_corners = selected ? ImDrawFlags_RoundCornersLeft : ImDrawFlags_RoundCornersAll;
-            draw->AddRectFilled(minimum, row_maximum, row_fill, 6.0f, row_corners);
-            if (selected)
-                draw->AddRectFilled(ImVec2(minimum.x + graph_width, minimum.y), row_maximum,
-                    _dark_theme ? kRowSelected : ImGui::GetColorU32(ImGuiCol_HeaderActive));
-            draw->AddRect(minimum, row_maximum,
-                _dark_theme ? kRowBorder : ImGui::GetColorU32(ImGuiCol_Border), 6.0f, row_corners);
-            if (hovered_drop.has_value())
-            {
-                const ImU32 zone_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 80)
-                    : *hovered_drop == DropAction::ReorderAfter                     ? IM_COL32(90, 150, 255, 80)
-                    : *hovered_drop == DropAction::Squash                            ? IM_COL32(220, 170, 70, 80)
-                                                                                     : IM_COL32(110, 210, 145, 80);
-                drop_outline_color = *hovered_drop == DropAction::ReorderBefore ? IM_COL32(90, 150, 255, 230)
-                    : *hovered_drop == DropAction::ReorderAfter                 ? IM_COL32(90, 150, 255, 230)
-                    : *hovered_drop == DropAction::Squash                        ? IM_COL32(220, 170, 70, 230)
-                                                                                 : IM_COL32(110, 210, 145, 230);
-                const float zone_top = *hovered_drop == DropAction::ReorderBefore ? minimum.y
-                    : *hovered_drop == DropAction::ReorderAfter                    ? minimum.y + kRowHeight * 0.8f
-                                                                                   : minimum.y + kRowHeight * 0.2f;
-                const float zone_bottom = *hovered_drop == DropAction::ReorderBefore ? minimum.y + kRowHeight * 0.2f
-                    : *hovered_drop == DropAction::ReorderAfter                       ? maximum.y
-                                                                                      : minimum.y + kRowHeight * 0.8f;
-                drop_zone_minimum = ImVec2(minimum.x, zone_top);
-                drop_zone_maximum = ImVec2(maximum.x, zone_bottom);
-                draw->AddRectFilled(drop_zone_minimum, drop_zone_maximum, zone_color);
-            }
-            draw->AddRectFilled(minimum, ImVec2(minimum.x + graph_width, maximum.y),
-                _dark_theme ? kGraphBackground : IM_COL32(229, 233, 239, 255), 6.0f, ImDrawFlags_RoundCornersLeft);
-            if (hovered_action_drop)
-                draw->AddRectFilled(minimum, maximum, IM_COL32(90, 150, 255, 80), 6.0f);
-
-            // Graph lanes
-            const float graph_left = minimum.x + kGraphPadding;
-            auto lane_x = [&](int column) { return graph_left + column * kLaneWidth + kLaneWidth * 0.5f; };
-            auto color = [](int track) { return kLaneColors[static_cast<std::size_t>(track) % kLaneColors.size()]; };
-
-            std::vector<int> shifted_before(row.tracks_before.size(), -1);
-            std::vector<int> shifted_after(row.tracks_after.size(), -1);
-            for (std::size_t before = 0; before < row.tracks_before.size(); ++before)
-            {
-                const auto after = std::find(row.tracks_after.begin(), row.tracks_after.end(), row.tracks_before[before]);
-                if (after != row.tracks_after.end() && static_cast<std::size_t>(after - row.tracks_after.begin()) != before)
-                {
-                    shifted_before[before] = static_cast<int>(after - row.tracks_after.begin());
-                    shifted_after[shifted_before[before]] = static_cast<int>(before);
-                }
-            }
-            for (std::size_t column = 0; column < row.tracks_before.size(); ++column)
-                draw->AddLine(ImVec2(lane_x(static_cast<int>(column)), minimum.y),
-                    ImVec2(lane_x(static_cast<int>(column)), shifted_before[column] < 0 ? center : center - 7.0f),
-                    color(row.tracks_before[column]), 2.0f);
-            for (std::size_t column = 0; column < row.tracks_after.size(); ++column)
-            {
-                const bool new_non_current_lane = static_cast<int>(column) != row.column && shifted_after[column] < 0
-                    && std::ranges::find(row.tracks_before, row.tracks_after[column]) == row.tracks_before.end();
-                if (new_non_current_lane)
-                    continue;
-                draw->AddLine(ImVec2(lane_x(static_cast<int>(column)), shifted_after[column] < 0 ? center : center + 7.0f),
-                    ImVec2(lane_x(static_cast<int>(column)), maximum.y), color(row.tracks_after[column]), 2.0f);
-            }
-            for (std::size_t before = 0; before < shifted_before.size(); ++before)
-            {
-                if (shifted_before[before] < 0) continue;
-                draw->AddBezierCubic(ImVec2(lane_x(static_cast<int>(before)), center - 7.0f),
-                    ImVec2(lane_x(static_cast<int>(before)), center), ImVec2(lane_x(shifted_before[before]), center),
-                    ImVec2(lane_x(shifted_before[before]), center + 7.0f), color(row.tracks_before[before]), 2.0f);
-            }
-            const float dot_x = lane_x(row.column);
-            for (int parent_column : row.parent_columns)
-            {
-                if (parent_column == row.column || parent_column >= static_cast<int>(row.tracks_after.size())) continue;
-                const float parent_x = lane_x(parent_column);
-                draw->AddBezierCubic(ImVec2(dot_x, center + kDotRadius), ImVec2(dot_x, center + 12.0f),
-                    ImVec2(parent_x, maximum.y - 10.0f), ImVec2(parent_x, maximum.y),
-                    color(row.tracks_after[parent_column]), 2.0f);
-            }
-            if (row.continues_beyond_layout)
-                draw->AddLine(ImVec2(dot_x, center), ImVec2(dot_x, maximum.y), color(row.track), 2.0f);
-            if (selected)
-                draw->AddCircle(ImVec2(dot_x, center), kDotRadius + 3.0f, IM_COL32(47, 129, 247, 150), 0, 2.0f);
-
-            // Revision node
-            draw->AddCircleFilled(ImVec2(dot_x, center), kDotRadius,
-                revision.conflicted ? kStatusConflict
-                    : current         ? kWorkingCommitId
-                    : revision.pushed       ? kStatusPushed
-                                            : kStatusUnpushed);
-            draw->AddCircle(ImVec2(dot_x, center), kDotRadius, IM_COL32(17, 24, 39, 255), 0, 1.25f);
-
-            // Revision summary
-            const float content_x = std::min(minimum.x + graph_width + 12.0f, maximum.x - 8.0f);
-            const float content_right = maximum.x - 8.0f;
-            ImGui::PushClipRect(ImVec2(content_x, minimum.y), ImVec2(content_right, maximum.y), true);
-            const std::string description = FirstLine(revision.description);
-            const std::string_view title = description.empty() ? "(no description)" : std::string_view(description);
-            ImVec2 content_cursor(content_x, center - ImGui::GetTextLineHeight() * 0.5f);
-            bool elided = false;
-            const auto draw_text = [&](std::string_view text, ImU32 color, float gap) {
-                content_cursor.x += gap;
-                const float text_width = ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
-                if (content_cursor.x + text_width > content_right)
-                {
-                    DrawElidedText(draw, content_cursor, content_right, text, color);
-                    elided = true;
-                    return false;
-                }
-                draw->AddText(content_cursor, color, text.data(), text.data() + text.size());
-                content_cursor.x += text_width;
-                return true;
-            };
-            draw_text(title, ImGui::GetColorU32(ImGuiCol_Text), 0.0f);
-            const auto draw_id = [&](const std::string& id, std::size_t prefix, ImU32 color) {
-                if (elided)
-                    return;
-                content_cursor.x += 16.0f;
-                const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, prefix));
-                const std::string_view visible(id.data(), shown);
-                if (content_cursor.x + ImGui::CalcTextSize(visible.data(), visible.data() + visible.size()).x
-                    > content_right)
-                {
-                    DrawElidedText(draw, content_cursor, content_right, visible, color);
-                    elided = true;
-                    return;
-                }
-                content_cursor.x = DrawHighlightedId(draw, content_cursor, id, prefix, color);
-            };
-            draw_id(revision.oid, RevisionPrefix(revision.oid), CommitIdColor(revision.working_copy));
-            if (!elided)
-                draw_text(revision.author, kTextMuted, 16.0f);
-            ImVec2 badge_cursor(content_cursor.x + 12.0f, center);
-            std::vector<std::string> drawn_refs;
-            for (const NamedRef& ref : _snapshot->refs)
-            {
-                if (elided)
-                    break;
-                if (ref.target != revision.oid) continue;
-                const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-                    || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-                const auto [label, dimmed_prefix] = ReferenceBadgeLabel(ref, _snapshot->refs);
-                if (label.empty())
-                    continue;
-                const std::string key = (bookmark ? "bookmark:" : "tag:") + label;
-                if (std::ranges::find(drawn_refs, key) != drawn_refs.end())
-                    continue;
-                drawn_refs.push_back(key);
-                const float badge_width = ImGui::CalcTextSize(label.c_str()).x + FontPx(14.0f);
-                if (badge_cursor.x + badge_width > content_right)
-                {
-                    DrawElidedBadge(draw, badge_cursor, center, content_right, label,
-                        RefBadgeColor(ref, _snapshot->refs), dimmed_prefix);
-                    elided = true;
-                    break;
-                }
-                DrawBadge(draw, badge_cursor, center, label, RefBadgeColor(ref, _snapshot->refs), dimmed_prefix);
-            }
-            ImGui::PopClipRect();
-
-            if (hovered && elided)
+            if (hovered && !hovered_drop.has_value() && ImGui::GetDragDropPayload() == nullptr)
             {
                 ImGui::BeginTooltip();
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 520.0f);
-                const std::string message = LimitedLines(revision.description, 16);
-                ImGui::TextUnformatted(message.empty() ? "(no description)" : message.c_str());
-                ImGui::Separator();
+                ImGui::TextUnformatted(shown.data(), shown.data() + shown.size());
                 ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
-                TextLabelledId("Commit: ", revision.oid, RevisionPrefix(revision.oid),
-                    CommitIdColor(revision.working_copy));
-                for (const std::string& alias : revision.aliases)
-                    TextLabelledId("Alias: ", alias, RevisionPrefix(alias), CommitIdColor(revision.working_copy));
-                for (const std::string& parent : revision.parents)
-                    TextLabelledId("Parent: ", parent, RevisionPrefix(parent), CommitIdColor(false));
-                std::string refs;
-                for (const NamedRef& ref : _snapshot->refs)
-                {
-                    if (ref.target != revision.oid) continue;
-                    if (!refs.empty()) refs += ", ";
-                    refs += ref.remote.empty() ? ref.name : ref.remote + "/" + ref.name;
-                }
-                if (!refs.empty()) ImGui::TextWrapped("Refs: %s", refs.c_str());
-                ImGui::TextUnformatted(revision.pushed ? "Locked (pushed)" : "Not pushed");
-                ImGui::PopTextWrapPos();
+                TextLabelledId("Commit: ", revision.oid, RevisionPrefix(revision.oid), CommitIdColor(revision.working_copy));
                 ImGui::EndTooltip();
             }
-            if (hovered_drop.has_value())
-                draw->AddRect(drop_zone_minimum + ImVec2(1.0f, 1.0f), drop_zone_maximum - ImVec2(1.0f, 1.0f),
-                    drop_outline_color, 3.0f, ImDrawFlags_None, 2.0f);
-            else if (hovered_action_drop)
-                draw->AddRect(ImVec2(minimum.x + 1.0f, minimum.y + 1.0f),
-                    ImVec2(maximum.x - 1.0f, maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
-                    ImDrawFlags_None, 2.0f);
-            ImGui::SetCursorScreenPos(ImVec2(minimum.x, maximum.y));
             ImGui::PopID();
         }
-    }
-
-    // Drop zone after the final revision
-    ImGui::InvisibleButton("move to end", ImVec2(-1.0f, 22.0f));
-    const ImVec2 end_minimum = ImGui::GetItemRectMin();
-    const ImVec2 end_maximum = ImGui::GetItemRectMax();
-    bool hovered_end_drop = false;
-    if (!actions_locked && !_visible_revisions.empty() && ImGui::BeginDragDropTarget())
-    {
-        ImGui::TextUnformatted("Move after final change");
-        const Revision& final = _snapshot->revisions[_visible_revisions.back()];
-        const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
-        hovered_end_drop = dragging != nullptr
-            && (dragging->IsDataType("GGUI_CHANGE") || dragging->IsDataType("GGUI_CHANGE_ACTION"));
-        if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
-        {
-            RenderRevisionTooltip(DropTooltip(DropAction::ReorderAfter), final.oid);
-        }
-        else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION"))
-            RenderRevisionTooltip("Choose an action after", final.oid);
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
-        {
-            _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
-            if (_pending_drop.source != _pending_drop.target) OpenDialog(Dialog::ConfirmDrop);
-        }
-        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
-        {
-            _pending_drop = {static_cast<const char*>(payload->Data), final.oid, DropAction::ReorderAfter};
-            _open_drop_actions = _pending_drop.source != _pending_drop.target;
-        }
-        ImGui::EndDragDropTarget();
-    }
-    if (hovered_end_drop)
-        draw->AddRect(ImVec2(end_minimum.x + 1.0f, end_minimum.y + 1.0f),
-            ImVec2(end_maximum.x - 1.0f, end_maximum.y - 1.0f), IM_COL32(90, 150, 255, 230), 5.0f,
-            ImDrawFlags_None, 2.0f);
+    if (reorder_marker.has_value())
+        draw->AddLine(reorder_marker->first, reorder_marker->second,
+            IM_COL32(100, 175, 255, 255), 4.0f);
     ImGui::PopStyleColor(2);
-    ImGui::EndChild();
+    ImGui::PopStyleVar();
 
-    // Explicit drag-and-drop action picker
-    if (_open_drop_actions)
+    if (_history_scroll_frames > 0 && usable)
     {
-        ImGui::OpenPopup("Drop action");
-        _open_drop_actions = false;
+        ImGui::SetScrollY(std::max(0.0f, _history_scroll_target - _history_anchor_offset));
+        if (--_history_scroll_frames == 0) { _history_scroll_target = -1.0f; _history_anchor_offset = 0.0f; }
     }
-    if (ImGui::BeginPopup("Drop action"))
-    {
-        ImGui::BeginDisabled(actions_locked);
-        std::optional<DropAction> action;
-        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move before")) action = DropAction::ReorderBefore;
-        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move after")) action = DropAction::ReorderAfter;
-        if (ActionMenuItem(ICON_MS_MERGE, "Squash")) action = DropAction::Squash;
-        if (ActionMenuItem(ICON_MS_REBASE, "Rebase")) action = DropAction::Rebase;
-        if (action.has_value())
-        {
-            _pending_drop.action = *action;
-            _pending_drop.entire_branch = false;
-            if (_pending_drop.source != _pending_drop.target)
-                OpenDialog(Dialog::ConfirmDrop);
-        }
-        ImGui::EndDisabled();
-        ImGui::EndPopup();
-    }
+    ImGui::EndChild();
     ImGui::End();
 }
 

@@ -493,11 +493,11 @@ void Application::RenderDiff()
         ImGui::EndDisabled();
         ImGui::Separator();
         const auto [parent, child] = AdjacentRevisions(_diff.revision);
-        const auto source_revision = std::ranges::find(_snapshot->revisions, _diff.revision, &Revision::oid);
-        const auto child_revision = std::ranges::find(_snapshot->revisions, child, &Revision::oid);
-        const bool linear_source = source_revision != _snapshot->revisions.end()
+        const auto source_revision = std::ranges::find(_history_revisions, _diff.revision, &Revision::oid);
+        const auto child_revision = std::ranges::find(_history_revisions, child, &Revision::oid);
+        const bool linear_source = source_revision != _history_revisions.end()
             && source_revision->parents.size() == 1;
-        const bool linear_child = child_revision != _snapshot->revisions.end()
+        const bool linear_child = child_revision != _history_revisions.end()
             && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision;
         const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
             return file.path == _diff.path && file.conflicted;

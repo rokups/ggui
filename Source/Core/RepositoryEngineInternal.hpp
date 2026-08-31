@@ -15,6 +15,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace Ggui::RepositoryInternal
@@ -118,6 +119,8 @@ public:
     {
         bool worktree = false;
         bool metadata = false;
+        bool full_scan = false;
+        std::vector<std::string> paths;
     };
 
     explicit RepositoryWatcher(std::condition_variable& wake) : _wake(wake) {}
@@ -132,6 +135,10 @@ private:
 
     std::condition_variable& _wake;
     std::filesystem::path _common_directory;
+    std::filesystem::path _worktree;
+    std::mutex _changes_mutex;
+    std::vector<std::string> _changed_paths;
+    std::atomic_bool _full_scan = false;
     std::atomic_bool _worktree_changed = false;
     std::atomic_bool _metadata_changed = false;
     std::unique_ptr<efsw::FileWatcher> _watcher;
@@ -164,9 +171,60 @@ struct RepositoryEngine::Impl
     std::atomic_bool test_commands_suppressed = false;
     RepositoryInternal::RepositoryWatcher watcher{queue_cv};
     std::thread worker;
+    struct InspectorRequest
+    {
+        std::variant<LoadDiff, LoadFileContent> command;
+        std::uint64_t session = 0;
+        std::uint64_t request = 0;
+    };
+    std::mutex inspector_mutex;
+    std::condition_variable inspector_cv;
+    std::deque<InspectorRequest> inspector_requests;
+    std::vector<std::thread> inspectors;
+    std::atomic_uint64_t inspector_request = 0;
+
+    std::mutex history_mutex;
+    std::condition_variable history_cv;
+    std::thread history_worker;
+    struct HistoryRequest
+    {
+        HistoryQuery query;
+        std::string expand;
+        std::string path;
+        std::uint64_t session = 0;
+        std::uint64_t request = 0;
+    };
+    std::optional<HistoryRequest> history_request;
+    std::string repository_path;
+    HistoryQuery active_history_query;
+    std::vector<std::string> expanded_history_regions;
+    std::atomic_uint64_t history_request_version = 0;
+    struct ClosestBookmarkRequest
+    {
+        std::string path;
+        std::string current;
+        std::vector<NamedRef> refs;
+        std::uint64_t repository_generation = 0;
+        std::uint64_t session = 0;
+        std::uint64_t request = 0;
+    };
+    std::mutex closest_bookmark_mutex;
+    std::condition_variable closest_bookmark_cv;
+    std::optional<ClosestBookmarkRequest> closest_bookmark_request;
+    std::thread closest_bookmark_worker;
+    std::atomic_uint64_t closest_bookmark_request_version = 0;
+    std::uint64_t closest_bookmark_completed_generation = 0;
+    std::uint64_t closest_bookmark_active_generation = 0;
+
     RepositoryInternal::GitRepositoryPtr git;
     gg_repository* gg = nullptr;
-    std::uint64_t generation = 0;
+    std::atomic_uint64_t session = 0;
+    std::atomic_uint64_t generation = 0;
+    std::atomic_uint64_t topology_generation = 0;
+    std::mutex snapshot_mutex;
+    std::shared_ptr<RepoSnapshot> latest_snapshot;
+    std::vector<StatusEntry> cached_status;
+    bool worktree_ready = false;
 
     Impl();
     ~Impl();
@@ -188,11 +246,15 @@ struct RepositoryEngine::Impl
     void FetchRemote(const Fetch& command);
     void PushBookmark(const Push& command);
     void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish);
-    void Sync(bool report_progress = true);
-    std::shared_ptr<RepoSnapshot> ReadSnapshot();
-    void PublishSnapshot();
+    bool Sync(bool report_progress = true, const std::vector<std::string>& paths = {});
+    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true);
+    void PublishSnapshot(bool include_worktree = true);
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);
+    void LoadPatch(const LoadDiff& command, git_repository* repository, gg_repository* gg_repository,
+        std::uint64_t snapshot_generation, std::uint64_t request_generation, std::uint64_t request_session);
+    void LoadFile(const LoadFileContent& command, git_repository* repository, gg_repository* gg_repository,
+        std::uint64_t request_generation, std::uint64_t request_session);
     void ApplyPatchText(const ApplyPatch& command);
     void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);
@@ -212,6 +274,11 @@ struct RepositoryEngine::Impl
     std::string CommandName(const Command& command);
     void Execute(const Command& command);
     void Run();
+    void RunInspector();
+    void RunHistory();
+    void RequestHistory(HistoryQuery query, std::string expand = {});
+    void RequestClosestBookmark(const std::shared_ptr<const RepoSnapshot>& snapshot);
+    void RunClosestBookmark();
 };
 
 } // namespace Ggui

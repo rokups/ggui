@@ -3,6 +3,8 @@
 #include "ApplicationInternal.hpp"
 
 #include <ranges>
+#include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -87,26 +89,28 @@ const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revi
 
 const NamedRef* ClosestBookmark(const RepoSnapshot& snapshot, const std::string& revision)
 {
-    std::vector<std::string_view> pending{revision};
-    std::unordered_set<std::string_view> visited;
-    for (std::size_t index = 0; index < pending.size(); ++index)
+    git_repository* raw = nullptr;
+    if (git_repository_open_ext(&raw, snapshot.root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
+        return nullptr;
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
+    git_oid oid{};
+    if (git_oid_fromstr(&oid, revision.c_str(), git_repository_oid_type(repository.get())) != GIT_OK) return nullptr;
+    const NamedRef* closest = nullptr;
+    std::size_t closest_distance = std::numeric_limits<std::size_t>::max();
+    for (const NamedRef& ref : snapshot.refs)
     {
-        const std::string_view oid = pending[index];
-        if (!visited.emplace(oid).second)
+        if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK) continue;
+        git_oid target{};
+        if (git_oid_fromstr(&target, ref.target.c_str(), git_repository_oid_type(repository.get())) != GIT_OK) continue;
+        std::size_t ahead = 0;
+        std::size_t behind = 0;
+        if (git_graph_ahead_behind(&ahead, &behind, repository.get(), &oid, &target) != GIT_OK || behind != 0)
             continue;
-        if (const NamedRef* local = BookmarkAt(snapshot, std::string(oid)); local != nullptr)
-            return local;
-        const auto remote = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.target == oid;
-        });
-        if (remote != snapshot.refs.end())
-            return &*remote;
-        const auto node = std::ranges::find(snapshot.revisions, oid, &Revision::oid);
-        if (node != snapshot.revisions.end())
-            for (const std::string& parent : node->parents)
-                pending.push_back(parent);
+        if (ahead < closest_distance || (ahead == closest_distance && closest != nullptr
+                && ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && closest->kind == GG_NAMED_REF_REMOTE_BOOKMARK))
+        { closest = &ref; closest_distance = ahead; }
     }
-    return nullptr;
+    return closest;
 }
 
 std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark)

@@ -6,7 +6,9 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
+#include <ranges>
 #include <set>
 #include <string>
 #include <string_view>
@@ -433,7 +435,31 @@ void Application::RenderToolbar()
 {
     // Change actions
     const std::string& current_commit = CurrentCommit(*_snapshot);
+    const bool expansion_loading = !_history_expansion_pending.empty();
+    const bool expansion_feedback = expansion_loading
+        || std::chrono::steady_clock::now() < _history_expansion_feedback_until;
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
+    if (expansion_feedback)
+    {
+        static constexpr std::array spinner{'|', '/', '-', '\\'};
+        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
+        if (expansion_loading)
+        {
+            const std::string visible = std::string(1, spinner[frame]) + " Loading more commits...";
+            const ImVec2 position = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton("Loading more commits...", ImGui::CalcTextSize(visible.c_str()));
+            ImGui::GetWindowDrawList()->AddText(position, kTextMuted, visible.c_str());
+        }
+        else
+        {
+            constexpr std::string_view visible = "Commits loaded";
+            const ImVec2 position = ImGui::GetCursorScreenPos();
+            ImGui::InvisibleButton(visible.data(), ImGui::CalcTextSize(visible.data()));
+            ImGui::GetWindowDrawList()->AddText(position, kTextMuted, visible.data());
+        }
+    }
+    else
+    {
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(current_commit.empty());
     if (ActionButton(ICON_MS_ADD, "New")) CreateChange("@");
@@ -469,56 +495,83 @@ void Application::RenderToolbar()
     ImGui::SameLine();
     if (ActionButton(ICON_MS_REFRESH, "Refresh")) _engine.Enqueue(Refresh{});
 
-    // Remote actions
-    const Remote* remote = DefaultRemote(*_snapshot);
-    const NamedRef* bookmark = BookmarkAt(*_snapshot, current_commit);
-    const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
-    ImGui::SameLine();
-    ImGui::BeginDisabled(remote == nullptr);
-    if (ActionButton(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote->name, true});
-    ImGui::SameLine();
-    if (ActionButton(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote->name, false});
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    ImGui::BeginDisabled(bookmark == nullptr || push_remote.empty());
-    if (ActionButton(ICON_MS_CLOUD_UPLOAD, "Push")) _engine.Enqueue(Push{bookmark->name, push_remote});
-    ImGui::SameLine();
-    if (ActionButton(ICON_MS_PUBLISH, "Push to..."))
-    {
-        OpenDialog(Dialog::PushTo);
-        _input_primary = push_remote;
-        _input_secondary = bookmark->name;
-    }
-    ImGui::EndDisabled();
+        // Remote actions
+        const Remote* remote = DefaultRemote(*_snapshot);
+        const NamedRef* bookmark = BookmarkAt(*_snapshot, current_commit);
+        const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(remote == nullptr);
+        if (ActionButton(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote->name, true});
+        ImGui::SameLine();
+        if (ActionButton(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote->name, false});
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(bookmark == nullptr || push_remote.empty());
+        if (ActionButton(ICON_MS_CLOUD_UPLOAD, "Push")) _engine.Enqueue(Push{bookmark->name, push_remote});
+        ImGui::SameLine();
+        if (ActionButton(ICON_MS_PUBLISH, "Push to..."))
+        {
+            OpenDialog(Dialog::PushTo);
+            _input_primary = push_remote;
+            _input_secondary = bookmark->name;
+        }
+        ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
-
-    // Repository selector
-    ImGui::SameLine();
-    ImGui::TextDisabled("REPOSITORY");
-    ImGui::SameLine();
-    const std::string repository_name = RepositoryName(_snapshot->root);
-    const bool can_switch_repository = std::any_of(_recent_repositories.begin(), _recent_repositories.end(),
-        [&](const std::string& path) { return path != _snapshot->root; });
-    ImGui::BeginDisabled(!_active_operation.empty() || !can_switch_repository);
-    const bool repository_combo_open =
-        ImGui::BeginCombo("###Repository", repository_name.c_str(), ImGuiComboFlags_WidthFitPreview);
-    const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
-    if (repository_combo_open)
-    {
-        RenderRecentRepositories();
-        ImGui::EndCombo();
     }
-    ImGui::EndDisabled();
-    if (repository_combo_hovered)
-        ImGui::SetTooltip("%s\nSwitch repository.", _snapshot->root.c_str());
-    ImGui::SameLine();
-    if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
-        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
 
-    // Current commit and bookmark
-    if (!current_commit.empty())
+    // A cancellable history search takes precedence over repository metadata
+    // in the fixed-width toolbar. Rendering it before the selector keeps the
+    // cancel control reachable instead of placing a working button beyond the
+    // right edge on ordinary window sizes.
+    const bool reveal_loaded = RevealRevisionLoaded();
+    const bool reveal_visible = reveal_loaded && std::ranges::any_of(_visible_revisions, [&](const int index) {
+        if (index < 0 || static_cast<std::size_t>(index) >= _history_revisions.size()) return false;
+        const Revision& revision = _history_revisions[static_cast<std::size_t>(index)];
+        return revision.oid == _reveal_revision
+            || std::ranges::find(revision.aliases, _reveal_revision) != revision.aliases.end();
+    });
+    const bool reveal_searching = !_reveal_revision.empty() && !reveal_visible;
+    const bool history_searching = reveal_searching;
+    std::string history_activity;
+    if (reveal_searching)
+        history_activity = "Finding " + ShortId(_reveal_revision) + " ("
+            + std::to_string(_history_revisions.size()) + " visible)...";
+    else if (!_history_expansion_pending.empty())
+        history_activity = "Loading more commits...";
+    else if (_history_view == nullptr || _history_view->repository_generation != _snapshot->repository_generation)
+        history_activity = "Preparing commit graph...";
+    // Repository metadata yields the limited toolbar space while transient
+    // history work needs a reachable cancel control.
+    if (history_activity.empty() && !expansion_feedback)
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("REPOSITORY");
+        ImGui::SameLine();
+        const std::string repository_name = RepositoryName(_snapshot->root);
+        const bool can_switch_repository = std::any_of(_recent_repositories.begin(), _recent_repositories.end(),
+            [&](const std::string& path) { return path != _snapshot->root; });
+        ImGui::BeginDisabled(!_active_operation.empty() || !can_switch_repository);
+        const bool repository_combo_open =
+            ImGui::BeginCombo("###Repository", repository_name.c_str(), ImGuiComboFlags_WidthFitPreview);
+        const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+        if (repository_combo_open)
+        {
+            RenderRecentRepositories();
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        if (repository_combo_hovered)
+            ImGui::SetTooltip("%s\nSwitch repository.", _snapshot->root.c_str());
+        ImGui::SameLine();
+        if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
+            OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
+    }
+
+    // Current commit and bookmark. Transient activity takes this same compact
+    // status slot so it remains visible even when the action bar is crowded.
+    if (!current_commit.empty() && history_activity.empty() && !expansion_feedback)
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
@@ -532,11 +585,10 @@ void Application::RenderToolbar()
             IdCopyMenuItems("commit ID", current_commit, RevisionPrefix(current_commit));
             ImGui::EndPopup();
         }
-        if (const NamedRef* closest = ClosestBookmark(*_snapshot, current_commit); closest != nullptr)
+        if (!_closest_bookmark.empty())
         {
             ImGui::SameLine();
-            const std::string label = ReferenceLabel(*closest);
-            ImGui::TextDisabled("%s%s", ICON_MS_BOOKMARK, label.c_str());
+            ImGui::TextDisabled("%s%s", ICON_MS_BOOKMARK, _closest_bookmark.c_str());
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Closest bookmark to the current commit");
         }
@@ -555,6 +607,25 @@ void Application::RenderToolbar()
                 _progress_completed, _progress_total);
         ImGui::SameLine();
         if (ActionButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
+    }
+
+    // Draw transient history state last so the right-anchored cancel button
+    // is not covered by repository metadata rendered later in the toolbar.
+    if (!history_activity.empty() && !expansion_feedback)
+    {
+        static constexpr std::array spinner{'|', '/', '-', '\\'};
+        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%c %s", spinner[frame], history_activity.c_str());
+        if (history_searching)
+        {
+            const float cancel_width = ImGui::CalcTextSize("Cancel").x
+                + ImGui::GetStyle().FramePadding.x * 2.0f;
+            ImGui::SameLine(std::max(0.0f, ImGui::GetWindowWidth() - cancel_width - 10.0f));
+            const bool cancel_history = ImGui::Button("Cancel###Cancel history search");
+            if (cancel_history || ImGui::IsItemClicked())
+                CancelHistorySearch();
+        }
     }
 
     // Error banner

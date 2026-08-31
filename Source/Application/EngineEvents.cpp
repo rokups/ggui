@@ -6,6 +6,7 @@
 #include <ranges>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -34,95 +35,50 @@ void Application::ApplyEvent(Event event)
                 using T = std::decay_t<decltype(value)>;
                 if constexpr (std::is_same_v<T, SnapshotReady>)
                 {
-                    const bool had_snapshot = _snapshot != nullptr;
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
                     const std::string old_current = _snapshot == nullptr ? "" : CurrentCommit(*_snapshot);
+                    const std::uint64_t old_topology = _snapshot == nullptr ? 0 : _snapshot->repository_generation;
                     const std::string old_selection = _selected_revision;
                     const std::string old_compare_to = _compare_to;
-                    const bool had_selection = !_selected_revisions.empty();
                     _snapshot = std::move(value.snapshot);
-                    const std::string& current = CurrentCommit(*_snapshot);
-                    SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
-                    RebuildIdPrefixes();
-                    RememberRepository(_snapshot->root);
-                    _graph_generation = 0;
+                    if (old_topology != _snapshot->repository_generation) _closest_bookmark.clear();
+                    _history_refs_by_revision.clear();
+                    for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
+                        _history_refs_by_revision[_snapshot->refs[index].target].push_back(index);
                     const bool repository_changed = old_root != _snapshot->root;
                     if (repository_changed)
                     {
+                        _history_view.reset();
+                        _history_revisions.clear();
+                        _visible_revisions.clear();
+                        _graph_rows.clear();
+                        _history_requested_generation = 0;
+                        _history_requested_key.clear();
+                        _history_requested_filter.clear();
+                        _history_anchor.clear();
+                        _history_expansion_pending.clear();
+                        _history_expansion_feedback_until = {};
+                        RestoreRepositorySelections(_snapshot->root);
+                        _selected_revision = CurrentCommit(*_snapshot);
+                        _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
+                                                                        : std::vector{_selected_revision};
                         _preferred_file.clear();
                         _compare_to.clear();
                         _file_comparison = false;
                     }
-                    if (repository_changed)
-                    {
-                        _selected_revision = !current.empty() ? current
-                            : _snapshot->revisions.empty()    ? ""
-                                                              : _snapshot->revisions.front().oid;
-                        _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
-                                                                        : std::vector{_selected_revision};
-                    }
                     else
                     {
-                        if (old_current.empty() && !current.empty())
+                        const std::string current = CurrentCommit(*_snapshot);
+                        if (old_current != current && _selected_revision == old_current)
                         {
                             _selected_revision = current;
-                            _selected_revisions = {_selected_revision};
-                        }
-                        else if (old_current != current)
-                        {
-                            const auto old = std::ranges::find(_selected_revisions, old_current);
-                            if (old != _selected_revisions.end())
-                            {
-                                const auto replacement = std::ranges::find(_selected_revisions, current);
-                                if (current.empty() || replacement != _selected_revisions.end())
-                                    _selected_revisions.erase(old);
-                                else
-                                    *old = current;
-                                if (_selected_revision == old_current)
-                                    _selected_revision = current;
-                            }
-                        }
-                        for (std::string& oid : _selected_revisions)
-                        {
-                            if (std::ranges::any_of(
-                                    _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; }))
-                                continue;
-                            const auto replacement = std::ranges::find_if(_snapshot->revisions,
-                                [&](const Revision& revision) {
-                                    return std::ranges::find(revision.aliases, oid) != revision.aliases.end();
-                                });
-                            if (replacement != _snapshot->revisions.end())
-                            {
-                                if (_selected_revision == oid)
-                                    _selected_revision = replacement->oid;
-                                oid = replacement->oid;
-                            }
-                        }
-                        std::vector<std::string> unique_selection;
-                        for (const std::string& oid : _selected_revisions)
-                            if (std::ranges::find(unique_selection, oid) == unique_selection.end())
-                                unique_selection.push_back(oid);
-                        _selected_revisions = std::move(unique_selection);
-                        std::erase_if(_selected_revisions, [this](const std::string& oid) {
-                            return std::ranges::none_of(
-                                _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
-                        });
-                        if (std::ranges::find(_selected_revisions, _selected_revision) == _selected_revisions.end())
-                        {
-                            if (!_selected_revisions.empty())
-                                _selected_revision = _selected_revisions.back();
-                            else
-                            {
-                                _selected_revision = had_selection && !current.empty()
-                                    ? current
-                                    : had_selection && !_snapshot->revisions.empty()
-                                    ? _snapshot->revisions.front().oid
-                                    : "";
-                                if (!_selected_revision.empty())
-                                    _selected_revisions.push_back(_selected_revision);
-                            }
+                            _selected_revisions = current.empty() ? std::vector<std::string>{}
+                                                                 : std::vector{current};
                         }
                     }
+                    SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
+                    RememberRepository(_snapshot->root);
+                    UpdateGraphBuild();
                     if (!_compare_to.empty())
                     {
                         if (_snapshot->working_copy.empty() || _selected_revision == _snapshot->working_copy)
@@ -130,12 +86,101 @@ void Application::ApplyEvent(Event event)
                             _compare_to.clear();
                             _file_comparison = false;
                         }
-                        else
-                            _compare_to = _snapshot->working_copy;
+                        else _compare_to = _snapshot->working_copy;
                     }
-                    const bool selection_changed = !had_snapshot || old_selection != _selected_revision;
-                    if (repository_changed || selection_changed || old_compare_to != _compare_to)
+                    if (repository_changed || old_selection != _selected_revision || old_compare_to != _compare_to)
                         RequestDiff(true);
+                }
+                else if constexpr (std::is_same_v<T, HistoryReady>)
+                {
+                    if (_snapshot == nullptr || value.view == nullptr
+                        || value.view->repository_generation != _snapshot->repository_generation
+                        || value.view->search != _graph_filter
+                        || value.view->request < _history_applied_request)
+                        return;
+                    _history_applied_request = value.view->request;
+                    _history_view = std::move(value.view);
+                    if (!_history_view->skeleton && !_history_expansion_pending.empty())
+                    {
+                        _history_expansion_pending.clear();
+                        // Fast expansions can finish between two rendered
+                        // frames. Keep a short completion acknowledgement so
+                        // the click never appears to have done nothing.
+                        _history_expansion_feedback_until = std::chrono::steady_clock::now()
+                            + std::chrono::seconds(2);
+                    }
+                    _history_revisions.clear();
+                    _visible_revisions.clear();
+                    std::vector<GraphNode> nodes;
+                    nodes.reserve(_history_view->items.size());
+                    for (const HistoryItem& item : _history_view->items)
+                    {
+                        nodes.push_back({item.id, item.parents});
+                        if (item.kind == HistoryItemKind::Commit)
+                        {
+                            _visible_revisions.push_back(static_cast<int>(_history_revisions.size()));
+                            _history_revisions.push_back(item.revision);
+                        }
+                        else _visible_revisions.push_back(-1);
+                    }
+                    try { _graph_rows = BuildGraphLayout(nodes); }
+                    catch (const std::exception& error)
+                    {
+                        _error_message = error.what();
+                        _graph_rows.clear();
+                    }
+                    _graph_generation = _snapshot->repository_generation;
+                    RebuildIdPrefixes();
+                    if (!_history_view->skeleton && !_history_anchor.empty())
+                    {
+                        const auto found = std::ranges::find_if(_history_view->items, [this](const HistoryItem& item) {
+                            return item.kind == HistoryItemKind::Commit && item.revision.oid == _history_anchor;
+                        });
+                        if (found != _history_view->items.end())
+                        {
+                            _history_scroll_target = static_cast<float>(found - _history_view->items.begin()) * kRowHeight;
+                            _history_scroll_frames = 3;
+                        }
+                        _history_anchor.clear();
+                    }
+                    else if (!_history_view->skeleton && !_history_view->search.empty())
+                    {
+                        const auto match = std::ranges::find_if(_history_view->items,
+                            [](const HistoryItem& item) { return item.search_match; });
+                        if (match != _history_view->items.end())
+                        {
+                            _history_scroll_target = static_cast<float>(match - _history_view->items.begin())
+                                * kRowHeight;
+                            _history_scroll_frames = 3;
+                        }
+                    }
+                    if (_selected_revision.empty() && !_history_revisions.empty())
+                    {
+                        _selected_revision = _history_revisions.front().oid;
+                        _selected_revisions = {_selected_revision};
+                        RequestDiff(true);
+                    }
+                }
+                else if constexpr (std::is_same_v<T, ClosestBookmarkReady>)
+                {
+                    if (_snapshot != nullptr
+                        && value.repository_generation == _snapshot->repository_generation)
+                        _closest_bookmark = std::move(value.label);
+                }
+                else if constexpr (std::is_same_v<T, ChangedFilesReady>)
+                {
+                    if (value.revision != _selected_revision || value.compare_to != _compare_to
+                        || value.file_comparison != _file_comparison
+                        || value.options.whitespace_mode != _diff_whitespace_mode
+                        || value.options.context_lines != _diff_context_lines)
+                        return;
+                    if (!_pending_revision.empty() || _selected_file.empty())
+                    {
+                        _selected_file = value.selected_path;
+                        if (_preferred_file.empty()) _preferred_file = _selected_file;
+                        _pending_revision.clear();
+                    }
+                    _diff.files = std::move(value.files);
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
@@ -197,6 +242,8 @@ void Application::ApplyEvent(Event event)
                     _progress_phase.clear();
                     if (value.operation == "diff")
                         _diff_loading = false;
+                    if (value.operation == "history")
+                        _history_expansion_pending.clear();
                 }
                 else if constexpr (std::is_same_v<T, CredentialRequest>)
                 {

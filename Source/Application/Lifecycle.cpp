@@ -7,6 +7,7 @@
 #include <backends/imgui_impl_sdl3.h>
 #ifdef IMGUI_BUILD_TESTING
 #include <imgui_te_engine.h>
+#include <imgui_te_exporters.h>
 #endif
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
@@ -23,6 +24,35 @@
 namespace Ggui
 {
 using namespace ApplicationInternal;
+
+SDL_Rect ApplicationInternal::FitWindowToDisplays(
+    SDL_Rect window, std::span<const SDL_Rect> displays)
+{
+    if (displays.empty()) return window;
+    const auto overlap = [&](const SDL_Rect& display) {
+        const int width = std::max(0,
+            std::min(window.x + window.w, display.x + display.w) - std::max(window.x, display.x));
+        const int height = std::max(0,
+            std::min(window.y + window.h, display.y + display.h) - std::max(window.y, display.y));
+        return static_cast<std::int64_t>(width) * height;
+    };
+    const SDL_Rect* target = &displays.front();
+    std::int64_t best_overlap = overlap(*target);
+    for (const SDL_Rect& display : displays.subspan(1))
+    {
+        const std::int64_t candidate = overlap(display);
+        if (candidate > best_overlap)
+        {
+            target = &display;
+            best_overlap = candidate;
+        }
+    }
+    window.w = std::min(window.w, target->w);
+    window.h = std::min(window.h, target->h);
+    window.x = std::clamp(window.x, target->x, target->x + target->w - window.w);
+    window.y = std::clamp(window.y, target->y, target->y + target->h - window.h);
+    return window;
+}
 
 int Application::Run(int argc, char** argv)
 {
@@ -97,6 +127,7 @@ int Application::Run(int argc, char** argv)
             {
                 ImGuiTestEngineResultSummary summary;
                 ImGuiTestEngine_GetResultSummary(_test_engine, &summary);
+                ImGuiTestEngine_PrintResultSummary(_test_engine);
                 _test_result = summary.CountTested > 0 && summary.CountTested == summary.CountSuccess ? 0 : 1;
                 _running = false;
             }
@@ -254,10 +285,40 @@ void Application::WindowSettingsApplyAll(ImGuiContext*, ImGuiSettingsHandler* ha
     const SDL_WindowFlags flags = SDL_GetWindowFlags(application->_window);
     if ((flags & (SDL_WINDOW_MAXIMIZED | SDL_WINDOW_MINIMIZED)) != 0)
         SDL_RestoreWindow(application->_window); // GCOV_EXCL_LINE: headless Xvfb has no window manager state to restore
-    if (application->_window_has_size)
-        SDL_SetWindowSize(application->_window, application->_window_width, application->_window_height);
-    if (application->_window_has_position)
-        SDL_SetWindowPosition(application->_window, application->_window_x, application->_window_y);
+    if (application->_window_has_size || application->_window_has_position)
+    {
+        int width = 0;
+        int height = 0;
+        int x = 0;
+        int y = 0;
+        SDL_GetWindowSize(application->_window, &width, &height);
+        SDL_GetWindowPosition(application->_window, &x, &y);
+        SDL_Rect desired{application->_window_has_position ? application->_window_x : x,
+            application->_window_has_position ? application->_window_y : y,
+            application->_window_has_size ? application->_window_width : width,
+            application->_window_has_size ? application->_window_height : height};
+        int display_count = 0;
+        SDL_DisplayID* display_ids = SDL_GetDisplays(&display_count);
+        std::vector<SDL_Rect> displays;
+        displays.reserve(static_cast<std::size_t>(std::max(0, display_count)));
+        for (int index = 0; index < display_count; ++index)
+        {
+            SDL_Rect usable{};
+            if (SDL_GetDisplayUsableBounds(display_ids[index], &usable))
+                displays.push_back(usable);
+        }
+        SDL_free(display_ids);
+        const SDL_Rect fitted = FitWindowToDisplays(desired, displays);
+        if (fitted.x != desired.x || fitted.y != desired.y || fitted.w != desired.w || fitted.h != desired.h)
+            application->_default_layout = true;
+        desired = fitted;
+        application->_window_x = desired.x;
+        application->_window_y = desired.y;
+        application->_window_width = desired.w;
+        application->_window_height = desired.h;
+        SDL_SetWindowSize(application->_window, desired.w, desired.h);
+        SDL_SetWindowPosition(application->_window, desired.x, desired.y);
+    }
     if (application->_window_maximized)
         SDL_MaximizeWindow(application->_window);
 }
@@ -326,6 +387,9 @@ void Application::LoadSettings()
         nlohmann::json json;
         input >> json;
         _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
+        _repository_visible_bookmarks = json.value("visibleBookmarks", decltype(_repository_visible_bookmarks){});
+        _repository_selected_tags = json.value("selectedTags", decltype(_repository_selected_tags){});
+        _repository_selected_remotes = json.value("selectedRemotes", decltype(_repository_selected_remotes){});
         _default_layout = json.value("defaultLayout", true);
         _diff_side_by_side = json.value("diffSideBySide", false);
         const int whitespace = json.value("diffWhitespaceMode", 0);
@@ -348,7 +412,10 @@ void Application::SaveSettings()
     try
     {
         std::filesystem::create_directories(_settings_path.parent_path());
-        const nlohmann::json json{{"recentRepositories", _recent_repositories}, {"defaultLayout", _default_layout},
+        const nlohmann::json json{{"recentRepositories", _recent_repositories},
+            {"visibleBookmarks", _repository_visible_bookmarks},
+            {"selectedTags", _repository_selected_tags},
+            {"selectedRemotes", _repository_selected_remotes}, {"defaultLayout", _default_layout},
             {"diffSideBySide", _diff_side_by_side}, {"diffWhitespaceMode", WhitespaceModeIndex(_diff_whitespace_mode)},
             {"diffContextLines", _diff_context_lines}, {"uiScale", _ui_scale_percent}};
         const std::filesystem::path temporary = _settings_path.string() + ".tmp";

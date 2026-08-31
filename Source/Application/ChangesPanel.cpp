@@ -89,6 +89,12 @@ void Application::RenderChanges()
         const std::string item_id = "###" + label;
         const ImU32 accent = StatusColor(display_status);
         const bool selected = ImGui::Selectable(item_id.c_str(), file.path == _selected_file, 0, ImVec2(0.0f, 26.0f));
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+        {
+            ImGuiContext& g = *GImGui;
+            IMGUI_TEST_ENGINE_ITEM_INFO(ImGui::GetItemID(), label.c_str(), ImGuiItemStatusFlags_None);
+        }
+#endif
         if (selection_navigated && file.path == _selected_file)
             ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
         const bool hovered = ImGui::IsItemHovered();
@@ -256,8 +262,8 @@ void Application::RenderChangeInformation()
         ImGui::End();
         return;
     }
-    const auto revision = std::ranges::find(_snapshot->revisions, _selected_revision, &Revision::oid);
-    if (revision == _snapshot->revisions.end())
+    const auto revision = std::ranges::find(_history_revisions, _selected_revision, &Revision::oid);
+    if (revision == _history_revisions.end())
     {
         ImGui::TextDisabled("Select a change to inspect it.");
         ImGui::End();

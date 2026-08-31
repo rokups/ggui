@@ -19,10 +19,16 @@ using namespace RepositoryInternal;
 
 void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
 {
+    LoadFile(command, git.get(), gg, inspector_request.load(), session.load());
+}
+
+void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command, git_repository* repository,
+    gg_repository* gg_repository, std::uint64_t request_generation, std::uint64_t request_session)
+{
     git_oid oid{};
-    Check(gg_repository_resolve(&oid, gg, command.revision.c_str()), "resolve file revision");
+    Check(gg_repository_resolve(&oid, gg_repository, command.revision.c_str()), "resolve file revision");
     git_commit* raw_commit = nullptr;
-    Check(git_commit_lookup(&raw_commit, git.get(), &oid), "load file revision");
+    Check(git_commit_lookup(&raw_commit, repository, &oid), "load file revision");
     std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
     git_tree* raw_tree = nullptr;
     Check(git_commit_tree(&raw_tree, commit.get()), "load file revision tree");
@@ -39,19 +45,27 @@ void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
     if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
         throw std::runtime_error("selected path is not a file");
     git_blob* raw_blob = nullptr;
-    Check(git_blob_lookup(&raw_blob, git.get(), git_tree_entry_id(entry.get())), "load file contents");
+    Check(git_blob_lookup(&raw_blob, repository, git_tree_entry_id(entry.get())), "load file contents");
     std::unique_ptr<git_blob, decltype(&git_blob_free)> blob(raw_blob, git_blob_free);
     const char* contents = static_cast<const char*>(git_blob_rawcontent(blob.get()));
-    Post(FileContentReady{command.revision, command.path,
-        std::string(contents == nullptr ? "" : contents, static_cast<std::size_t>(git_blob_rawsize(blob.get())))});
+    if (request_session == session.load() && request_generation == inspector_request.load())
+        Post(FileContentReady{command.revision, command.path,
+            std::string(contents == nullptr ? "" : contents, static_cast<std::size_t>(git_blob_rawsize(blob.get())))});
 }
 
 void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
 {
+    LoadPatch(command, git.get(), gg, generation.load(), inspector_request.load(), session.load());
+}
+
+void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* repository,
+    gg_repository* gg_repository, std::uint64_t snapshot_generation, std::uint64_t request_generation,
+    std::uint64_t request_session)
+{
     git_oid oid{};
-    Check(gg_repository_resolve(&oid, gg, command.revision.c_str()), "resolve diff revision");
+    Check(gg_repository_resolve(&oid, gg_repository, command.revision.c_str()), "resolve diff revision");
     git_commit* raw_commit = nullptr;
-    Check(git_commit_lookup(&raw_commit, git.get(), &oid), "load diff revision");
+    Check(git_commit_lookup(&raw_commit, repository, &oid), "load diff revision");
     std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
     git_tree* raw_new_tree = nullptr;
     Check(git_commit_tree(&raw_new_tree, commit.get()), "load revision tree");
@@ -71,9 +85,9 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     if (!command.compare_to.empty())
     {
         git_oid compare_oid{};
-        Check(gg_repository_resolve(&compare_oid, gg, command.compare_to.c_str()), "resolve comparison revision");
+        Check(gg_repository_resolve(&compare_oid, gg_repository, command.compare_to.c_str()), "resolve comparison revision");
         git_commit* raw_compare = nullptr;
-        Check(git_commit_lookup(&raw_compare, git.get(), &compare_oid), "load comparison revision");
+        Check(git_commit_lookup(&raw_compare, repository, &compare_oid), "load comparison revision");
         std::unique_ptr<git_commit, decltype(&git_commit_free)> compare(raw_compare, git_commit_free);
         git_tree* raw_compare_tree = nullptr;
         Check(git_commit_tree(&raw_compare_tree, compare.get()), "load comparison tree");
@@ -87,7 +101,7 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     find_options.flags = GIT_DIFF_FIND_RENAMES;
     const auto create_diff = [&](git_tree* old_value, git_tree* new_value) {
         git_diff* raw_diff = nullptr;
-        Check(git_diff_tree_to_tree(&raw_diff, git.get(), old_value, new_value, nullptr), "create diff");
+        Check(git_diff_tree_to_tree(&raw_diff, repository, old_value, new_value, nullptr), "create diff");
         std::unique_ptr<git_diff, decltype(&git_diff_free)> value(raw_diff, git_diff_free);
         Check(git_diff_find_similar(value.get(), &find_options), "find renamed files");
         return value;
@@ -101,7 +115,7 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
         status_diff = create_diff(old_tree.get(), new_tree.get());
         files_diff = status_diff.get();
     }
-    DiffResult result{generation, command.revision, command.path, {}, {}, false, {}, command.compare_to,
+    DiffResult result{snapshot_generation, command.revision, command.path, {}, {}, false, {}, command.compare_to,
         command.file_comparison};
     result.options = command.options;
     for (size_t index = 0; index < git_diff_num_deltas(files_diff); ++index)
@@ -114,7 +128,7 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     if (command.compare_to.empty() && !command.file_comparison)
     {
         Conflicts conflicts;
-        Check(gg_repository_conflicts(&conflicts.value, gg, &oid), "load revision conflicts");
+        Check(gg_repository_conflicts(&conflicts.value, gg_repository, &oid), "load revision conflicts");
         for (size_t index = 0; index < conflicts.value.count; ++index)
         {
             const std::string_view path =
@@ -134,12 +148,12 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     }
     git_oid working_copy{};
     if (command.compare_to.empty() && !command.file_comparison
-        && gg_repository_working_copy(&working_copy, gg) == GIT_OK
+        && gg_repository_working_copy(&working_copy, gg_repository) == GIT_OK
         && git_oid_equal(&oid, &working_copy) != 0)
     {
         gg_status_options options = GG_STATUS_OPTIONS_INIT;
         Status status;
-        Check(gg_repository_status(&status.value, gg, &options), "load working-copy status");
+        Check(gg_repository_status(&status.value, gg_repository, &options), "load working-copy status");
         for (size_t index = 0; index < status.value.entry_count; ++index)
         {
             const gg_status_entry& entry = status.value.entries[index];
@@ -167,6 +181,9 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
     if (command.fallback_to_first
         && std::ranges::none_of(result.files, [&](const StatusEntry& file) { return file.path == result.path; }))
         result.path = result.files.empty() ? "" : result.files.front().path;
+    if (request_session == session.load() && request_generation == inspector_request.load())
+        Post(ChangedFilesReady{command.revision, command.compare_to, command.file_comparison,
+            result.path, result.files, command.options});
     if (!result.path.empty())
     {
         const git_diff_delta* selected_delta = nullptr;
@@ -191,8 +208,8 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
         const char* new_path = selected_delta == nullptr || selected_delta->new_file.path == nullptr
             ? result.path.c_str()
             : selected_delta->new_file.path;
-        result.before = BlobText(git.get(), content_old_tree, old_path, result.binary);
-        result.after = BlobText(git.get(), content_new_tree, new_path, result.binary);
+        result.before = BlobText(repository, content_old_tree, old_path, result.binary);
+        result.after = BlobText(repository, content_new_tree, new_path, result.binary);
         if (selected_delta != nullptr)
         {
             result.selected_status = selected_delta->status;
@@ -226,7 +243,7 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
             else if (command.options.whitespace_mode == DiffWhitespaceMode::IgnoreAllWhitespace)
                 options.flags |= GIT_DIFF_IGNORE_WHITESPACE;
             git_diff* raw_filtered = nullptr;
-            Check(git_diff_tree_to_tree(&raw_filtered, git.get(), content_old_tree, content_new_tree, &options),
+            Check(git_diff_tree_to_tree(&raw_filtered, repository, content_old_tree, content_new_tree, &options),
                 "create filtered diff");
             filtered_diff.reset(raw_filtered);
             Check(git_diff_find_similar(filtered_diff.get(), &find_options), "find filtered renamed files");
@@ -300,7 +317,8 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command)
             }
         }
     }
-    Post(DiffReady{std::move(result)});
+    if (request_session == session.load() && request_generation == inspector_request.load())
+        Post(DiffReady{std::move(result)});
 }
 
 } // namespace Ggui

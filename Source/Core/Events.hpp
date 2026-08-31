@@ -12,6 +12,17 @@ namespace Ggui
 {
 
 struct SnapshotReady { std::shared_ptr<const RepoSnapshot> snapshot; };
+struct HistoryReady { std::shared_ptr<const HistoryView> view; };
+struct ClosestBookmarkReady { std::uint64_t repository_generation = 0; std::string label; };
+struct ChangedFilesReady
+{
+    std::string revision;
+    std::string compare_to;
+    bool file_comparison = false;
+    std::string selected_path;
+    std::vector<StatusEntry> files;
+    DiffOptions options;
+};
 struct DiffReady { DiffResult diff; };
 struct FileContentReady { std::string revision; std::string path; std::string contents; };
 struct OperationStarted { std::string name; };
@@ -30,8 +41,8 @@ struct CredentialRequest
     unsigned int allowed_types = 0;
 };
 
-using Event = std::variant<SnapshotReady, DiffReady, FileContentReady, OperationStarted, OperationProgress,
-    OperationFinished, ErrorEvent, CredentialRequest>;
+using Event = std::variant<SnapshotReady, HistoryReady, ClosestBookmarkReady, ChangedFilesReady, DiffReady,
+    FileContentReady, OperationStarted, OperationProgress, OperationFinished, ErrorEvent, CredentialRequest>;
 
 struct CredentialResponse
 {

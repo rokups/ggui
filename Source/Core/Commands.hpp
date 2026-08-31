@@ -17,7 +17,15 @@ struct OpenRepository { std::string path; };
 struct CloseRepository {};
 struct InitRepository { std::string path; };
 struct CloneRepository { std::string url; std::string path; };
-struct Refresh { bool snapshot_working_copy = true; };
+struct Refresh
+{
+    bool snapshot_working_copy = true;
+    // Empty means a full reconciliation. Watcher-originated refreshes carry
+    // coalesced repository-relative paths.
+    std::vector<std::string> paths;
+};
+struct RebuildHistory { HistoryQuery query; };
+struct ExpandHistoryRegion { std::string id; };
 struct Fetch { std::string remote; bool tracked_only = false; };
 struct Push { std::string bookmark; std::string remote; bool force = false; };
 struct AddRemote { std::string name; std::string url; };
@@ -88,6 +96,7 @@ struct Reorder
     std::string source;
     std::string target;
     gg_reorder_placement placement = GG_REORDER_BEFORE;
+    bool copy = false;
 };
 struct Split { std::string revision; std::string message; std::vector<std::string> filesets; };
 struct Squash
@@ -147,7 +156,8 @@ struct TrackPaths { std::vector<std::string> filesets; bool include_ignored = fa
 struct UntrackPaths { std::vector<std::string> filesets; };
 struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; };
 
-using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, Fetch, Push,
+using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, RebuildHistory,
+    ExpandHistoryRegion, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
     Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,

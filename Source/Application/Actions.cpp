@@ -116,10 +116,19 @@ void Application::ToggleComparison(bool file_comparison)
 
 void Application::RevealRevision(const std::string& oid)
 {
-    _graph_filter.clear();
     _show_history = true;
     _reveal_revision = oid;
-    SelectRevision(oid);
+    _graph_filter = oid;
+    _history_requested_generation = 0;
+    UpdateGraphBuild();
+}
+
+void Application::CancelHistorySearch()
+{
+    _reveal_revision.clear();
+    _graph_filter.clear();
+    _history_requested_generation = 0;
+    UpdateGraphBuild();
 }
 
 bool Application::CanCreateChange() const
@@ -127,7 +136,7 @@ bool Application::CanCreateChange() const
     return _snapshot != nullptr && !_selected_revisions.empty()
         && std::ranges::all_of(_selected_revisions, [this](const std::string& oid) {
                return std::ranges::any_of(
-                   _snapshot->revisions, [&](const Revision& revision) { return revision.oid == oid; });
+                   _history_revisions, [&](const Revision& revision) { return revision.oid == oid; });
            });
 }
 
@@ -155,10 +164,24 @@ void Application::CreateChange(const std::string& parent)
         : !parent.empty()                              ? parent
         : _selected_revisions.size() == 1              ? _selected_revisions.front()
                                                         : "";
-    const auto selected = std::ranges::find(_snapshot->revisions, selected_revision, &Revision::oid);
-    NewChange create{{}, parent.empty() ? SelectedParentRevisions() : std::vector{parent}, {}, {}, false};
-    if (selected != _snapshot->revisions.end() && selected->empty)
+    const auto selected = std::ranges::find(_history_revisions, selected_revision, &Revision::oid);
+    // Preserve the working-copy shorthand once a gg workspace exists.
+    // Resolving that shorthand to its object ID needlessly sends the core
+    // through alias resolution (and touches alias reflogs). Before the first
+    // gg change exists, however, the toolbar's conceptual "@" is Git HEAD and
+    // must be passed as the selected object ID.
+    const std::vector<std::string> create_parents = parent.empty() ? SelectedParentRevisions()
+        : parent == "@" && !_snapshot->working_copy.empty()        ? std::vector<std::string>{"@"}
+                                                                   : std::vector{selected_revision};
+    NewChange create{{}, create_parents, {}, {}, false};
+    if (selected != _history_revisions.end() && selected->empty)
     {
+        // An empty working-copy change is already the writable change the
+        // user is asking for. Creating another one can produce the exact same
+        // Git object (timestamps have one-second precision), and then trying
+        // to abandon the "old" object abandons the new one as well.
+        if (selected->oid == _snapshot->working_copy)
+            return;
         QueueCommands({std::move(create), Abandon{{selected->oid}, true, false, {}}}, {selected->oid},
             "Creating a new change will rewrite a locked empty parent.");
         return;
@@ -176,10 +199,10 @@ bool Application::IsLocked(const std::string& identifier) const
     });
     if (ref != _snapshot->refs.end())
         oid = ref->target;
-    const auto revision = std::ranges::find_if(_snapshot->revisions, [&](const Revision& candidate) {
+    const auto revision = std::ranges::find_if(_history_revisions, [&](const Revision& candidate) {
         return candidate.oid == oid || std::ranges::find(candidate.aliases, oid) != candidate.aliases.end();
     });
-    return revision != _snapshot->revisions.end() && revision->pushed;
+    return revision != _history_revisions.end() && revision->pushed;
 }
 
 bool Application::DialogModifiesLockedCommit() const
@@ -206,8 +229,8 @@ bool Application::DialogModifiesLockedCommit() const
         std::string destination = _input_secondary;
         if (destination.empty())
         {
-            const auto source = std::ranges::find(_snapshot->revisions, _selected_revision, &Revision::oid);
-            if (source != _snapshot->revisions.end() && !source->parents.empty())
+            const auto source = std::ranges::find(_history_revisions, _selected_revision, &Revision::oid);
+            if (source != _history_revisions.end() && !source->parents.empty())
                 destination = source->parents.front();
         }
         return IsLocked(_selected_revision) || IsLocked(destination);
@@ -231,9 +254,11 @@ bool Application::DialogModifiesLockedCommit() const
 
 const Revision* Application::RebaseSource() const
 {
-    if (_snapshot == nullptr)
-        return nullptr;
-    return ResolveSnapshotRevision(*_snapshot, _input_secondary);
+    const auto source = std::ranges::find_if(_history_revisions, [this](const Revision& revision) {
+        return revision.oid == _input_secondary
+            || std::ranges::find(revision.aliases, _input_secondary) != revision.aliases.end();
+    });
+    return source == _history_revisions.end() ? nullptr : &*source;
 }
 
 void Application::QueueCommands(
@@ -258,22 +283,25 @@ std::vector<std::string> Application::AbandonRevisions(
     std::vector<std::string> result{selected};
     if (!include_descendants)
         return result;
-    bool added = true;
-    while (added)
+    git_repository* raw = nullptr;
+    if (_snapshot == nullptr || git_repository_open_ext(
+            &raw, _snapshot->root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
+        return {};
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
+    git_oid selected_oid{};
+    if (git_oid_fromstr(&selected_oid, selected.c_str(), git_repository_oid_type(repository.get())) != GIT_OK)
+        return {};
+    git_revwalk* raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repository.get()) != GIT_OK) return {};
+    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
+    if (git_revwalk_push_glob(walk.get(), "refs/*") != GIT_OK) return {};
+    git_oid candidate{};
+    while (git_revwalk_next(&candidate, walk.get()) == GIT_OK)
     {
-        added = false;
-        for (const Revision& revision : _snapshot->revisions)
-        {
-            if (std::ranges::find(result, revision.oid) != result.end())
-                continue;
-            if (std::ranges::any_of(revision.parents, [&](const std::string& parent) {
-                    return std::ranges::find(result, parent) != result.end();
-                }))
-            {
-                result.push_back(revision.oid);
-                added = true;
-            }
-        }
+        if (git_oid_equal(&candidate, &selected_oid) != 0) continue;
+        const int descendant = git_graph_descendant_of(repository.get(), &candidate, &selected_oid);
+        if (descendant < 0) return {};
+        if (descendant != 0) result.emplace_back(git_oid_tostr_s(&candidate));
     }
     return result;
 }
@@ -308,10 +336,10 @@ void Application::RequestAbandon(const std::string& revision, bool include_desce
         return;
     if (_selected_revision != revision)
         SelectRevision(revision);
-    const auto selected = std::ranges::find(_snapshot->revisions, revision, &Revision::oid);
+    const auto selected = std::ranges::find(_history_revisions, revision, &Revision::oid);
     const bool has_refs = std::ranges::any_of(
         _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
-    if (!include_descendants && selected != _snapshot->revisions.end() && selected->empty && !has_refs
+    if (!include_descendants && selected != _history_revisions.end() && selected->empty && !has_refs
         && !selected->pushed)
         _engine.Enqueue(Abandon{{revision}, false, false, {}});
     else
@@ -384,10 +412,10 @@ gg_reorder_placement Application::DropPlacement(DropAction action)
     return action == DropAction::ReorderAfter ? GG_REORDER_BEFORE : GG_REORDER_AFTER;
 }
 
-std::string_view Application::DropTooltip(DropAction action, bool entire_branch)
+std::string_view Application::DropTooltip(DropAction action, bool entire_branch, bool copy)
 {
-    return action == DropAction::ReorderBefore ? "Move before"
-        : action == DropAction::ReorderAfter    ? "Move after"
+    return action == DropAction::ReorderBefore ? copy ? "Copy as child of" : "Move as child of"
+        : action == DropAction::ReorderAfter    ? copy ? "Copy as parent of" : "Move as parent of"
         : action == DropAction::Squash
         ? entire_branch ? "Squash entire branch into" : "Squash change into"
         : entire_branch ? "Rebase entire branch onto" : "Rebase change onto";
@@ -410,13 +438,15 @@ std::pair<std::string, std::string> Application::AdjacentRevisions(const std::st
     std::string child;
     if (_snapshot == nullptr)
         return {parent, child};
-    const auto source = std::ranges::find(_snapshot->revisions, oid, &Revision::oid);
-    if (source == _snapshot->revisions.end())
+    const auto source = std::ranges::find(_history_revisions, oid, &Revision::oid);
+    if (source == _history_revisions.end())
         return {parent, child};
-    if (source->parents.size() == 1)
+    if (source->parents.size() == 1
+        && std::ranges::find(_history_revisions, source->parents.front(), &Revision::oid)
+            != _history_revisions.end())
         parent = source->parents.front();
     int children = 0;
-    for (const Revision& revision : _snapshot->revisions)
+    for (const Revision& revision : _history_revisions)
     {
         if (std::ranges::find(revision.parents, source->oid) == revision.parents.end())
             continue;
@@ -432,14 +462,31 @@ void Application::ResetRepositoryState()
 {
     ClearConflictMerge();
     _snapshot.reset();
+    _history_view.reset();
+    _history_revisions.clear();
     _diff = {};
     _visible_revisions.clear();
     _graph_rows.clear();
     _graph_generation = 0;
+    _history_requested_generation = 0;
+    _history_applied_request = 0;
+    _reveal_revision.clear();
+    _history_scroll_target = -1.0f;
+    _history_scroll_frames = 0;
+    _history_anchor.clear();
+    _history_anchor_offset = 0.0f;
+    _history_expansion_pending.clear();
+    _history_expansion_feedback_until = {};
     _revision_prefixes.clear();
     _operation_prefixes.clear();
+    _history_refs_by_revision.clear();
     _selected_revision.clear();
     _selected_revisions.clear();
+    _visible_bookmarks.clear();
+    _visible_bookmarks_user_selected = false;
+    _selected_tags.clear();
+    _selected_remotes.clear();
+    _selected_remotes_user_selected = false;
     _selected_file.clear();
     _preferred_file.clear();
     _pending_revision.clear();
@@ -454,6 +501,7 @@ void Application::ResetRepositoryState()
     _changes_filter.clear();
     _graph_filter.clear();
     _built_filter.clear();
+    _built_bookmarks.clear();
     _diff_loading = false;
     _default_layout = true;
     _status_message.clear();
@@ -530,8 +578,8 @@ void Application::OpenFileInEditor(const std::string& path)
 {
     if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
         return;
-    const auto current = std::ranges::find(_snapshot->revisions, _snapshot->working_copy, &Revision::oid);
-    const bool direct_parent = current != _snapshot->revisions.end() && current->parents.size() == 1
+    const auto current = std::ranges::find(_history_revisions, _snapshot->working_copy, &Revision::oid);
+    const bool direct_parent = current != _history_revisions.end() && current->parents.size() == 1
         && current->parents.front() == _diff.revision;
     const bool changed_in_working_copy = std::ranges::any_of(_snapshot->status, [&](const StatusEntry& file) {
         return file.status != GIT_DELTA_UNMODIFIED && file.status != GIT_DELTA_IGNORED
@@ -872,6 +920,14 @@ void Application::OpenExternalDiff(const std::string& path, const std::string& c
 {
     if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
         return;
+    const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
+        return file.conflicted && (file.path == path || file.old_path == path);
+    });
+    if (conflicted)
+    {
+        OpenConflictInMergeTool(path);
+        return;
+    }
     const std::string revision = _diff.revision
         + (compare_to.empty() && _diff.revision == _snapshot->working_copy ? "^" : "^!");
     std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",

@@ -99,6 +99,13 @@ void Application::RenderSettings()
             const ImGuiTabItemFlags flags = scope == ConfigScope::User && _settings_select_user
                 ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None;
             const bool open = ImGui::BeginTabItem(ConfigScopeName(scope), nullptr, flags);
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+            {
+                ImGuiContext& g = *GImGui;
+                IMGUI_TEST_ENGINE_ITEM_INFO(
+                    ImGui::GetItemID(), ConfigScopeName(scope), ImGuiItemStatusFlags_None);
+            }
+#endif
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && !available)
                 ImGui::SetTooltip("Open a repository to edit this scope.");
             if (open)

@@ -22,6 +22,8 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -110,6 +112,39 @@ struct TemporaryRepository
 
     ~TemporaryRepository() { std::filesystem::remove_all(path); }
 
+    void AppendEmptyCommits(std::size_t count)
+    {
+        if (git_libgit2_init() <= 0)
+            throw std::runtime_error("could not initialize libgit2");
+        struct ShutdownGit
+        {
+            ~ShutdownGit() { git_libgit2_shutdown(); }
+        } shutdown_git;
+        git_repository* raw_repository = nullptr;
+        CheckGit(git_repository_open(&raw_repository, path.string().c_str()));
+        std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(
+            raw_repository, git_repository_free);
+        git_commit* raw_parent = nullptr;
+        CheckGit(git_revparse_single(reinterpret_cast<git_object**>(&raw_parent), repository.get(), "HEAD"));
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+        git_tree* raw_tree = nullptr;
+        CheckGit(git_commit_tree(&raw_tree, parent.get()));
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
+        git_signature* raw_signature = nullptr;
+        CheckGit(git_signature_now(&raw_signature, "ggui test", "ggui@example.test"));
+        std::unique_ptr<git_signature, decltype(&git_signature_free)> signature(raw_signature, git_signature_free);
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            const git_commit* parents[]{parent.get()};
+            git_oid oid{};
+            CheckGit(git_commit_create(&oid, repository.get(), "HEAD", signature.get(), signature.get(), nullptr,
+                ("history " + std::to_string(index)).c_str(), tree.get(), 1, parents));
+            git_commit* raw_next = nullptr;
+            CheckGit(git_commit_lookup(&raw_next, repository.get(), &oid));
+            parent.reset(raw_next);
+        }
+    }
+
     std::filesystem::path path;
 };
 
@@ -118,6 +153,28 @@ struct RemovePath
     ~RemovePath() { std::filesystem::remove_all(path); }
     std::filesystem::path path;
 };
+
+#ifndef _WIN32
+struct ScopedEnvironmentVariable
+{
+    ScopedEnvironmentVariable(const char* variable, const char* value) : name(variable)
+    {
+        if (const char* current = std::getenv(variable)) previous = current;
+        setenv(variable, value, 1);
+    }
+
+    ~ScopedEnvironmentVariable()
+    {
+        if (previous.has_value())
+            setenv(name.c_str(), previous->c_str(), 1);
+        else
+            unsetenv(name.c_str());
+    }
+
+    std::string name;
+    std::optional<std::string> previous;
+};
+#endif
 
 struct TemporaryGlobalConfig
 {
@@ -151,6 +208,7 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
 {
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     std::shared_ptr<const RepoSnapshot> last_snapshot;
+    std::uint64_t requested_topology = 0;
     while (std::chrono::steady_clock::now() < deadline)
     {
         for (const Event& event : engine.PollEvents())
@@ -165,8 +223,21 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
             if (const auto* ready = std::get_if<SnapshotReady>(&event))
             {
                 last_snapshot = ready->snapshot;
-                if (predicate(*ready->snapshot))
-                    return ready->snapshot;
+                if (requested_topology != ready->snapshot->repository_generation)
+                {
+                    requested_topology = ready->snapshot->repository_generation;
+                    engine.Enqueue(RebuildHistory{HistoryQuery{{}, {}, {}, {}, requested_topology}});
+                }
+            }
+            if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton && last_snapshot != nullptr
+                && ready->view->repository_generation == last_snapshot->repository_generation)
+            {
+                auto combined = std::make_shared<RepoSnapshot>(*last_snapshot);
+                for (const HistoryItem& item : ready->view->items)
+                    if (item.kind == HistoryItemKind::Commit) combined->revisions.push_back(item.revision);
+                last_snapshot = combined;
+                if (predicate(*combined)) return combined;
             }
         }
         std::this_thread::sleep_for(10ms);
@@ -415,14 +486,46 @@ TEST(GraphLayout, IsDeterministic)
     EXPECT_EQ(GraphColumnCount(BuildGraphLayout(nodes)), 1);
 }
 
-TEST(GraphLayout, MarksMissingParentsAndIgnoresBackwardsParents)
+TEST(GraphLayout, KeepsEveryEdgeColorStableBetweenCommitDots)
 {
-    const std::vector<GraphNode> nodes{{"a", {"missing", "a"}}, {"b", {"a"}}};
+    // The side reaches base first in display order. The later primary edge
+    // adopts base's already-active track at the primary dot; it must not
+    // change color halfway between primary and base.
+    const std::vector<GraphNode> nodes{{"merge", {"primary", "side"}},
+        {"side", {"base"}}, {"primary", {"base"}}, {"base", {}}};
+    const std::vector<GraphRow> rows = BuildGraphLayout(nodes);
+    ASSERT_EQ(rows.size(), 4U);
+    EXPECT_EQ(rows[1].tracks_after, (std::vector<int>{0, 1}));
+    EXPECT_EQ(rows[2].tracks_after, (std::vector<int>{1}));
+    ASSERT_EQ(rows[2].parent_tracks.size(), 1U);
+    EXPECT_EQ(rows[2].parent_tracks.front(), rows[3].track);
+    for (const GraphRow& row : rows)
+    {
+        ASSERT_EQ(row.parent_columns.size(), row.parent_tracks.size());
+        for (std::size_t parent = 0; parent < row.parent_columns.size(); ++parent)
+            EXPECT_EQ(row.parent_tracks[parent], row.tracks_after[row.parent_columns[parent]]);
+    }
+}
+
+TEST(GraphLayout, RejectsMissingEndpoints)
+{
+    EXPECT_THROW(BuildGraphLayout({{"child", {"missing"}}}), std::invalid_argument);
+}
+
+TEST(GraphLayout, RejectsParentsThatPrecedeChildren)
+{
+    EXPECT_THROW(BuildGraphLayout({{"parent", {}}, {"child", {"parent"}}}), std::invalid_argument);
+}
+
+TEST(GraphLayout, SupportsEveryLaneWithoutACap)
+{
+    std::vector<GraphNode> nodes;
+    for (int index = 0; index < 64; ++index)
+        nodes.push_back({"child-" + std::to_string(index), {"parent-" + std::to_string(index)}});
+    for (int index = 0; index < 64; ++index)
+        nodes.push_back({"parent-" + std::to_string(index), {}});
     const auto rows = BuildGraphLayout(nodes);
-    ASSERT_EQ(rows.size(), 2U);
-    EXPECT_TRUE(rows.front().parent_columns.empty());
-    EXPECT_TRUE(rows.front().continues_beyond_layout);
-    EXPECT_FALSE(rows.back().continues_beyond_layout);
+    EXPECT_GT(GraphColumnCount(rows), 16);
 }
 
 TEST(TextHelpers, ShortensAndSelectsFirstLine)
@@ -430,6 +533,8 @@ TEST(TextHelpers, ShortensAndSelectsFirstLine)
     EXPECT_EQ(ShortId("abcdefghijkl", 8), "abcdefgh");
     EXPECT_EQ(UniquePrefixLengths({"alpha", "beta"}), (std::vector<std::size_t>{1, 1}));
     EXPECT_EQ(UniquePrefixLengths({"abcdef00", "abcdef11", "xyz00000"}, 2), (std::vector<std::size_t>{7, 7, 2}));
+    EXPECT_EQ(UniquePrefixLengths({"abcdef00", "abcdef00", "abcdef11"}),
+        (std::vector<std::size_t>{7, 7, 7}));
     EXPECT_EQ(FirstLine("subject\nbody"), "subject");
 }
 
@@ -447,29 +552,6 @@ TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
     EXPECT_TRUE(revisions[0].pushed);
     EXPECT_FALSE(revisions[1].pushed);
     EXPECT_TRUE(revisions[2].pushed);
-}
-
-TEST(RevisionHelpers, ClassifiesBookmarkRelationshipsConservatively)
-{
-    RepoSnapshot snapshot;
-    const auto revision = [](std::string oid, std::vector<std::string> parents) {
-        Revision result;
-        result.oid = std::move(oid);
-        result.parents = std::move(parents);
-        return result;
-    };
-    snapshot.revisions = {
-        revision("local", {"base"}), revision("remote", {"base"}), revision("local-child", {"local"}),
-        revision("remote-child", {"remote"}), revision("base", {}), revision("incomplete", {"missing"}),
-    };
-
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "local"), BookmarkRelation::Synchronized);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local-child", "local"), BookmarkRelation::LocalAhead);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "remote", "remote-child"), BookmarkRelation::RemoteAhead);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "remote"), BookmarkRelation::Diverged);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "local", "incomplete"), BookmarkRelation::Unavailable);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "absent", "remote"), BookmarkRelation::Unavailable);
-    EXPECT_EQ(ClassifyBookmarkRelation(snapshot, "absent", "absent"), BookmarkRelation::Unavailable);
 }
 
 TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
@@ -565,6 +647,192 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_FALSE(nonempty_change->empty);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+}
+
+TEST(RepositoryEngine, PublishesProgressiveConnectedHistoryView)
+{
+    TemporaryRepository repository;
+    for (int index = 0; index < 300; ++index)
+    {
+        std::ofstream(repository.path / "tracked.txt") << index << '\n';
+        const std::string message = index == 150 ? "old-description" : "history-" + std::to_string(index);
+        ASSERT_EQ(std::system(("git -C " + Quote(repository.path)
+            + " add tracked.txt && git -C " + Quote(repository.path)
+            + " commit -m " + message + " >/dev/null 2>&1").c_str()), 0);
+    }
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path)
+        + " update-ref refs/remotes/origin/main HEAD").c_str()), 0);
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path) + " tag old HEAD~290").c_str()), 0);
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
+    ASSERT_NE(snapshot, nullptr);
+    engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, {}, snapshot->repository_generation}});
+
+    bool saw_skeleton = false;
+    std::shared_ptr<const HistoryView> detail;
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    while (std::chrono::steady_clock::now() < deadline && detail == nullptr)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event))
+            {
+                if (ready->view->skeleton) saw_skeleton = true;
+                else detail = ready->view;
+            }
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_TRUE(saw_skeleton);
+    ASSERT_NE(detail, nullptr);
+    EXPECT_EQ(detail->repository_generation, snapshot->repository_generation);
+    EXPECT_LE(std::ranges::count_if(detail->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit;
+    }), 258);
+    EXPECT_TRUE(std::ranges::any_of(detail->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::CollapsedRegion;
+    }));
+    EXPECT_TRUE(std::ranges::all_of(detail->items, [](const HistoryItem& item) {
+        return item.kind != HistoryItemKind::Commit || item.revision.pushed;
+    }));
+    std::unordered_set<std::string> ids;
+    for (const HistoryItem& item : detail->items) ids.insert(item.id);
+    for (const HistoryItem& item : detail->items)
+        for (const std::string& parent : item.parents) EXPECT_TRUE(ids.contains(parent));
+    std::unordered_map<std::string, std::vector<std::string>> neighbors;
+    for (const HistoryItem& item : detail->items)
+        for (const std::string& parent : item.parents)
+        {
+            neighbors[item.id].push_back(parent);
+            neighbors[parent].push_back(item.id);
+        }
+    std::vector<std::string> pending{detail->items.front().id};
+    std::unordered_set<std::string> connected;
+    while (!pending.empty())
+    {
+        const std::string current = std::move(pending.back());
+        pending.pop_back();
+        if (!connected.insert(current).second) continue;
+        pending.insert(pending.end(), neighbors[current].begin(), neighbors[current].end());
+    }
+    EXPECT_EQ(connected.size(), detail->items.size());
+
+    // A ref/ID hit is already a complete direct search result. Do not launch
+    // the repository-wide description scan (which would also match the older
+    // commit named "old-description").
+    engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, "old", snapshot->repository_generation}});
+    std::shared_ptr<const HistoryView> direct_search;
+    const auto direct_deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < direct_deadline && direct_search == nullptr)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton && ready->view->request > detail->request)
+                direct_search = ready->view;
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_NE(direct_search, nullptr);
+    EXPECT_EQ(std::ranges::count_if(direct_search->items,
+        [](const HistoryItem& item) { return item.search_match; }), 1);
+
+    engine.Enqueue(RebuildHistory{HistoryQuery{{}, {"old"}, {}, "history-0", snapshot->repository_generation}});
+    std::shared_ptr<const HistoryView> searched;
+    const auto search_deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < search_deadline && searched == nullptr)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton && ready->view->request > direct_search->request)
+                searched = ready->view;
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_NE(searched, nullptr);
+    EXPECT_TRUE(std::ranges::any_of(searched->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit && item.search_match
+            && item.revision.description.find("history-0") != std::string::npos;
+    }));
+    ids.clear();
+    for (const HistoryItem& item : searched->items) ids.insert(item.id);
+    for (const HistoryItem& item : searched->items)
+        for (const std::string& parent : item.parents) EXPECT_TRUE(ids.contains(parent));
+
+    const auto region = std::ranges::find_if(searched->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::CollapsedRegion;
+    });
+    ASSERT_NE(region, searched->items.end());
+    const auto searched_commits = std::ranges::count_if(searched->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit;
+    });
+    engine.Enqueue(ExpandHistoryRegion{region->id});
+    std::shared_ptr<const HistoryView> expanded;
+    const auto expand_deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < expand_deadline && expanded == nullptr)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton && ready->view->request > searched->request)
+                expanded = ready->view;
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_NE(expanded, nullptr);
+    const auto expanded_commits = std::ranges::count_if(expanded->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit;
+    });
+    EXPECT_GT(expanded_commits, searched_commits);
+    EXPECT_LE(expanded_commits, searched_commits + 128);
+}
+
+TEST(RepositoryEngine, PublishesClosestBookmarkAsynchronously)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+
+    std::uint64_t topology = 0;
+    bool saw_detail = false;
+    std::optional<ClosestBookmarkReady> closest;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline && (!saw_detail || !closest.has_value()))
+    {
+        for (const Event& event : engine.PollEvents())
+        {
+            if (const auto* error = std::get_if<ErrorEvent>(&event))
+                FAIL() << error->operation << ": " << error->message;
+            if (const auto* ready = std::get_if<SnapshotReady>(&event))
+            {
+                topology = ready->snapshot->repository_generation;
+                engine.Enqueue(RebuildHistory{HistoryQuery{{}, {}, {}, {}, topology}});
+            }
+            else if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton
+                    && ready->view->repository_generation == topology)
+                saw_detail = true;
+            else if (const auto* ready = std::get_if<ClosestBookmarkReady>(&event))
+                closest = *ready;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_NE(topology, 0U);
+    EXPECT_TRUE(saw_detail);
+    ASSERT_TRUE(closest.has_value());
+    EXPECT_EQ(closest->repository_generation, topology);
+    EXPECT_EQ(closest->label, "main");
+}
+
+TEST(RepositoryEngine, OpensRepositoryWithTagPointingToTree)
+{
+    TemporaryRepository repository;
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path) +
+                              " tag -a tree-only -m tree-only 'HEAD^{tree}' >/dev/null 2>&1")
+                              .c_str()),
+        0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened =
+        WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    EXPECT_TRUE(std::ranges::none_of(opened->refs,
+        [](const NamedRef& reference) { return reference.name == "tree-only"; }));
 }
 
 TEST(RepositoryEngine, SnapshotsPendingFilesBeforeCreatingAChange)
@@ -1029,6 +1297,10 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     });
     ASSERT_NE(diverged, nullptr);
     const auto [local_tip, remote_tip] = refs(*diverged);
+    const auto local_revision = FindRevision(*diverged, local_tip);
+    ASSERT_NE(local_revision, diverged->revisions.end());
+    ASSERT_FALSE(local_revision->parents.empty());
+    const std::string local_base = local_revision->parents.front();
 
     engine.Enqueue(Rebase{local_tip, remote_tip, true});
     const auto conflicted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -1081,9 +1353,34 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     });
     ASSERT_NE(conflict_checked_out, nullptr);
 
+    std::ifstream marker_input(repository.path / "tracked.txt", std::ios::binary);
+    const std::string markers{
+        std::istreambuf_iterator<char>(marker_input), std::istreambuf_iterator<char>()};
+    ASSERT_NE(markers.find("<<<<<<< Conflict"), std::string::npos);
+    std::ofstream(repository.path / "tracked.txt", std::ios::binary | std::ios::trunc)
+        << "partial resolution\n" << markers;
+    engine.Enqueue(Refresh{});
+    const auto marker_retained = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > conflict_checked_out->generation
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                   return entry.path == "tracked.txt" && entry.conflicted;
+               });
+    });
+    ASSERT_NE(marker_retained, nullptr);
+
+    engine.Enqueue(Rebase{conflicted_source, local_base});
+    const auto graph_preserved = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= marker_retained->generation)
+            return false;
+        const auto revision = FindRevision(snapshot, conflicted_source);
+        return revision != snapshot.revisions.end() && revision->conflicted
+            && snapshot.working_copy == revision->oid;
+    });
+    ASSERT_NE(graph_preserved, nullptr);
+
     engine.Enqueue(Rebase{conflicted_source, alternate_id});
     const auto conflict_rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        if (snapshot.generation <= conflict_checked_out->generation)
+        if (snapshot.generation <= graph_preserved->generation)
             return false;
         const auto revision = FindRevision(snapshot, conflicted_source);
         return revision != snapshot.revisions.end() && revision->conflicted
@@ -1429,7 +1726,9 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto opened = WaitForSnapshot(engine,
-        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty() && !snapshot.status.empty(); });
+        [](const RepoSnapshot& snapshot) {
+            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
+        });
     ASSERT_NE(opened, nullptr);
 
     engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
@@ -1489,7 +1788,9 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto opened = WaitForSnapshot(engine,
-        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty() && !snapshot.status.empty(); });
+        [](const RepoSnapshot& snapshot) {
+            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
+        });
     ASSERT_NE(opened, nullptr);
     const auto source = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
     ASSERT_NE(source, opened->revisions.end());
@@ -1701,7 +2002,9 @@ TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto opened = WaitForSnapshot(engine,
-        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty() && !snapshot.status.empty(); });
+        [](const RepoSnapshot& snapshot) {
+            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
+        });
     ASSERT_NE(opened, nullptr);
     const auto working = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
     ASSERT_NE(working, opened->revisions.end());
@@ -1860,10 +2163,8 @@ TEST(RepositoryEngine, RevertsSelectedHunksOntoWorkingCopy)
     });
     ASSERT_NE(child, nullptr);
     engine.Enqueue(RevertFile{source, "tracked.txt", "tracked.txt", first_hunk});
-    const auto reverted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > child->generation;
-    });
-    ASSERT_NE(reverted, nullptr);
+    const TerminalEvent reverted = WaitForTerminal(engine, "revert file");
+    ASSERT_TRUE(reverted.finished) << reverted.message;
     std::ifstream tracked(repository.path / "tracked.txt");
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), std::istreambuf_iterator<char>()),
         contents("one", "FIVE"));

@@ -112,6 +112,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 options.source = value.source.c_str();
                 options.target = value.target.c_str();
                 options.placement = value.placement;
+                options.copy = value.copy;
                 Mutate("reorder change", [&](auto* out, auto* operation) {
                     return gg_repository_reorder(out, gg, &options, operation);
                 });
@@ -282,6 +283,8 @@ std::string RepositoryEngine::Impl::CommandName(const Command& command)
         Overloaded{[](const OpenRepository&) { return "open"; }, [](const CloseRepository&) { return "close"; },
             [](const InitRepository&) { return "init"; },
             [](const CloneRepository&) { return "clone"; }, [](const Refresh&) { return "refresh"; },
+            [](const RebuildHistory&) { return "rebuild history"; },
+            [](const ExpandHistoryRegion&) { return "expand history"; },
             [](const Fetch& value) { return value.tracked_only ? "pull" : "fetch"; },
             [](const Push&) { return "push"; },
             [](const AddRemote&) { return "add remote"; },

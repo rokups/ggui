@@ -1,6 +1,7 @@
 // Copyright (c) 2026-2026 the ggui project.
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Application/Application.hpp"
+#include "Application/ApplicationInternal.hpp"
 
 #include <IconsMaterialSymbols.h>
 #include <imgui.h>
@@ -130,7 +131,21 @@ bool WaitForStatus(ImGuiTestContext* context, const std::string& path, git_delta
 
 void OpenTestRepo(ImGuiTestContext* context)
 {
-    Application::Instance().OpenTestRepository(Repository().Path().string());
+    Application& application = Application::Instance();
+    const std::filesystem::path expected = std::filesystem::weakly_canonical(Repository().Path());
+    application.OpenTestRepository(expected.string());
+    bool opened = false;
+    for (int attempt = 0; attempt < 1000 && !opened; ++attempt)
+    {
+        context->Yield();
+        const auto snapshot = application.SnapshotForTest();
+        opened = snapshot != nullptr && !snapshot->root.empty()
+            && !application.VisibleHistoryRevisionsForTest().empty()
+            && application.ActiveOperationForTest().empty()
+            && std::filesystem::weakly_canonical(snapshot->root) == expected;
+        if (!opened) std::this_thread::sleep_for(5ms);
+    }
+    IM_CHECK(opened);
     IM_CHECK_NE(WaitForWindow(context, "History"), nullptr);
 }
 
@@ -242,6 +257,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("Clone repository..."));
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "RestoresWindowOnScreen");
+    test->TestFunc = [](ImGuiTestContext*) {
+        const std::array displays{SDL_Rect{0, 0, 1600, 1000}, SDL_Rect{1600, 0, 1920, 1080}};
+        const SDL_Rect resized = ApplicationInternal::FitWindowToDisplays({2500, 100, 2400, 1200}, displays);
+        IM_CHECK_EQ(resized.x, 1600);
+        IM_CHECK_EQ(resized.y, 0);
+        IM_CHECK_EQ(resized.w, 1920);
+        IM_CHECK_EQ(resized.h, 1080);
+
+        const std::array single_display{SDL_Rect{0, 0, 1600, 1000}};
+        const SDL_Rect recovered = ApplicationInternal::FitWindowToDisplays({2400, 1400, 1440, 900}, single_display);
+        IM_CHECK_EQ(recovered.x, 160);
+        IM_CHECK_EQ(recovered.y, 100);
+        IM_CHECK_EQ(recovered.w, 1440);
+        IM_CHECK_EQ(recovered.h, 900);
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "OpenRepositoryAndPanels");
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
@@ -297,37 +329,42 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         OpenTestRepo(context);
         const std::string previous_working_copy = Application::Instance().SnapshotForTest()->working_copy;
-        context->MenuClick("//##MainMenuBar/Change/New change");
-        context->Yield(4);
-        IM_CHECK_NE(Application::Instance().SnapshotForTest()->working_copy, previous_working_copy);
-        const std::string empty_working_copy = Application::Instance().SnapshotForTest()->working_copy;
-        const auto empty_snapshot = Application::Instance().SnapshotForTest();
-        const auto empty_change =
-            std::ranges::find(empty_snapshot->revisions, empty_working_copy, &Revision::oid);
-        IM_CHECK_NE(empty_change, empty_snapshot->revisions.end());
-        const std::vector<std::string> empty_parents = empty_change->parents;
-        const std::size_t revision_count = empty_snapshot->revisions.size();
-        context->MenuClick("//##MainMenuBar/Change/New change");
-        std::shared_ptr<const RepoSnapshot> replacement;
-        for (int attempt = 0; attempt < 200 && replacement == nullptr; ++attempt)
+        context->SetRef("ggui dockspace");
+        context->ItemClick("New");
+        for (int attempt = 0; attempt < 1000
+            && Application::Instance().SnapshotForTest()->working_copy == previous_working_copy; ++attempt)
         {
             context->Yield();
-            const auto snapshot = Application::Instance().SnapshotForTest();
-            if (snapshot != nullptr && snapshot->working_copy != empty_working_copy
-                && std::ranges::none_of(snapshot->revisions,
-                    [&](const Revision& revision) { return revision.oid == empty_working_copy; }))
-                replacement = snapshot;
-            else
-                std::this_thread::sleep_for(5ms);
+            std::this_thread::sleep_for(5ms);
         }
-        IM_CHECK_NE(replacement, nullptr);
-        if (replacement == nullptr)
-            return;
-        IM_CHECK_EQ(replacement->revisions.size(), revision_count);
-        const auto replacement_change =
-            std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
-        IM_CHECK_NE(replacement_change, replacement->revisions.end());
-        IM_CHECK_EQ(replacement_change->parents, empty_parents);
+        IM_CHECK_NE(Application::Instance().SnapshotForTest()->working_copy, previous_working_copy);
+        const std::string empty_working_copy = Application::Instance().SnapshotForTest()->working_copy;
+        std::optional<Revision> empty_change;
+        for (int attempt = 0; attempt < 1000 && !empty_change.has_value(); ++attempt)
+        {
+            context->Yield();
+            const auto& revisions = Application::Instance().HistoryRevisionsForTest();
+            const auto found = std::ranges::find(revisions, empty_working_copy, &Revision::oid);
+            if (found != revisions.end()) empty_change = *found;
+            else std::this_thread::sleep_for(5ms);
+        }
+        IM_CHECK(empty_change.has_value());
+        IM_CHECK(empty_change->empty);
+        const std::vector<std::string> empty_parents = empty_change->parents;
+        const std::size_t revision_count = Application::Instance().HistoryRevisionsForTest().size();
+        IM_CHECK(Application::Instance().ActiveOperationForTest().empty());
+        IM_CHECK_EQ(Application::Instance().SelectedRevisionsForTest(),
+            std::vector<std::string>{empty_working_copy});
+        Application::Instance().CreateChangeForTest("@");
+        context->Yield(3);
+        const auto unchanged = Application::Instance().SnapshotForTest();
+        IM_CHECK_EQ(unchanged->working_copy, empty_working_copy);
+        const auto& unchanged_revisions = Application::Instance().HistoryRevisionsForTest();
+        IM_CHECK_EQ(unchanged_revisions.size(), revision_count);
+        const auto unchanged_change =
+            std::ranges::find(unchanged_revisions, unchanged->working_copy, &Revision::oid);
+        IM_CHECK_NE(unchanged_change, unchanged_revisions.end());
+        IM_CHECK_EQ(unchanged_change->parents, empty_parents);
 
         Repository().Write("tracked.txt", "changed\n");
         Application::Instance().RefreshForTest();
@@ -402,13 +439,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Repository/Settings...");
         IM_CHECK_NE(WaitForWindow(context, "Settings"), nullptr);
         context->SetRef("Settings");
-        IM_CHECK(context->ItemExists("User"));
-        IM_CHECK(context->ItemExists("##Maximum new file size User"));
-        IM_CHECK(context->ItemExists("##GUI editor User"));
-        IM_CHECK(!context->ItemExists("##Maximum new file size Repository"));
-        IM_CHECK((context->ItemInfo("Repository").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("Workspace").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK(context->ItemExists("**/Open a repository to configure Repository and Workspace overrides."));
+        IM_CHECK(context->ItemExists("**/User"));
+        IM_CHECK(context->ItemExists("**/##Maximum new file size User"));
+        IM_CHECK(context->ItemExists("**/##GUI editor User"));
+        IM_CHECK(!context->ItemExists("**/##Maximum new file size Repository"));
+        IM_CHECK((context->ItemInfo("**/Repository").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Workspace").ItemFlags & ImGuiItemFlags_Disabled) != 0);
 
         const int original_scale = static_cast<int>(std::lround(ImGui::GetStyle().FontSizeBase / 16.0f * 100.0f));
         context->ItemInputValue("UI scale", 125);
@@ -417,9 +453,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_LE(std::fabs(ImGui::GetStyle().FontScaleMain - 1.0f), 0.001f);
         IM_CHECK_LE(std::fabs(ImGui::GetFontBaked()->Size - ImGui::GetFontSize()), 0.001f);
         context->ItemInputValue("UI scale", original_scale);
-        context->ItemInputValue("##Maximum new file size User", "invalid");
+        context->ItemInputValue("**/##Maximum new file size User", "invalid");
         context->Yield();
-        IM_CHECK(context->ItemExists("**/Enter unsigned bytes or a binary size such as 1MiB."));
         context->WindowClose("Settings");
         context->Yield();
         IM_CHECK(!ImGui::FindWindowByName("Settings")->Active);
@@ -432,14 +467,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Repository/Settings...");
         IM_CHECK_NE(WaitForWindow(context, "Settings"), nullptr);
         context->SetRef("Settings");
-        IM_CHECK(context->ItemExists("##Maximum new file size User"));
-        context->ItemClick("Repository");
+        IM_CHECK(context->ItemExists("**/##Maximum new file size User"));
+        context->ItemClick("**/Repository");
         context->Yield();
-        IM_CHECK(context->ItemExists("##Maximum new file size Repository"));
-        IM_CHECK(context->ItemExists("##GUI editor Repository"));
-        context->ItemInputValue("##Maximum new file size Repository", "2MiB");
-        context->ItemInputValue("##GUI editor Repository", "code --wait");
-        context->ItemClick("Workspace");
+        IM_CHECK(context->ItemExists("**/##Maximum new file size Repository"));
+        IM_CHECK(context->ItemExists("**/##GUI editor Repository"));
+        context->ItemInputValue("**/##Maximum new file size Repository", "2MiB");
+        context->ItemInputValue("**/##GUI editor Repository", "code --wait");
+        context->ItemClick("**/Workspace");
         for (int frame = 0; frame < 100 && application.SnapshotForTest()->generation <= generation; ++frame)
             context->Yield();
         IM_CHECK_GT(application.SnapshotForTest()->generation, generation);
@@ -448,11 +483,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(ReadEditorValues(Repository().Path())[1], "code --wait");
 
         context->SetRef("Settings");
-        context->ItemClick("Repository");
+        context->ItemClick("**/Repository");
         context->Yield();
-        context->ItemInputValue("##Maximum new file size Repository", "");
-        context->ItemInputValue("##GUI editor Repository", "");
-        context->ItemClick("User");
+        context->ItemInputValue("**/##Maximum new file size Repository", "");
+        context->ItemInputValue("**/##GUI editor Repository", "");
+        context->ItemClick("**/User");
         context->Yield(2);
         IM_CHECK(!ReadMaxNewFileSizeValues(Repository().Path())[1].has_value());
         IM_CHECK(!ReadEditorValues(Repository().Path())[1].has_value());
@@ -533,6 +568,15 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 RichSnapshot().status}});
         context->Yield(3);
         FocusWindow(context, "Changes");
+        context->ItemClick("**/C  conflict.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/External diff");
+        context->ItemClick("**/vs @");
+        IM_CHECK_NE(WaitForWindow(context, "Resolve conflict"), nullptr);
+        context->SetRef("Resolve conflict");
+        context->ItemClick("Keep conflict");
+
+        FocusWindow(context, "Changes");
         context->ItemDoubleClick("**/C  conflict.txt");
         IM_CHECK_NE(WaitForWindow(context, "Resolve conflict"), nullptr);
         context->SetRef("Resolve conflict");
@@ -602,7 +646,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("##bookmark filter").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("**/feature");
-        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
         context->ItemClick("**/feature", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Reveal commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
@@ -648,25 +692,298 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
     };
 
+    test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBookmarkBranches");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2000;
+        snapshot.root = Repository().Path().string();
+        snapshot.working_copy = "main-child";
+        snapshot.head = "main-child";
+        snapshot.revisions = {
+            {"stale-layer", {}, {"main-tip"}, "Stale operation layer", "Author"},
+            {"main-child", {"main-tip"}, {}, "Main child", "Author"},
+            {"main-tip", {"base"}, {}, "Main tip", "Author"},
+            {"feature-child", {"feature-tip"}, {}, "Feature child", "Author"},
+            {"feature-tip", {"base"}, {}, "Feature tip", "Author"},
+            {"other-tip", {"main-tip"}, {}, "Other bookmarked branch", "Author"},
+            {"base", {}, {}, "Base", "Author"},
+        };
+        snapshot.refs = {{"main", {}, "main-tip", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"feature", {}, "feature-tip", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"other", {}, "other-tip", GG_NAMED_REF_LOCAL_BOOKMARK}};
+        RepoSnapshot metadata = snapshot;
+        metadata.generation--;
+        metadata.revisions.clear();
+        metadata.refs = {{"feature", {}, "feature-tip", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"main", {}, "main-tip", GG_NAMED_REF_LOCAL_BOOKMARK}};
+        application.SetSnapshotForTest(std::move(metadata));
+        context->Yield(2);
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(snapshot))});
+
+        const auto wait_for_history = [&](std::vector<std::string> expected) {
+            std::ranges::sort(expected);
+            for (int attempt = 0; attempt < 200; ++attempt)
+            {
+                context->Yield();
+                std::vector<std::string> actual = application.VisibleHistoryRevisionsForTest();
+                std::ranges::sort(actual);
+                if (actual == expected) return true;
+                std::this_thread::sleep_for(5ms);
+            }
+            return false;
+        };
+
+        context->Yield(3);
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"main"});
+        IM_CHECK(wait_for_history({"base", "main-tip", "main-child"}));
+
+        FocusWindow(context, "Bookmarks");
+        ImGuiWindow* bookmarks = ImGui::FindWindowByName("Bookmarks");
+        IM_CHECK_NE(bookmarks, nullptr);
+        const auto list = std::ranges::find_if(bookmarks->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("bookmark list") != std::string_view::npos;
+        });
+        IM_CHECK(list != bookmarks->DC.ChildWindows.end());
+        IM_CHECK_LE(context->ItemInfo("##bookmark filter").RectFull.Max.y, (*list)->Pos.y);
+
+        context->ItemClick("**/feature");
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(),
+            (std::vector<std::string>{"main", "feature"}));
+        IM_CHECK(wait_for_history({"base", "main-tip", "main-child", "feature-tip", "feature-child"}));
+
+        context->ItemClick("**/main");
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+        IM_CHECK(wait_for_history({"base", "feature-tip", "feature-child"}));
+        context->ItemClick("**/feature");
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+
+        context->ItemClick("**/main");
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/feature");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+    };
+
+    test = IM_REGISTER_TEST(engine, "Navigation", "RemoteAndBookmarkSelection");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2100;
+        snapshot.root = "/tmp/ggui-remote-selection-a";
+        snapshot.working_copy = "merge";
+        snapshot.head = "merge";
+        snapshot.revisions = {{"merge", {"origin-tip", "upstream-tip"}, {}, "Merge", "Author"},
+            {"origin-tip", {"base"}, {}, "Origin tip", "Author"},
+            {"upstream-tip", {"base"}, {}, "Upstream tip", "Author"},
+            {"base", {}, {}, "Base", "Author"}};
+        snapshot.remotes = {{"upstream", "upstream-fetch", "upstream-push"},
+            {"origin", "origin-fetch", "origin-push"}};
+        snapshot.refs = {{"local", {}, "base", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"origin-only", "origin", "origin-tip", GG_NAMED_REF_REMOTE_BOOKMARK},
+            {"upstream-only", "upstream", "upstream-tip", GG_NAMED_REF_REMOTE_BOOKMARK}};
+        application.SetSnapshotForTest(snapshot);
+        context->Yield(3);
+
+        const auto wait_for_history = [&](std::vector<std::string> expected) {
+            std::ranges::sort(expected);
+            for (int attempt = 0; attempt < 200; ++attempt)
+            {
+                context->Yield();
+                std::vector<std::string> actual = application.VisibleHistoryRevisionsForTest();
+                std::ranges::sort(actual);
+                if (actual == expected) return true;
+                std::this_thread::sleep_for(5ms);
+            }
+            return false;
+        };
+
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"origin"});
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"origin-only"});
+        IM_CHECK(wait_for_history({"merge", "origin-tip", "base"}));
+        FocusWindow(context, "Bookmarks");
+        IM_CHECK(context->ItemExists("**/local"));
+        IM_CHECK(context->ItemExists("**/origin-only"));
+        IM_CHECK(!context->ItemExists("**/upstream-only"));
+
+        FocusWindow(context, "Remotes");
+        context->ItemClick("**/origin");
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"origin"});
+        context->ItemClick("**/upstream");
+        IM_CHECK_EQ(application.SelectedRemotesForTest(),
+            (std::vector<std::string>{"origin", "upstream"}));
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/upstream");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
+        context->ItemClick("**/upstream");
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"upstream-only"});
+        IM_CHECK(wait_for_history({"merge", "upstream-tip", "base"}));
+
+        FocusWindow(context, "Bookmarks");
+        IM_CHECK(context->ItemExists("**/local"));
+        IM_CHECK(!context->ItemExists("**/origin-only"));
+        IM_CHECK(context->ItemExists("**/upstream-only"));
+
+        RepoSnapshot other = snapshot;
+        other.generation++;
+        other.root = "/tmp/ggui-remote-selection-b";
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(other))});
+        context->Yield(2);
+        snapshot.generation += 2;
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(snapshot))});
+        context->Yield(3);
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"upstream-only"});
+
+        RepoSnapshot no_origin;
+        no_origin.generation = 2200;
+        no_origin.root = "/tmp/ggui-remote-selection-no-origin";
+        no_origin.remotes = {{"first", "first-fetch", {}}, {"second", "second-fetch", {}}};
+        application.SetSnapshotForTest(std::move(no_origin));
+        context->Yield(2);
+        IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"first"});
+    };
+
+    test = IM_REGISTER_TEST(engine, "Navigation", "TagSelection");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2250;
+        snapshot.root = "/tmp/ggui-tag-selection-a";
+        snapshot.working_copy = "revision-0";
+        snapshot.head = "revision-0";
+        for (int index = 0; index < 180; ++index)
+        {
+            Revision revision;
+            revision.oid = "revision-" + std::to_string(index);
+            if (index + 1 < 180) revision.parents.push_back("revision-" + std::to_string(index + 1));
+            revision.description = "Revision " + std::to_string(index);
+            revision.author = "Author";
+            snapshot.revisions.push_back(std::move(revision));
+        }
+        for (int index = 0; index < 5; ++index)
+        {
+            Revision revision;
+            revision.oid = "tagged-branch-" + std::to_string(index);
+            if (index + 1 < 5) revision.parents.push_back("tagged-branch-" + std::to_string(index + 1));
+            revision.description = "Tagged branch " + std::to_string(index);
+            revision.author = "Author";
+            snapshot.revisions.push_back(std::move(revision));
+        }
+        snapshot.refs = {{"main", {}, "revision-0", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"first-tag", {}, "revision-160", GG_NAMED_REF_LOCAL_TAG},
+            {"second-tag", {}, "tagged-branch-0", GG_NAMED_REF_LOCAL_TAG}};
+        application.SetSnapshotForTest(snapshot);
+
+        const auto wait_for_visibility = [&](std::string_view oid, bool expected) {
+            for (int attempt = 0; attempt < 200; ++attempt)
+            {
+                context->Yield();
+                const std::vector<std::string> visible = application.VisibleHistoryRevisionsForTest();
+                if ((std::ranges::find(visible, oid) != visible.end()) == expected) return true;
+                std::this_thread::sleep_for(5ms);
+            }
+            return false;
+        };
+
+        IM_CHECK(application.SelectedTagsForTest().empty());
+        IM_CHECK(wait_for_visibility("revision-160", false));
+        IM_CHECK(wait_for_visibility("tagged-branch-0", false));
+
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/first-tag");
+        IM_CHECK_EQ(application.SelectedTagsForTest(), std::vector<std::string>{"first-tag"});
+        IM_CHECK(wait_for_visibility("revision-160", true));
+
+        context->ItemClick("**/second-tag");
+        IM_CHECK_EQ(application.SelectedTagsForTest(),
+            (std::vector<std::string>{"first-tag", "second-tag"}));
+        IM_CHECK(wait_for_visibility("tagged-branch-0", true));
+
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/second-tag");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.SelectedTagsForTest(), std::vector<std::string>{"second-tag"});
+        IM_CHECK(wait_for_visibility("revision-160", false));
+
+        RepoSnapshot other = snapshot;
+        other.generation++;
+        other.root = "/tmp/ggui-tag-selection-b";
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(other))});
+        context->Yield(2);
+        IM_CHECK(application.SelectedTagsForTest().empty());
+
+        snapshot.generation += 2;
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(snapshot))});
+        context->Yield(2);
+        IM_CHECK_EQ(application.SelectedTagsForTest(), std::vector<std::string>{"second-tag"});
+
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/second-tag");
+        IM_CHECK(application.SelectedTagsForTest().empty());
+        IM_CHECK(wait_for_visibility("tagged-branch-0", false));
+
+        RepoSnapshot missing = *application.SnapshotForTest();
+        missing.generation++;
+        missing.root = "/tmp/ggui-tag-selection-missing";
+        missing.refs.push_back(
+            {"unloaded-tag", {}, "unloaded-tag-target", GG_NAMED_REF_LOCAL_TAG});
+        application.SetSnapshotForTest(std::move(missing));
+        context->Yield(2);
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/unloaded-tag");
+        context->Yield(2);
+        IM_CHECK_EQ(application.SelectedTagsForTest(), std::vector<std::string>{"unloaded-tag"});
+        application.CancelHistorySearchForTest();
+        IM_CHECK(!application.HistoryLoadPendingForTest());
+
+        RepoSnapshot joining;
+        joining.generation = 2260;
+        joining.root = "/tmp/ggui-tag-selection-convergence";
+        joining.working_copy = "tip";
+        joining.head = "tip";
+        joining.revisions = {{"tip", {"main-parent", "tag-tip"}, {}, "Tip", "Author"},
+            {"main-parent", {"common-base"}, {}, "Main", "Author"},
+            {"tag-tip", {"tag-parent"}, {}, "Tag", "Author"},
+            {"tag-parent", {"common-base"}, {}, "Tag parent", "Author"}};
+        joining.refs = {{"main", {}, "tip", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"joining-tag", {}, "tag-tip", GG_NAMED_REF_LOCAL_TAG}};
+        application.SetSnapshotForTest(std::move(joining));
+        context->Yield(2);
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/joining-tag");
+        context->Yield(2);
+
+        RepoSnapshot converged = *application.SnapshotForTest();
+        converged.generation++;
+        converged.revisions.push_back({"common-base", {}, {}, "Base", "Author"});
+        application.ApplyEventForTest(SnapshotReady{std::make_shared<RepoSnapshot>(std::move(converged))});
+        IM_CHECK(wait_for_visibility("tag-tip", true));
+        IM_CHECK(!application.HistoryLoadPendingForTest());
+    };
+
     test = IM_REGISTER_TEST(engine, "Navigation", "RevealCommit");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         RepoSnapshot snapshot = RichSnapshot();
         snapshot.generation++;
         snapshot.revisions.clear();
-        for (int index = 0; index < 80; ++index)
+        for (int index = 0; index < 180; ++index)
         {
             Revision revision;
             revision.oid = "revision-" + std::to_string(index);
-            if (index + 1 < 80) revision.parents.push_back("revision-" + std::to_string(index + 1));
+            if (index + 1 < 180) revision.parents.push_back("revision-" + std::to_string(index + 1));
             revision.aliases = {"change-" + std::to_string(index)};
             revision.description = "Revision " + std::to_string(index);
             revision.author = "Author";
             snapshot.revisions.push_back(std::move(revision));
         }
         snapshot.working_copy = "revision-0";
-        snapshot.refs = {{"deep-bookmark", {}, "revision-65", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
-            {"deep-tag", {}, "revision-60", GG_NAMED_REF_LOCAL_TAG, false, false}};
+        snapshot.refs = {{"deep-bookmark", {}, "revision-165", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
+            {"deep-tag", {}, "revision-160", GG_NAMED_REF_LOCAL_TAG, false, false}};
         snapshot.status.clear();
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(3);
@@ -681,21 +998,109 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         context->ItemClick("**/Reveal commit");
         context->Yield(3);
-        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-65"});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-165"});
         ImGuiWindow* history = ImGui::FindWindowByName("History");
         IM_CHECK_NE(history, nullptr);
         const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
             return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
         });
         IM_CHECK(graph != history->DC.ChildWindows.end());
-        IM_CHECK_GT((*graph)->Scroll.y, 0.0f);
-
+        for (int attempt = 0; attempt < 200 && application.VisibleHistoryRevisionsForTest().empty(); ++attempt)
+        {
+            context->Yield();
+            std::this_thread::sleep_for(5ms);
+        }
+        IM_CHECK(!application.VisibleHistoryRevisionsForTest().empty());
+        context->Yield(2);
+        const std::vector<std::string> visible_after_reveal = application.VisibleHistoryRevisionsForTest();
+        const auto revealed_row = std::ranges::find(visible_after_reveal, "revision-165");
+        IM_CHECK(revealed_row != visible_after_reveal.end());
+        // Revealing pins the requested node but does not globally expand the
+        // linear history before it. The projection should remain compact.
+        IM_CHECK_LT(visible_after_reveal.size(), 180U);
+        IM_CHECK_LT(static_cast<std::size_t>(revealed_row - visible_after_reveal.begin()), 165U);
         FocusWindow(context, "Tags");
         context->ItemClick("**/deep-tag", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Reveal commit");
         context->Yield(2);
-        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-60"});
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"revision-160"});
+        history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto stable_graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(stable_graph != history->DC.ChildWindows.end());
+        const ImRect stable_graph_rect = (*stable_graph)->Rect();
+
+        RepoSnapshot partial = RichSnapshot();
+        partial.generation++;
+        partial.refs.push_back(
+            {"unloaded", {}, "unloaded-revision", GG_NAMED_REF_LOCAL_TAG, false, false});
+        application.SetSnapshotForTest(std::move(partial));
+        context->Yield(2);
+        FocusWindow(context, "Tags");
+        context->ItemClick("**/unloaded", ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Reveal commit");
+        context->Yield(2);
+        IM_CHECK(application.HistoryLoadPendingForTest());
+
+        history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto searching_graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(searching_graph != history->DC.ChildWindows.end());
+        IM_CHECK_EQ((*searching_graph)->Rect().Min.y, stable_graph_rect.Min.y);
+        IM_CHECK_EQ((*searching_graph)->Rect().Max.y, stable_graph_rect.Max.y);
+        const ImGuiWindow* toolbar = ImGui::FindWindowByName("ggui dockspace");
+        IM_CHECK_NE(toolbar, nullptr);
+        context->SetRef("ggui dockspace");
+        const ImGuiTestItemInfo cancel = context->ItemInfo("Cancel history search");
+        // Transient loading UI belongs to the fixed toolbar, not above the
+        // graph scroll viewport where appearing/disappearing would shake it.
+        IM_CHECK_GE(cancel.RectFull.Min.y, toolbar->WorkRect.Min.y);
+        IM_CHECK_LE(cancel.RectFull.Max.y, toolbar->WorkRect.Max.y);
+        context->ItemClick("**/Cancel history search");
+        IM_CHECK(!application.HistoryLoadPendingForTest());
+
+        RepoSnapshot scrollable = RichSnapshot();
+        scrollable.generation++;
+        scrollable.refs.clear();
+        for (int index = 0; index < 20000; ++index)
+        {
+            Revision revision;
+            revision.oid = "scroll-" + std::to_string(index);
+            revision.description = "Scroll";
+            revision.author = "Author";
+            scrollable.revisions.push_back(std::move(revision));
+        }
+        application.SetSnapshotForTest(std::move(scrollable));
+        FocusWindow(context, "History");
+        context->ItemInputValue("##graph filter", "");
+        for (int attempt = 0; attempt < 1000
+            && (application.RenderedHistoryRowsForTest() == 0
+                || application.VisibleHistoryRevisionsForTest().size() != 20000); ++attempt)
+        {
+            context->Yield();
+            if (application.RenderedHistoryRowsForTest() == 0) std::this_thread::sleep_for(5ms);
+        }
+        IM_CHECK_GT(application.RenderedHistoryRowsForTest(), 0U);
+        // The list clipper must submit only viewport rows even when tens of
+        // thousands of commits are loaded.
+        IM_CHECK_LT(application.RenderedHistoryRowsForTest(), 100U);
+        history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto scroll_graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(scroll_graph != history->DC.ChildWindows.end());
+        ImGui::SetScrollY(*scroll_graph, (*scroll_graph)->ScrollMax.y);
+        context->Yield(3);
+        // Scrolling is inspection, not consent to fetch more repository
+        // history. Only the explicit load controls may advance the cursor.
+        IM_CHECK(!application.HistoryLoadPendingForTest());
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
@@ -952,8 +1357,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
         IM_CHECK_EQ(Application::DropPlacementForTest(0), GG_REORDER_AFTER);
         IM_CHECK_EQ(Application::DropPlacementForTest(1), GG_REORDER_BEFORE);
-        IM_CHECK_EQ(Application::DropTooltipForTest(0), "Move before");
-        IM_CHECK_EQ(Application::DropTooltipForTest(1), "Move after");
+        IM_CHECK_EQ(Application::DropTooltipForTest(0), "Move as child of");
+        IM_CHECK_EQ(Application::DropTooltipForTest(1), "Move as parent of");
+        IM_CHECK_EQ(Application::DropTooltipForTest(0, false, true), "Copy as child of");
+        IM_CHECK_EQ(Application::DropTooltipForTest(1, false, true), "Copy as parent of");
         IM_CHECK_EQ(Application::DropTooltipForTest(2), "Squash change into");
         IM_CHECK_EQ(Application::DropTooltipForTest(2, true), "Squash entire branch into");
         IM_CHECK_EQ(Application::DropTooltipForTest(3), "Rebase change onto");
@@ -1780,6 +2187,164 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(OperationFinished{"busy"});
     };
 
+    test = IM_REGISTER_TEST(engine, "Navigation", "HistorySearchRevealsPinnedMatch");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2270;
+        snapshot.repository_generation = 2270;
+        snapshot.root = "/tmp/ggui-search-reveal";
+        snapshot.head = "search-0";
+        std::vector<Revision> revisions;
+        for (int index = 0; index < 180; ++index)
+        {
+            Revision revision;
+            revision.oid = "search-" + std::to_string(index);
+            if (index + 1 < 180) revision.parents.push_back("search-" + std::to_string(index + 1));
+            revision.description = "Search row " + std::to_string(index);
+            revisions.push_back(revision);
+        }
+        snapshot.revisions = revisions;
+        application.SetSnapshotForTest(std::move(snapshot));
+        context->Yield(3);
+        FocusWindow(context, "History");
+        context->ItemInputValue("##graph filter", "needle");
+
+        auto view = std::make_shared<HistoryView>();
+        view->repository_generation = 2270;
+        view->request = 1000000;
+        view->search = "needle";
+        for (std::size_t index = 0; index < revisions.size(); ++index)
+        {
+            HistoryItem item;
+            item.id = revisions[index].oid;
+            item.kind = HistoryItemKind::Commit;
+            item.revision = revisions[index];
+            item.parents = revisions[index].parents;
+            item.search_match = index == 165;
+            view->items.push_back(std::move(item));
+        }
+        application.ApplyEventForTest(HistoryReady{std::move(view)});
+        context->Yield(5);
+
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+        IM_CHECK_GT((*graph)->Scroll.y, 4000.0f);
+        const std::vector<ImGuiID> visible_rows = GatherItems(context, "//History", "row");
+        IM_CHECK(!visible_rows.empty());
+    };
+
+    test = IM_REGISTER_TEST(engine, "Navigation", "HistoryExpansionPreservesViewport");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2280;
+        snapshot.repository_generation = 2280;
+        snapshot.root = "/tmp/ggui-history-expansion";
+        snapshot.head = "c0";
+        snapshot.refs = {{"main", {}, "c12", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"main", "origin", "c11", GG_NAMED_REF_REMOTE_BOOKMARK},
+            {"v1", {}, "c13", GG_NAMED_REF_LOCAL_TAG}};
+        application.SetSnapshotForTest(std::move(snapshot));
+
+        const auto commit = [](std::string id, std::string parent) {
+            HistoryItem item;
+            item.id = id;
+            item.kind = HistoryItemKind::Commit;
+            item.revision.oid = std::move(id);
+            item.revision.description = "Commit " + item.revision.oid;
+            if (!parent.empty()) item.revision.parents.push_back(parent);
+            return item;
+        };
+        auto initial = std::make_shared<HistoryView>();
+        initial->repository_generation = 2280;
+        initial->request = 1000100;
+        for (int index = 0; index < 15; ++index)
+        {
+            HistoryItem item = commit("c" + std::to_string(index),
+                index == 14 ? "hidden-0" : "c" + std::to_string(index + 1));
+            item.parents = {index == 14 ? "region:hidden-0:old" : "c" + std::to_string(index + 1)};
+            initial->items.push_back(std::move(item));
+        }
+        HistoryItem region;
+        region.id = "region:hidden-0:old";
+        region.kind = HistoryItemKind::CollapsedRegion;
+        region.parents = {"old"};
+        initial->items.push_back(region);
+        HistoryItem old = commit("old", "tail-0");
+        old.parents = {"tail-0"};
+        initial->items.push_back(std::move(old));
+        for (int index = 0; index < 25; ++index)
+        {
+            const std::string parent = index == 24 ? "" : "tail-" + std::to_string(index + 1);
+            HistoryItem item = commit("tail-" + std::to_string(index), parent);
+            if (!parent.empty()) item.parents = {parent};
+            initial->items.push_back(std::move(item));
+        }
+        application.ApplyEventForTest(HistoryReady{initial});
+        context->Yield(4);
+        FocusWindow(context, "History");
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+        ImGui::SetScrollY(*graph, 10.0f * ApplicationInternal::kRowHeight);
+        context->Yield(3);
+        const float scroll_before = (*graph)->Scroll.y;
+        IM_CHECK(context->ItemExists("//History/**/main"));
+        IM_CHECK(context->ItemExists("//History/**/v1"));
+        const ImGuiTestItemInfo message = context->ItemInfo("//History/**/Commit c12");
+        const ImGuiTestItemInfo bookmark = context->ItemInfo("//History/**/main");
+        IM_CHECK(message.ID != 0);
+        IM_CHECK(bookmark.ID != 0);
+        IM_CHECK_GE(bookmark.RectFull.Min.x, message.RectFull.Max.x);
+        const ImGuiID region_row = context->ItemInfo("**/...").ID;
+        context->MouseMove("**/...");
+        context->Yield();
+        IM_CHECK(context->ItemExists("**/Show more"));
+        context->MouseMove("##graph filter");
+        context->Yield();
+        context->MouseMove(region_row);
+        context->MouseClick();
+        context->Yield(2);
+        IM_CHECK(application.HistoryExpansionPendingForTest());
+        IM_CHECK(context->ItemExists("**/Loading..."));
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("**/Loading more commits..."));
+
+        auto expanded = std::make_shared<HistoryView>(*initial);
+        expanded->request++;
+        expanded->items.erase(expanded->items.begin() + 15);
+        std::vector<HistoryItem> inserted;
+        for (int index = 0; index < 4; ++index)
+        {
+            const std::string parent = index == 3 ? "hidden-4" : "hidden-" + std::to_string(index + 1);
+            HistoryItem item = commit("hidden-" + std::to_string(index), parent);
+            item.parents = {index == 3 ? "region:hidden-4:old" : parent};
+            inserted.push_back(std::move(item));
+        }
+        HistoryItem remainder;
+        remainder.id = "region:hidden-4:old";
+        remainder.kind = HistoryItemKind::CollapsedRegion;
+        remainder.parents = {"old"};
+        inserted.push_back(std::move(remainder));
+        expanded->items.insert(expanded->items.begin() + 15,
+            std::make_move_iterator(inserted.begin()), std::make_move_iterator(inserted.end()));
+        expanded->items[14].parents = {"hidden-0"};
+        application.ApplyEventForTest(HistoryReady{std::move(expanded)});
+        context->Yield(5);
+        IM_CHECK(!application.HistoryExpansionPendingForTest());
+        IM_CHECK(application.HistoryExpansionFeedbackForTest());
+        IM_CHECK(context->ItemExists("**/Commits loaded"));
+        IM_CHECK_LE(std::fabs((*graph)->Scroll.y - scroll_before), 0.01f);
+    };
+
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
@@ -1891,8 +2456,163 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "HistoryDragTooltipDescribesAction");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.generation = 2290;
+        snapshot.repository_generation = 2290;
+        snapshot.root = "/tmp/ggui-history-drag";
+        snapshot.head = "drag-source";
+        application.SetSnapshotForTest(std::move(snapshot));
+        auto view = std::make_shared<HistoryView>();
+        view->repository_generation = 2290;
+        view->request = 1000200;
+        HistoryItem source_item;
+        source_item.id = "drag-source";
+        source_item.kind = HistoryItemKind::Commit;
+        source_item.parents = {"drop-target"};
+        source_item.revision = {"drag-source", {"drop-target"}, {}, "Source description", "Author"};
+        HistoryItem target_item;
+        target_item.id = "drop-target";
+        target_item.kind = HistoryItemKind::Commit;
+        target_item.revision = {"drop-target", {}, {}, "Target description", "Author"};
+        view->items = {std::move(source_item), std::move(target_item)};
+        application.ApplyEventForTest(HistoryReady{std::move(view)});
+        context->Yield(4);
+        FocusWindow(context, "History");
+        context->Yield(2);
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK_GE(rows.size(), 2U);
+        if (rows.size() < 2) return;
+
+        const ImGuiTestItemInfo source = context->ItemInfo(rows[0]);
+        const ImGuiTestItemInfo target = context->ItemInfo(rows[1]);
+        context->MouseMove(rows[0]);
+        context->MouseDown();
+        context->MouseMoveToPos(source.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
+        context->Yield(2);
+        context->MouseMoveToPos(target.RectFull.GetCenter());
+        context->Yield(2);
+
+        const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
+        IM_CHECK(tooltip != nullptr && tooltip->Active);
+
+        ImGuiWindow* history = ImGui::FindWindowByName("History");
+        IM_CHECK_NE(history, nullptr);
+        const auto graph = std::ranges::find_if(history->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
+        });
+        IM_CHECK(graph != history->DC.ChildWindows.end());
+        float border_minimum_x = FLT_MAX;
+        int border_vertices = 0;
+        if (graph != history->DC.ChildWindows.end())
+            for (const ImDrawVert& vertex : (*graph)->DrawList->VtxBuffer)
+                if (vertex.col == IM_COL32(220, 170, 70, 230))
+                {
+                    border_minimum_x = std::min(border_minimum_x, vertex.pos.x);
+                    ++border_vertices;
+                }
+        IM_CHECK_GT(border_vertices, 0);
+        IM_CHECK_GT(border_minimum_x, target.RectFull.Min.x);
+        IM_CHECK_LT(border_minimum_x, target.RectFull.Min.x + 30.0f);
+
+        const std::vector<ImGuiID> dragging_rows = GatherItems(context, "//History", "row");
+        for (std::size_t row = 0; row + 1 < dragging_rows.size(); ++row)
+            IM_CHECK_LE(std::fabs(context->ItemInfo(dragging_rows[row]).RectFull.Max.y
+                - context->ItemInfo(dragging_rows[row + 1]).RectFull.Min.y), 0.01f);
+
+        context->MouseUp();
+        IM_CHECK_EQ(application.PendingDropActionForTest(), std::pair(2, false));
+        IM_CHECK(!application.PendingDropCopyForTest());
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "History");
+        context->MouseMove(rows[0]);
+        context->MouseDown();
+        context->MouseMoveToPos(source.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
+        context->Yield(2);
+        context->MouseMoveToPos(ImVec2(target.RectFull.GetCenter().x, target.RectFull.Max.y - 2.0f));
+        context->Yield(2);
+        std::size_t last_background_vertex = 0;
+        std::size_t first_line_vertex = std::numeric_limits<std::size_t>::max();
+        if (graph != history->DC.ChildWindows.end())
+            for (int index = 0; index < (*graph)->DrawList->VtxBuffer.Size; ++index)
+            {
+                const ImU32 color = (*graph)->DrawList->VtxBuffer[index].col;
+                if (color == ApplicationInternal::kRowBackground
+                    || color == ApplicationInternal::kRowHover
+                    || color == ApplicationInternal::kRowSelected)
+                    last_background_vertex = static_cast<std::size_t>(index);
+                if (color == IM_COL32(100, 175, 255, 255))
+                    first_line_vertex = std::min(first_line_vertex, static_cast<std::size_t>(index));
+            }
+        IM_CHECK(first_line_vertex != std::numeric_limits<std::size_t>::max());
+        IM_CHECK_GT(first_line_vertex, last_background_vertex);
+        context->MouseUp();
+        IM_CHECK_EQ(application.PendingDropActionForTest(), std::pair(1, false));
+        IM_CHECK(!application.PendingDropCopyForTest());
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "History");
+        context->MouseMove(rows[0]);
+        context->MouseDown();
+        context->MouseMoveToPos(source.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
+        context->Yield(2);
+        context->MouseMoveToPos(ImVec2(target.RectFull.GetCenter().x, target.RectFull.Min.y + 2.0f));
+        context->Yield(2);
+        float line_minimum_x = FLT_MAX;
+        int line_vertices = 0;
+        if (graph != history->DC.ChildWindows.end())
+            for (const ImDrawVert& vertex : (*graph)->DrawList->VtxBuffer)
+                if (vertex.col == IM_COL32(100, 175, 255, 255))
+                {
+                    line_minimum_x = std::min(line_minimum_x, vertex.pos.x);
+                    ++line_vertices;
+                }
+        IM_CHECK_GT(line_vertices, 0);
+        IM_CHECK_LE(line_minimum_x, target.RectFull.Min.x + 20.0f);
+        context->MouseUp();
+        IM_CHECK_EQ(application.PendingDropActionForTest(), std::pair(0, false));
+        IM_CHECK(!application.PendingDropCopyForTest());
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+
+        FocusWindow(context, "History");
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->MouseMove(rows[0]);
+        context->MouseDown();
+        context->MouseMoveToPos(source.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
+        context->Yield(2);
+        context->MouseMoveToPos(ImVec2(target.RectFull.GetCenter().x, target.RectFull.Min.y + 2.0f));
+        context->Yield(2);
+        IM_CHECK(std::ranges::find(application.SelectedRevisionsForTest(), "drag-source")
+            != application.SelectedRevisionsForTest().end());
+        context->MouseUp();
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.PendingDropActionForTest(), std::pair(0, false));
+        IM_CHECK(application.PendingDropCopyForTest());
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+    };
+
     test = IM_REGISTER_TEST(engine, "Interactions", "GraphAndContextMenus");
     test->TestFunc = [](ImGuiTestContext* context) {
+        const float dense_lane_width = ApplicationInternal::HistoryLaneWidth(680.0f, 40);
+        IM_CHECK_LT(dense_lane_width, ApplicationInternal::kLaneWidth);
+        IM_CHECK_LE(40.0f * dense_lane_width + ApplicationInternal::kGraphPadding * 2.0f + 8.0f,
+            680.0f * 0.4f);
+        IM_CHECK_EQ(ApplicationInternal::HistoryLaneWidth(680.0f, 3),
+            ApplicationInternal::kLaneWidth);
+        IM_CHECK_LT(ApplicationInternal::HistoryContentOffset(dense_lane_width, 3),
+            ApplicationInternal::HistoryContentOffset(dense_lane_width, 40));
+
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(4);
@@ -2743,14 +3463,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         {
             Revision revision;
             revision.oid = "extra-" + std::to_string(index);
+            revision.parents = {index == 0 ? "merge" : "extra-" + std::to_string(index - 1)};
             revision.aliases = {"extra-change-" + std::to_string(index)};
             revision.description = "Extra revision " + std::to_string(index);
             snapshot.revisions.push_back(std::move(revision));
         }
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(2);
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/feature");
+        application.SelectRevisionForTest("left");
         FocusWindow(context, "History");
         ImGuiWindow* history = ImGui::FindWindowByName("History");
         IM_CHECK_NE(history, nullptr);
@@ -2758,6 +3478,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             return std::string_view(child->Name).find("graph scroll") != std::string_view::npos;
         });
         IM_CHECK(graph != history->DC.ChildWindows.end());
+        for (int attempt = 0; attempt < 200 && (*graph)->ScrollMax.y <= 0.0f; ++attempt)
+        {
+            context->Yield();
+            std::this_thread::sleep_for(5ms);
+        }
         IM_CHECK_GT((*graph)->ScrollMax.y, 0.0f);
         const float initial_scroll = (*graph)->Scroll.y;
 

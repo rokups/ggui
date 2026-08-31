@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 #include <stdexcept>
@@ -134,6 +135,7 @@ void RepositoryWatcher::Watch(
 {
     Clear();
     _common_directory = std::filesystem::weakly_canonical(common_directory);
+    _worktree = std::filesystem::weakly_canonical(worktree);
     auto watcher = std::make_unique<efsw::FileWatcher>();
     if (watcher->addWatch(worktree.string(), this, true) < 0)
         throw std::runtime_error("watch repository: " + efsw::Errors::Log::getLastErrorLog()); // GCOV_EXCL_LINE
@@ -152,25 +154,64 @@ void RepositoryWatcher::Clear()
     _watcher.reset();
     _worktree_changed = false;
     _metadata_changed = false;
+    _full_scan = false;
     _common_directory.clear();
+    _worktree.clear();
+    std::lock_guard lock(_changes_mutex);
+    _changed_paths.clear();
 }
 
 RepositoryWatcher::Changes RepositoryWatcher::ConsumeChanges()
 {
-    return {_worktree_changed.exchange(false), _metadata_changed.exchange(false)};
+    Changes result;
+    result.worktree = _worktree_changed.exchange(false);
+    result.metadata = _metadata_changed.exchange(false);
+    result.full_scan = _full_scan.exchange(false);
+    std::lock_guard lock(_changes_mutex);
+    result.paths.swap(_changed_paths);
+    return result;
 }
 
 void RepositoryWatcher::handleFileAction(efsw::WatchID, const std::string& directory,
-    const std::string& filename, efsw::Action, const std::string&)
+    const std::string& filename, efsw::Action, const std::string& old_filename)
 {
-    const auto relative = (std::filesystem::path(directory) / filename)
-                              .lexically_normal()
-                              .lexically_relative(_common_directory);
-    const bool metadata = relative.empty() || (!relative.is_absolute() && *relative.begin() != "..");
+    const std::filesystem::path absolute = (std::filesystem::path(directory) / filename).lexically_normal();
+    const auto common_relative = absolute.lexically_relative(_common_directory);
+    const bool metadata = common_relative.empty()
+        || (!common_relative.is_absolute() && *common_relative.begin() != "..");
     if (metadata)
         _metadata_changed = true;
     else
+    {
         _worktree_changed = true;
+        const auto remember = [&](const std::filesystem::path& value)
+        {
+            const auto relative = value.lexically_normal().lexically_relative(_worktree);
+            if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+            {
+                _full_scan = true;
+                return;
+            }
+            std::error_code error;
+            if (std::filesystem::is_directory(value, error))
+            {
+                _full_scan = true;
+                return;
+            }
+            std::lock_guard lock(_changes_mutex);
+            const std::string path = relative.generic_string();
+            if (std::ranges::find(_changed_paths, path) == _changed_paths.end())
+            {
+                if (_changed_paths.size() >= 4096)
+                    _full_scan = true;
+                else
+                    _changed_paths.push_back(path);
+            }
+        };
+        remember(absolute);
+        if (!old_filename.empty())
+            remember(std::filesystem::path(directory) / old_filename);
+    }
     _wake.notify_one();
 }
 

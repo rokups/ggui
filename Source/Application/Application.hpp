@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <array>
 #include <filesystem>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -65,6 +66,7 @@ public:
     void ShowDropConfirmationForTest(
         const std::string& source, const std::string& target, int action, bool entire_branch = false);
     std::pair<int, bool> PendingDropActionForTest() const;
+    bool PendingDropCopyForTest() const;
     void ShowWorkspaceRenameForTest();
     void ShowBookmarkRenameForTest(const std::string& name);
     void SetSnapshotForTest(RepoSnapshot snapshot);
@@ -90,10 +92,23 @@ public:
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
-    static std::string DropTooltipForTest(int action, bool entire_branch = false);
+    static std::string DropTooltipForTest(int action, bool entire_branch = false, bool copy = false);
     std::vector<std::string> AbandonRevisionsForTest(const std::string& revision) const;
     const std::string& PendingEditorRevisionForTest() const;
     const std::filesystem::path& OpenedEditorPathForTest() const;
+    bool HistoryLoadPendingForTest() const;
+    bool HistoryExpansionPendingForTest() const;
+    bool HistoryExpansionFeedbackForTest() const;
+    void CancelHistorySearchForTest();
+    const std::vector<std::string>& VisibleBookmarksForTest() const;
+    const std::vector<std::string>& SelectedTagsForTest() const;
+    const std::vector<std::string>& SelectedRemotesForTest() const;
+    std::vector<std::string> VisibleHistoryRevisionsForTest() const;
+    const std::vector<Revision>& HistoryRevisionsForTest() const;
+    std::size_t RenderedHistoryRowsForTest() const;
+    const std::string& ActiveOperationForTest() const;
+    const std::string& ErrorMessageForTest() const;
+    void CreateChangeForTest(const std::string& parent);
 #endif
 
 private:
@@ -136,6 +151,7 @@ private:
         std::string target;
         DropAction action = DropAction::ReorderBefore;
         bool entire_branch = false;
+        bool copy = false;
     };
 
     bool Initialize();
@@ -171,8 +187,20 @@ private:
     void RenderDialogs();
     void RenderRecentRepositories();
     void SetupDockspace();
-    void RebuildGraph();
+    void UpdateGraphBuild();
+    void EnsureVisibleBookmarkSelection();
+    void EnsureTagSelection();
+    void EnsureRemoteSelection();
+    bool IsSelectedRemote(std::string_view remote) const;
+    bool IsVisibleBookmarkRef(const NamedRef& ref) const;
+    void RestoreRepositorySelections(const std::string& root);
+    void RememberRepositorySelections();
+    std::string VisibleBookmarksKey() const;
     void RebuildIdPrefixes();
+    void CancelHistorySearch();
+    bool RevealRevisionLoaded() const;
+    bool HistoryTargetConnected(std::string_view target) const;
+    void ExpandGraphRow(std::size_t visible_row, bool merge_history = false);
     std::size_t RevisionPrefix(const std::string& oid) const;
     std::size_t OperationPrefix(const std::string& oid) const;
     void RevealRevision(const std::string& oid);
@@ -212,7 +240,7 @@ private:
     bool DialogModifiesLockedCommit() const;
     const Revision* RebaseSource() const;
     static gg_reorder_placement DropPlacement(DropAction action);
-    static std::string_view DropTooltip(DropAction action, bool entire_branch = false);
+    static std::string_view DropTooltip(DropAction action, bool entire_branch = false, bool copy = false);
     bool CanCreateChange() const;
     bool CanSubmitDialog() const;
     void OpenDialog(Dialog dialog);
@@ -226,19 +254,45 @@ private:
 
     RepositoryEngine _engine;
     std::shared_ptr<const RepoSnapshot> _snapshot;
+    std::shared_ptr<const HistoryView> _history_view;
+    std::string _closest_bookmark;
+    std::vector<Revision> _history_revisions;
     DiffResult _diff;
     std::vector<int> _visible_revisions;
     std::vector<GraphRow> _graph_rows;
+    std::size_t _rendered_history_rows = 0;
     std::uint64_t _graph_generation = 0;
+    std::uint64_t _history_requested_generation = 0;
+    std::uint64_t _history_applied_request = 0;
+    std::string _history_requested_key;
+    std::string _history_requested_filter;
+    std::string _history_observed_filter;
+    std::chrono::steady_clock::time_point _history_filter_changed{};
+    std::string _history_anchor;
+    float _history_anchor_offset = 0.0f;
+    std::string _history_expansion_pending;
+    std::chrono::steady_clock::time_point _history_expansion_feedback_until{};
     std::string _bookmark_filter;
+    std::vector<std::string> _visible_bookmarks;
+    bool _visible_bookmarks_user_selected = false;
+    std::vector<std::string> _selected_tags;
+    std::vector<std::string> _selected_remotes;
+    bool _selected_remotes_user_selected = false;
+    std::unordered_map<std::string, std::vector<std::string>> _repository_visible_bookmarks;
+    std::unordered_map<std::string, std::vector<std::string>> _repository_selected_tags;
+    std::unordered_map<std::string, std::vector<std::string>> _repository_selected_remotes;
     std::string _tag_filter;
     std::string _changes_filter;
     std::string _graph_filter;
     std::string _recent_filter;
     std::string _built_filter;
+    std::string _built_bookmarks;
     std::string _reveal_revision;
+    float _history_scroll_target = -1.0f;
+    int _history_scroll_frames = 0;
     std::unordered_map<std::string, std::size_t> _revision_prefixes;
     std::unordered_map<std::string, std::size_t> _operation_prefixes;
+    std::unordered_map<std::string, std::vector<std::size_t>> _history_refs_by_revision;
     std::string _selected_revision;
     std::vector<std::string> _selected_revisions;
     std::string _selected_file;
