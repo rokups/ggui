@@ -48,7 +48,7 @@ void Application::RenderOperations()
             ImGui::TableNextColumn();
             ImGui::PushID(&operation);
             ImGui::BeginDisabled(!_active_operation.empty());
-            if (ImGui::SmallButton("Restore")) _engine.Enqueue(RestoreOperation{operation.oid});
+            if (ImGui::SmallButton("Restore")) EnqueueAction(RestoreOperation{operation.oid});
             ImGui::EndDisabled();
             ImGui::PopID();
         }

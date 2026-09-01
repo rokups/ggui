@@ -68,6 +68,9 @@ struct NamedRef
     gg_named_ref_kind kind = GG_NAMED_REF_LOCAL_BOOKMARK;
     bool tracked = false;
     bool conflicted = false;
+    std::size_t local_commits = 0;
+    std::size_t remote_commits = 0;
+    bool desync_known = false;
 };
 
 struct StatusEntry

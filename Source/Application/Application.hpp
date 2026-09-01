@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <array>
 #include <filesystem>
+#include <future>
 #include <chrono>
 #include <memory>
 #include <optional>
@@ -59,6 +60,7 @@ public:
     std::vector<std::string> SelectedParentsForTest() const;
     std::vector<std::string> DialogFilesetsForTest() const;
     const std::string& DialogDestinationForTest() const;
+    const std::string& DialogDescriptionForTest() const;
     const MoveDiffLines& PendingMoveDiffLinesForTest() const;
     std::string RebaseSourceForTest() const;
     bool DialogModifiesLockedCommitForTest() const;
@@ -156,6 +158,7 @@ private:
 
     bool Initialize();
     void Shutdown();
+    bool SettingsPersistenceEnabled() const;
     void LoadSettings();
     void SaveSettings();
     void RegisterWindowSettings();
@@ -164,6 +167,7 @@ private:
     static void WindowSettingsApplyAll(ImGuiContext*, ImGuiSettingsHandler*);
     static void WindowSettingsWriteAll(ImGuiContext*, ImGuiSettingsHandler*, ImGuiTextBuffer* output);
     void RememberRepository(const std::string& path);
+    bool EnqueueAction(Command command);
     void PollEngine();
     void ApplyEvent(Event event);
     void ProcessEvent(SDL_Event& event);
@@ -175,6 +179,7 @@ private:
     void RenderSettings();
     void OpenSettings();
     void ReloadNativeSettings();
+    void ForgetRepository(const std::string& path);
     void RenderBookmarks();
     void RenderTags();
     void RenderWorkspaces();
@@ -230,10 +235,13 @@ private:
     std::vector<std::string> SelectedParentRevisions() const;
     std::vector<std::string> AbandonRevisions(
         const std::string& revision, bool include_descendants) const;
+    void RequestAbandonRevisions(const std::string& revision);
+    void PollAbandonRevisions();
     std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
         const std::vector<std::string>& revisions) const;
     void CreateChange(const std::string& parent = {});
     void RequestAbandon(const std::string& revision, bool include_descendants = false);
+    void RequestSquash(const std::string& revision, bool include_descendants = false);
     void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
         std::string warning);
     bool IsLocked(const std::string& revision) const;
@@ -318,6 +326,15 @@ private:
     std::string _imgui_ini_path;
     std::string _status_message;
     std::string _error_message;
+    std::string _pending_created_bookmark;
+    std::vector<std::string> _abandon_revisions;
+    std::string _abandon_revisions_revision;
+    std::string _abandon_revisions_requested;
+    std::string _abandon_revisions_in_flight;
+    bool _abandon_revisions_complete = false;
+    std::future<std::vector<std::string>> _abandon_revisions_future;
+    std::vector<RemoteBookmarkDelete> _abandon_remote_bookmarks;
+    bool _abandon_modifies_locked = false;
     std::string _active_operation;
     std::string _progress_phase;
     std::size_t _progress_completed = 0;

@@ -14,32 +14,51 @@
 
 namespace Ggui::ApplicationInternal
 {
+namespace
+{
+ImU32 NamedRefBadgeColor(std::string_view name, const std::vector<NamedRef>& refs,
+    gg_named_ref_kind local_kind, gg_named_ref_kind remote_kind, ImU32 local_color)
+{
+    const auto local = std::ranges::find_if(refs, [&](const NamedRef& ref) {
+        return ref.kind == local_kind && ref.name == name;
+    });
+    const bool remote = std::ranges::any_of(refs, [&](const NamedRef& ref) {
+        return ref.kind == remote_kind && ref.name == name;
+    });
+    if (local == refs.end()) return kBadgeRemote;
+    if (!remote) return local_color;
+    const bool synchronized = std::ranges::all_of(refs, [&](const NamedRef& ref) {
+        return ref.kind != remote_kind || ref.name != name || ref.target == local->target;
+    });
+    return synchronized ? kBadgeBookmarkSynced : kBadgeBookmarkDiverged;
+}
+} // namespace
 
 ImU32 BookmarkBadgeColor(std::string_view name, const std::vector<NamedRef>& refs)
 {
-    const auto local = std::ranges::find_if(refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
-    });
-    const bool remote = std::ranges::any_of(refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
-    });
-    if (local == refs.end())
-        return kBadgeRemote;
-    if (!remote)
-        return kBadgeBookmark;
-    const bool synchronized = std::ranges::all_of(refs, [&](const NamedRef& ref) {
-        return ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK || ref.name != name || ref.target == local->target;
-    });
-    return synchronized ? kBadgeBookmarkSynced : kBadgeBookmarkDiverged;
+    return NamedRefBadgeColor(name, refs, GG_NAMED_REF_LOCAL_BOOKMARK,
+        GG_NAMED_REF_REMOTE_BOOKMARK, kBadgeBookmark);
 }
 
 ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
 {
-    if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK)
-        return BookmarkBadgeColor(ref.name, refs);
-    if (ref.kind == GG_NAMED_REF_LOCAL_TAG)
-        return kBadgeTag;
-    return kBadgeRemote;
+    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
+    const gg_named_ref_kind local_kind = bookmark ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
+    const gg_named_ref_kind remote_kind = bookmark ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
+    const bool local_here = std::ranges::any_of(refs, [&](const NamedRef& candidate) {
+        return candidate.kind == local_kind && candidate.name == ref.name && candidate.target == ref.target;
+    });
+    const bool remote_here = std::ranges::any_of(refs, [&](const NamedRef& candidate) {
+        return candidate.kind == remote_kind && candidate.name == ref.name && candidate.target == ref.target;
+    });
+    if (!local_here) return kBadgeRemote;
+    const bool remote_elsewhere = std::ranges::any_of(refs, [&](const NamedRef& candidate) {
+        return candidate.kind == remote_kind && candidate.name == ref.name && candidate.target != ref.target;
+    });
+    if (remote_elsewhere) return kBadgeBookmarkDiverged;
+    if (remote_here) return kBadgeBookmarkSynced;
+    return bookmark ? kBadgeBookmark : kBadgeTag;
 }
 
 std::string ReferenceLabel(const NamedRef& ref)
@@ -50,21 +69,22 @@ std::string ReferenceLabel(const NamedRef& ref)
 
 std::pair<std::string, std::size_t> ReferenceBadgeLabel(const NamedRef& ref, const std::vector<NamedRef>& refs)
 {
-    if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
-        return {ReferenceLabel(ref), 0};
+    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
+    const gg_named_ref_kind local_kind = bookmark ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
+    const gg_named_ref_kind remote_kind = bookmark ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
     const auto local = std::ranges::find_if(refs, [&](const NamedRef& candidate) {
-        return candidate.kind == GG_NAMED_REF_LOCAL_BOOKMARK && candidate.name == ref.name
-            && candidate.target == ref.target;
+        return candidate.kind == local_kind && candidate.name == ref.name && candidate.target == ref.target;
     });
+    if (local != refs.end())
+        return ref.kind == local_kind ? std::pair{ref.name, std::size_t{0}}
+                                      : std::pair<std::string, std::size_t>{};
     const auto remote = std::ranges::find_if(refs, [&](const NamedRef& candidate) {
-        return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == ref.name
-            && candidate.target == ref.target && !candidate.remote.empty();
+        return candidate.kind == remote_kind && candidate.name == ref.name && candidate.target == ref.target;
     });
-    if (local == refs.end() || remote == refs.end())
-        return {ReferenceLabel(ref), 0};
-    if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK)
-        return {};
-    return {ReferenceLabel(*remote), remote->remote.size() + 1};
+    return remote != refs.end() && ref.kind == remote_kind && ref.remote == remote->remote
+            && ref.target == remote->target
+        ? std::pair{ref.name, std::size_t{0}} : std::pair<std::string, std::size_t>{};
 }
 
 const Remote* DefaultRemote(const RepoSnapshot& snapshot)
@@ -134,6 +154,13 @@ std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name,
             continue;
         if (!result.empty()) result += ", ";
         result += ref.remote;
+        if (kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.desync_known)
+        {
+            if (ref.remote_commits != 0)
+                result += " -" + std::to_string(ref.remote_commits);
+            if (ref.local_commits != 0)
+                result += " +" + std::to_string(ref.local_commits);
+        }
     }
     return result;
 }

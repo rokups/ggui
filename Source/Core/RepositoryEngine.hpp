@@ -21,7 +21,7 @@ public:
     RepositoryEngine(const RepositoryEngine&) = delete;
     RepositoryEngine& operator=(const RepositoryEngine&) = delete;
 
-    void Enqueue(Command command);
+    bool Enqueue(Command command);
     std::vector<Event> PollEvents();
     void Cancel();
     void SubmitCredential(CredentialResponse response);

@@ -255,8 +255,23 @@ void Application::RenderBookmarks()
             const std::string remote = tracked != bookmark_refs.end() ? tracked->remote
                 : _selected_remotes.empty() ? "" : _selected_remotes.front();
             const bool has_local = local != bookmark_refs.end();
+            const std::string& current = CurrentCommit(*_snapshot);
+            const BookmarkRelation current_relation = has_local && !current.empty()
+                ? ClassifyBookmarkRelation(*_snapshot, local->target, current)
+                : BookmarkRelation::Unavailable;
+            if (ActionMenuItem(ICON_MS_MERGE, "Merge into @", nullptr,
+                    has_local && !current.empty() && local->target != current))
+                EnqueueAction(NewChange{{}, {"@", local->target}, {}, {}, false});
+            if (ActionMenuItem(ICON_MS_REBASE, "Rebase @ onto bookmark", nullptr,
+                    current_relation == BookmarkRelation::RemoteAhead
+                        || current_relation == BookmarkRelation::Diverged))
+            {
+                QueueCommands({Rebase{"@", local->target, true}}, {current},
+                    "Rebasing @ will rewrite locked commits.");
+            }
+            ImGui::Separator();
             if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr, has_local && !remote.empty()))
-                _engine.Enqueue(Push{name, remote});
+                EnqueueAction(Push{name, remote});
             if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
                     has_local && !_snapshot->remotes.empty()))
             {
@@ -297,12 +312,12 @@ void Application::RenderBookmarks()
             if (ImGui::BeginMenu(delete_label.c_str()))
             {
                 if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
-                    _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
+                    EnqueueAction(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
                 for (const NamedRef& candidate : _snapshot->refs)
                     if (candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name
                         && !candidate.remote.empty()
                         && ActionMenuItem(ICON_MS_CLOUD, candidate.remote))
-                        _engine.Enqueue(RemoteBookmarkDelete{name, candidate.remote});
+                        EnqueueAction(RemoteBookmarkDelete{name, candidate.remote});
                 ImGui::EndMenu();
             }
             ImGui::EndDisabled();
@@ -417,7 +432,7 @@ void Application::RenderTags()
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Delete", nullptr, local != _snapshot->refs.end()))
-                _engine.Enqueue(Tag{GG_TAG_DELETE, {name}, {}, false});
+                EnqueueAction(Tag{GG_TAG_DELETE, {name}, {}, false});
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
@@ -483,7 +498,7 @@ void Application::RenderWorkspaces()
                 ImGui::SetClipboardText(workspace.root.c_str());
             ImGui::BeginDisabled(actions_locked);
             if (ActionMenuItem(ICON_MS_DELETE, "Forget", nullptr, workspace.managed))
-                _engine.Enqueue(WorkspaceForget{{workspace.name}});
+                EnqueueAction(WorkspaceForget{{workspace.name}});
             if (ActionMenuItem(ICON_MS_EDIT, "Rename current...", nullptr, workspace.managed))
                 OpenDialog(Dialog::WorkspaceRename);
             ImGui::EndDisabled();
@@ -564,10 +579,10 @@ void Application::RenderRemotes()
         {
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(remote.name.c_str());
             ImGui::BeginDisabled(actions_locked);
-            if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote.name, true});
-            if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote.name, false});
+            if (ActionMenuItem(ICON_MS_CLOUD_DOWNLOAD, "Pull")) EnqueueAction(Fetch{remote.name, true});
+            if (ActionMenuItem(ICON_MS_SYNC, "Fetch")) EnqueueAction(Fetch{remote.name, false});
             ImGui::Separator();
-            if (ActionMenuItem(ICON_MS_DELETE, "Delete remote")) _engine.Enqueue(DeleteRemote{remote.name});
+            if (ActionMenuItem(ICON_MS_DELETE, "Delete remote")) EnqueueAction(DeleteRemote{remote.name});
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }

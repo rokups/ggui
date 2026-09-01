@@ -507,6 +507,28 @@ TEST(GraphLayout, KeepsEveryEdgeColorStableBetweenCommitDots)
     }
 }
 
+TEST(GraphLayout, PreferredBranchKeepsColorThroughAnEarlierSideChild)
+{
+    // Display order lets side activate base before primary reaches it. Color
+    // identity must nevertheless connect base through primary to the active
+    // merge commit rather than following side.
+    const std::vector<GraphNode> nodes{{"merge", {"primary", "side"}},
+        {"side", {"base"}}, {"primary", {"base"}}, {"base", {}}};
+    const std::vector<GraphRow> rows = BuildGraphLayout(nodes, "merge");
+    ASSERT_EQ(rows.size(), 4U);
+    EXPECT_EQ(rows[0].track, 0);
+    EXPECT_EQ(rows[0].parent_tracks, (std::vector<int>{0, 1}));
+    EXPECT_EQ(rows[1].track, 1);
+    EXPECT_EQ(rows[1].parent_tracks, (std::vector<int>{1}));
+    EXPECT_EQ(rows[2].track, 0);
+    EXPECT_EQ(rows[2].parent_tracks, (std::vector<int>{0}));
+    EXPECT_EQ(rows[2].tracks_after, (std::vector<int>{0, 1}));
+    EXPECT_EQ(rows[3].track, 0);
+    EXPECT_EQ(rows[3].incoming_tracks, (std::vector<int>{0, 1}));
+    for (std::size_t row = 0; row + 1 < rows.size(); ++row)
+        EXPECT_EQ(rows[row].tracks_after, rows[row + 1].tracks_before);
+}
+
 TEST(GraphLayout, RejectsMissingEndpoints)
 {
     EXPECT_THROW(BuildGraphLayout({{"child", {"missing"}}}), std::invalid_argument);
@@ -628,6 +650,7 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
                 [&](const Revision& revision) { return revision.oid == working->working_copy; });
     });
     ASSERT_NE(replacement, nullptr);
+    EXPECT_GT(replacement->repository_generation, child->repository_generation);
     EXPECT_EQ(replacement->revisions.size(), working->revisions.size());
     const auto replacement_change =
         std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
@@ -647,6 +670,99 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_FALSE(nonempty_change->empty);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+}
+
+TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.revisions.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+    const std::string base = opened->head;
+
+    engine.Enqueue(NewChange{"side", {base}, {}, {}, false});
+    const auto side = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.working_copy.empty();
+    });
+    ASSERT_NE(side, nullptr);
+    const std::string abandoned = side->working_copy;
+
+    engine.Enqueue(NewChange{"current", {base}, {}, {}, false});
+    const auto current = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > side->generation && snapshot.working_copy != abandoned;
+    });
+    ASSERT_NE(current, nullptr);
+
+    engine.Enqueue(Abandon{{abandoned}, true, false, {}});
+    const auto updated = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > current->generation;
+    });
+    ASSERT_NE(updated, nullptr);
+    EXPECT_EQ(updated->working_copy, current->working_copy);
+    EXPECT_GT(updated->repository_generation, current->repository_generation);
+    EXPECT_TRUE(std::ranges::none_of(updated->revisions,
+        [&](const Revision& revision) { return revision.oid == abandoned; }));
+}
+
+TEST(RepositoryEngine, ReplacesAndRemovesUndescribedEmptyWorkingChanges)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.revisions.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+
+    engine.Enqueue(NewChange{});
+    const auto first = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.working_copy.empty();
+    });
+    ASSERT_NE(first, nullptr);
+    const std::string replaced = first->working_copy;
+    const auto first_change = std::ranges::find(first->revisions, replaced, &Revision::oid);
+    ASSERT_NE(first_change, first->revisions.end());
+    ASSERT_TRUE(first_change->empty);
+    ASSERT_TRUE(first_change->description.empty());
+
+    engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
+    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > first->generation && snapshot.working_copy != replaced;
+    });
+    ASSERT_NE(child, nullptr);
+    engine.Enqueue(Abandon{{replaced}, true, false, {}});
+    const auto replacement = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > child->generation;
+    });
+    ASSERT_NE(replacement, nullptr);
+    EXPECT_NE(replacement->working_copy, replaced);
+    const auto replacement_change =
+        std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
+    ASSERT_NE(replacement_change, replacement->revisions.end());
+    EXPECT_TRUE(replacement_change->empty);
+    EXPECT_TRUE(replacement_change->description.empty());
+    EXPECT_EQ(replacement_change->parents, first_change->parents);
+    EXPECT_TRUE(std::ranges::none_of(replacement->revisions,
+        [&](const Revision& revision) { return revision.oid == replaced; }));
+
+    ASSERT_FALSE(replacement_change->parents.empty());
+    const std::string parent = replacement_change->parents.front();
+    const std::string removed = replacement->working_copy;
+    engine.Enqueue(Abandon{{removed}, true, false, {}});
+    const auto abandoned = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > replacement->generation && snapshot.working_copy != removed;
+    });
+    ASSERT_NE(abandoned, nullptr);
+    engine.Enqueue(Edit{parent});
+    const auto edited = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > abandoned->generation && snapshot.working_copy == parent;
+    });
+    ASSERT_NE(edited, nullptr);
+    EXPECT_TRUE(std::ranges::none_of(edited->revisions,
+        [&](const Revision& revision) { return revision.oid == removed; }));
 }
 
 TEST(RepositoryEngine, PublishesProgressiveBoundedHistoryView)
@@ -701,9 +817,22 @@ TEST(RepositoryEngine, PublishesProgressiveBoundedHistoryView)
     }));
     const auto current_item = std::ranges::find(detail->items, current, &HistoryItem::id);
     const auto old_item = std::ranges::find(detail->items, old_ref->target, &HistoryItem::id);
+    const auto collapsed_item = std::ranges::find_if(detail->items, [](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::CollapsedRegion;
+    });
     ASSERT_NE(current_item, detail->items.end());
     ASSERT_NE(old_item, detail->items.end());
+    ASSERT_NE(collapsed_item, detail->items.end());
     EXPECT_LT(current_item - detail->items.begin(), old_item - detail->items.begin());
+    std::ptrdiff_t last_region_child = -1;
+    for (auto item = detail->items.begin(); item != detail->items.end(); ++item)
+        if (std::ranges::find(item->parents, collapsed_item->id) != item->parents.end())
+            last_region_child = std::max(last_region_child, item - detail->items.begin());
+    ASSERT_GE(last_region_child, 0);
+    EXPECT_TRUE(std::ranges::all_of(detail->items.begin() + last_region_child + 1,
+        collapsed_item, [](const HistoryItem& item) {
+            return item.kind == HistoryItemKind::CollapsedRegion;
+        }));
     std::unordered_set<std::string> ids;
     for (const HistoryItem& item : detail->items) ids.insert(item.id);
     for (const HistoryItem& item : detail->items)
@@ -818,6 +947,71 @@ TEST(RepositoryEngine, PublishesProgressiveBoundedHistoryView)
     });
     EXPECT_GT(expanded_commits, searched_commits);
     EXPECT_LE(expanded_commits, searched_commits + 128);
+}
+
+TEST(RepositoryEngine, OrdersAvailableHistoryByDateWithoutBreakingTopology)
+{
+    TemporaryRepository repository;
+    const auto git = [&](const std::string& arguments) {
+        return std::system(("git -C " + Quote(repository.path) + " " + arguments + " >/dev/null 2>&1").c_str());
+    };
+    const auto commit = [&](std::string_view date, std::string_view description) {
+        const std::string environment = "GIT_AUTHOR_DATE='" + std::string(date)
+            + "' GIT_COMMITTER_DATE='" + std::string(date) + "' ";
+        return std::system((environment + "git -C " + Quote(repository.path)
+            + " commit --allow-empty -m '" + std::string(description) + "' >/dev/null 2>&1").c_str());
+    };
+
+    ASSERT_EQ(git("checkout -b branch-a"), 0);
+    ASSERT_EQ(commit("2000-01-01T00:00:00Z", "a-parent"), 0);
+    ASSERT_EQ(commit("2025-01-01T00:00:00Z", "a-tip"), 0);
+    ASSERT_EQ(git("checkout main"), 0);
+    ASSERT_EQ(git("checkout -b branch-b"), 0);
+    ASSERT_EQ(commit("2023-01-01T00:00:00Z", "b-parent"), 0);
+    ASSERT_EQ(commit("2024-01-01T00:00:00Z", "b-tip"), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
+    ASSERT_NE(snapshot, nullptr);
+    engine.Enqueue(RebuildHistory{HistoryQuery{{"branch-a", "branch-b"}, {}, {}, {},
+        snapshot->repository_generation}});
+
+    std::shared_ptr<const HistoryView> history;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline && history == nullptr)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event);
+                ready != nullptr && !ready->view->skeleton
+                && ready->view->repository_generation == snapshot->repository_generation
+                && std::ranges::any_of(ready->view->items, [](const HistoryItem& item) {
+                    return item.kind == HistoryItemKind::Commit
+                        && item.revision.description.starts_with("a-tip");
+                }))
+                history = ready->view;
+        std::this_thread::sleep_for(10ms);
+    }
+    ASSERT_NE(history, nullptr);
+    const auto position = [&](std::string_view description) {
+        return std::ranges::find_if(history->items, [&](const HistoryItem& item) {
+            return item.kind == HistoryItemKind::Commit && item.revision.description.starts_with(description);
+        });
+    };
+    const auto a_tip = position("a-tip");
+    const auto b_tip = position("b-tip");
+    const auto b_parent = position("b-parent");
+    const auto a_parent = position("a-parent");
+    const auto base = position("base");
+    ASSERT_NE(a_tip, history->items.end());
+    ASSERT_NE(b_tip, history->items.end());
+    ASSERT_NE(b_parent, history->items.end());
+    ASSERT_NE(a_parent, history->items.end());
+    ASSERT_NE(base, history->items.end());
+    EXPECT_LT(a_tip, b_tip);
+    EXPECT_LT(b_tip, b_parent);
+    EXPECT_LT(b_parent, a_parent);
+    EXPECT_LT(a_parent, base);
 }
 
 TEST(RepositoryEngine, PublishesClosestBookmarkAsynchronously)
@@ -1114,6 +1308,13 @@ TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
     EXPECT_EQ(bookmark_target(*fetched, GG_NAMED_REF_LOCAL_BOOKMARK), local_before);
     const std::string remote_after_fetch = bookmark_target(*fetched, GG_NAMED_REF_REMOTE_BOOKMARK);
     EXPECT_NE(remote_after_fetch, local_before);
+    const auto fetched_remote = std::ranges::find_if(fetched->refs, [](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin";
+    });
+    ASSERT_NE(fetched_remote, fetched->refs.end());
+    EXPECT_TRUE(fetched_remote->desync_known);
+    EXPECT_EQ(fetched_remote->remote_commits, 1U);
+    EXPECT_EQ(fetched_remote->local_commits, 0U);
 
     engine.Enqueue(Tag{GG_TAG_SET, {"after-fetch"}, local_before});
     const auto synchronized = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
@@ -2024,16 +2225,31 @@ TEST(RepositoryEngine, RebasesAndSquashesEntireBranchFromDivergence)
     });
     ASSERT_NE(squash_restored, nullptr);
 
-    engine.Enqueue(Squash{tip_id, destination_id, {}, true});
+    engine.Enqueue(NewChange{"branch sibling", {root_id}, {}, {}, false});
+    const auto sibling_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > squash_restored->generation
+            && std::ranges::any_of(snapshot.revisions, [](const Revision& revision) {
+                   return revision.description == "branch sibling";
+               });
+    });
+    ASSERT_NE(sibling_snapshot, nullptr);
+    const auto sibling =
+        std::ranges::find(sibling_snapshot->revisions, "branch sibling", &Revision::description);
+    ASSERT_NE(sibling, sibling_snapshot->revisions.end());
+    const std::string sibling_id = sibling->oid;
+
+    engine.Enqueue(Squash{root_id, {}, {}, false, true});
     const auto squashed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        if (snapshot.generation <= squash_restored->generation)
+        if (snapshot.generation <= sibling_snapshot->generation)
             return false;
         const auto root_alias = FindRevision(snapshot, root_id);
         const auto tip_alias = FindRevision(snapshot, tip_id);
-        const auto destination_alias = FindRevision(snapshot, destination_id);
+        const auto sibling_alias = FindRevision(snapshot, sibling_id);
+        const auto base_alias = FindRevision(snapshot, base->oid);
         return root_alias != snapshot.revisions.end() && tip_alias != snapshot.revisions.end()
-            && destination_alias != snapshot.revisions.end() && root_alias->oid == tip_alias->oid
-            && tip_alias->oid == destination_alias->oid && destination_alias->parents == std::vector{base->oid};
+            && sibling_alias != snapshot.revisions.end() && base_alias != snapshot.revisions.end()
+            && root_alias->oid == tip_alias->oid && tip_alias->oid == sibling_alias->oid
+            && sibling_alias->oid == base_alias->oid && base_alias->parents.empty();
     });
     ASSERT_NE(squashed, nullptr);
 }

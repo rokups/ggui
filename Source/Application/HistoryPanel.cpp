@@ -115,6 +115,7 @@ void Application::RenderHistory()
     ImGui::InputTextWithHint("##graph filter", "Search changes, IDs, bookmarks, tags", &_graph_filter);
     UpdateGraphBuild();
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
+    const bool history_window_hovered = ImGui::IsWindowHovered();
 
     const bool usable = _history_view != nullptr
         && _history_view->items.size() == _graph_rows.size()
@@ -136,6 +137,24 @@ void Application::RenderHistory()
 
     const ImGuiIO& io = ImGui::GetIO();
     const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    const bool action_hotkeys = usable && focused && _dialog == Dialog::None
+        && _active_operation.empty() && !_selected_revision.empty() && !io.WantTextInput
+        && !io.KeyCtrl && !io.KeySuper;
+    if (action_hotkeys)
+    {
+        if (!io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N))
+            CreateChange(_selected_revision);
+        else if (!io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_E))
+            EnqueueAction(Edit{_selected_revision});
+        else if (!io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_D))
+            EnqueueAction(Duplicate{_selected_revision, io.KeyShift});
+        else if (!io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_S))
+            RequestSquash(_selected_revision, io.KeyShift);
+        else if (io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S))
+            OpenDialog(Dialog::Split);
+        else if (!io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_A))
+            RequestAbandon(_selected_revision, io.KeyShift);
+    }
     if (usable && focused && !io.WantTextInput && !io.KeyCtrl && !io.KeyAlt && !io.KeyShift && !io.KeySuper
         && (ImGui::IsKeyPressed(ImGuiKey_UpArrow, ImGuiInputFlags_Repeat)
             || ImGui::IsKeyPressed(ImGuiKey_DownArrow, ImGuiInputFlags_Repeat)))
@@ -165,6 +184,7 @@ void Application::RenderHistory()
         ? std::nullopt : std::optional{_history_hovered_commit_row};
     int next_hovered_track = -1;
     int next_hovered_commit_row = -1;
+    const ImVec2 item_spacing = ImGui::GetStyle().ItemSpacing;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     // The stock ImGui target frame obscures both the graph and our action-specific
     // feedback. History renders a precise insertion line or commit-content border instead.
@@ -194,7 +214,7 @@ void Application::RenderHistory()
             const float lane_width = HistoryLaneWidth(width, graph_columns);
             const float row_content_x = minimum.x
                 + HistoryContentOffset(lane_width, GraphColumnCount(row));
-            const bool hovered = region ? ImGui::IsMouseHoveringRect(minimum, maximum)
+            const bool hovered = region ? history_window_hovered && ImGui::IsMouseHoveringRect(minimum, maximum)
                 : ImGui::IsItemHovered() && ImGui::GetMousePos().x >= row_content_x;
             const bool clicked = !region && ImGui::IsItemClicked();
             const bool region_clicked = region && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
@@ -211,7 +231,7 @@ void Application::RenderHistory()
             // Hit-test the curves in the actual rendered row. Keeping the
             // resulting track for the following frame lets the highlight be
             // drawn behind every visible segment of that lane.
-            if (!region && ImGui::GetDragDropPayload() == nullptr
+            if (history_window_hovered && !region && ImGui::GetDragDropPayload() == nullptr
                 && ImGui::IsMouseHoveringRect(minimum, maximum))
             {
                 const ImVec2 mouse = ImGui::GetMousePos();
@@ -237,11 +257,11 @@ void Application::RenderHistory()
                     {
                         const float normalized = vertical * 2.0f;
                         const float parameter = 1.0f - std::sqrt(1.0f - normalized);
-                        const auto before = std::ranges::find(row.tracks_before, row.track);
-                        if (before != row.tracks_before.end())
+                        for (std::size_t incoming = 0; incoming < row.incoming_columns.size(); ++incoming)
                         {
-                            const float start = lane_x(static_cast<int>(before - row.tracks_before.begin()));
-                            consider(row.track, start + (lane_x(row.column) - start) * parameter * parameter);
+                            const float start = lane_x(row.incoming_columns[incoming]);
+                            consider(row.incoming_tracks[incoming],
+                                start + (lane_x(row.column) - start) * parameter * parameter);
                         }
                     }
                     else
@@ -259,7 +279,7 @@ void Application::RenderHistory()
                     for (std::size_t before = 0; before < row.tracks_before.size(); ++before)
                     {
                         const int track = row.tracks_before[before];
-                        if (track == row.track) continue;
+                        if (std::ranges::find(row.incoming_tracks, track) != row.incoming_tracks.end()) continue;
                         const auto after = std::ranges::find(row.tracks_after, track);
                         if (after == row.tracks_after.end()) continue;
                         float parameter_low = 0.0f;
@@ -297,17 +317,15 @@ void Application::RenderHistory()
             const float dot_x = lane_x(row.column);
             // Route pass-by lanes by their stable track identity instead of
             // joining whatever happens to occupy the same column above and
-            // below this row. Curves make column compaction readable without
-            // implying a relationship to the commit bullet.
+            // below this row. Curves keep eager column compaction readable.
+            for (std::size_t incoming = 0; incoming < row.incoming_columns.size(); ++incoming)
+                quadratic({lane_x(row.incoming_columns[incoming]), minimum.y},
+                    {lane_x(row.incoming_columns[incoming]), center}, {dot_x, center},
+                    row.incoming_tracks[incoming]);
             for (std::size_t before = 0; before < row.tracks_before.size(); ++before)
             {
                 const int track = row.tracks_before[before];
-                if (track == row.track)
-                {
-                    quadratic({lane_x(static_cast<int>(before)), minimum.y},
-                        {lane_x(static_cast<int>(before)), center}, {dot_x, center}, track);
-                    continue;
-                }
+                if (std::ranges::find(row.incoming_tracks, track) != row.incoming_tracks.end()) continue;
                 auto after = std::ranges::find(row.tracks_after, track);
                 if (after != row.tracks_after.end())
                 {
@@ -386,25 +404,56 @@ void Application::RenderHistory()
                     : revision.pushed ? kStatusPushed : kStatusUnpushed);
             const std::string title = FirstLine(revision.description);
             ImVec2 cursor{content_x, center - ImGui::GetTextLineHeight() * 0.5f};
-            std::vector<std::pair<std::string, ImU32>> badges;
+            struct HistoryBadge
+            {
+                std::string label;
+                ImU32 color = 0;
+                bool bookmark = false;
+                bool local = false;
+                std::string remotes;
+            };
+            std::vector<HistoryBadge> badges;
             if (const auto refs = _history_refs_by_revision.find(revision.oid);
                 refs != _history_refs_by_revision.end())
                 for (const std::size_t ref_index : refs->second)
                 {
                     const NamedRef& ref = _snapshot->refs[ref_index];
-                    const bool remote = ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK
-                        || ref.kind == GG_NAMED_REF_REMOTE_TAG;
-                    const ImU32 badge_color = remote ? kBadgeRemote
-                        : ref.kind == GG_NAMED_REF_LOCAL_TAG ? kBadgeTag : kBadgeBookmark;
-                    badges.emplace_back(ReferenceLabel(ref), badge_color);
+                    auto [label, dimmed_prefix] = ReferenceBadgeLabel(ref, _snapshot->refs);
+                    (void)dimmed_prefix;
+                    if (label.empty()) continue;
+                    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
+                    const gg_named_ref_kind local_kind = bookmark
+                        ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
+                    const gg_named_ref_kind remote_kind = bookmark
+                        ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
+                    HistoryBadge badge{std::move(label), RefBadgeColor(ref, _snapshot->refs), bookmark,
+                        std::ranges::any_of(_snapshot->refs, [&](const NamedRef& candidate) {
+                            return candidate.kind == local_kind && candidate.name == ref.name
+                                && candidate.target == ref.target;
+                        }), {}};
+                    std::vector<std::string> remotes;
+                    for (const NamedRef& candidate : _snapshot->refs)
+                        if (candidate.kind == remote_kind && candidate.name == ref.name
+                            && candidate.target == ref.target
+                            && !candidate.remote.empty())
+                            remotes.push_back(candidate.remote);
+                    std::ranges::sort(remotes);
+                    const auto unique = std::ranges::unique(remotes);
+                    remotes.erase(unique.begin(), unique.end());
+                    for (const std::string& remote : remotes)
+                    {
+                        if (!badge.remotes.empty()) badge.remotes += ", ";
+                        badge.remotes += remote;
+                    }
+                    badges.push_back(std::move(badge));
                 }
             const std::string_view shown = title.empty() ? "(no description)" : std::string_view(title);
             const float content_right = maximum.x - 12.0f;
             float badge_width = 0.0f;
-            for (const auto& [label, color] : badges)
+            for (const HistoryBadge& badge : badges)
             {
-                (void)color;
-                badge_width += ImGui::CalcTextSize(label.c_str()).x + FontPx(20.0f);
+                badge_width += ImGui::CalcTextSize(badge.label.c_str()).x + FontPx(20.0f);
             }
             const float message_right = badges.empty() ? content_right
                 : std::max(content_x, content_right - badge_width - FontPx(6.0f));
@@ -422,21 +471,23 @@ void Application::RenderHistory()
             }
 #endif
             if (!badges.empty()) cursor.x += FontPx(6.0f);
-            for (const auto& [ref_label, badge_color] : badges)
+            const HistoryBadge* hovered_badge = nullptr;
+            for (const HistoryBadge& badge : badges)
             {
-#ifdef IMGUI_ENABLE_TEST_ENGINE
                 const ImVec2 badge_start = cursor;
-#endif
-                DrawBadge(draw, cursor, center, ref_label, badge_color);
+                DrawBadge(draw, cursor, center, badge.label, badge.color);
+                if (ImGui::IsMouseHoveringRect(
+                        {badge_start.x, minimum.y}, {cursor.x, maximum.y}))
+                    hovered_badge = &badge;
 #ifdef IMGUI_ENABLE_TEST_ENGINE
                 {
                     ImGuiContext& g = *GImGui;
-                    const std::string item_label = "ref:" + ref_label;
+                    const std::string item_label = "ref:" + badge.label;
                     const ImGuiID badge_id = ImGui::GetID(item_label.c_str());
                     const ImRect badge_rect({badge_start.x, minimum.y}, {cursor.x, maximum.y});
                     IMGUI_TEST_ENGINE_ITEM_ADD(badge_id, badge_rect, nullptr);
                     ImGuiTestEngineHook_ItemInfo(
-                        &g, badge_id, ref_label.c_str(), ImGuiItemStatusFlags_None);
+                        &g, badge_id, badge.label.c_str(), ImGuiItemStatusFlags_None);
                 }
 #endif
             }
@@ -516,6 +567,7 @@ void Application::RenderHistory()
                 draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
                     marker_color, 4.0f, ImDrawFlags_None, 2.0f);
             }
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
             if (ImGui::BeginPopupContextItem("change context"))
             {
                 ImGui::BeginDisabled(actions_locked);
@@ -529,12 +581,25 @@ void Application::RenderHistory()
                 IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
                 ImGui::EndPopup();
             }
+            ImGui::PopStyleVar();
             if (hovered && !hovered_drop.has_value() && ImGui::GetDragDropPayload() == nullptr)
             {
                 ImGui::BeginTooltip();
-                ImGui::TextUnformatted(shown.data(), shown.data() + shown.size());
-                ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
-                TextLabelledId("Commit: ", revision.oid, RevisionPrefix(revision.oid), CommitIdColor(revision.working_copy));
+                if (hovered_badge != nullptr)
+                {
+                    ImGui::Text("%s: %s", hovered_badge->bookmark ? "Bookmark" : "Tag",
+                        hovered_badge->label.c_str());
+                    ImGui::Text("Local: %s", hovered_badge->local ? "yes" : "no");
+                    ImGui::Text("Remotes: %s", hovered_badge->remotes.empty()
+                        ? "(none)" : hovered_badge->remotes.c_str());
+                }
+                else
+                {
+                    ImGui::TextUnformatted(shown.data(), shown.data() + shown.size());
+                    ImGui::Text("Author: %s", revision.author.empty() ? "(unknown)" : revision.author.c_str());
+                    TextLabelledId("Commit: ", revision.oid, RevisionPrefix(revision.oid),
+                        CommitIdColor(revision.working_copy));
+                }
                 ImGui::EndTooltip();
             }
             ImGui::PopID();

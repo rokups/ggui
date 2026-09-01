@@ -10,7 +10,8 @@
 namespace Ggui
 {
 
-std::vector<GraphRow> BuildGraphLayout(const std::vector<GraphNode>& nodes)
+std::vector<GraphRow> BuildGraphLayout(
+    const std::vector<GraphNode>& nodes, std::string_view preferred_tip)
 {
     std::unordered_map<std::string_view, int> indices;
     indices.reserve(nodes.size());
@@ -25,34 +26,95 @@ std::vector<GraphRow> BuildGraphLayout(const std::vector<GraphNode>& nodes)
             if (found->second <= child) throw std::invalid_argument("graph is not in children-before-parents order");
         }
 
+    std::vector<bool> preferred(nodes.size());
+    auto preferred_node = indices.find(preferred_tip);
+    while (preferred_node != indices.end())
+    {
+        const int index = preferred_node->second;
+        preferred[static_cast<std::size_t>(index)] = true;
+        if (nodes[static_cast<std::size_t>(index)].parents.empty()) break;
+        preferred_node = indices.find(nodes[static_cast<std::size_t>(index)].parents.front());
+    }
+    const bool has_preferred_branch = std::find(preferred.begin(), preferred.end(), true) != preferred.end();
+
     std::vector<int> active_nodes;
     std::vector<int> active_tracks;
-    int next_track = 0;
+    // Reserve the primary routing identity for the preferred tip. When a side
+    // branch reaches a shared ancestor first, its edge stays active alongside
+    // the preferred edge until both meet at the ancestor's dot.
+    int next_track = has_preferred_branch ? 1 : 0;
     std::vector<GraphRow> result;
     result.reserve(nodes.size());
     for (int index = 0; index < static_cast<int>(nodes.size()); ++index)
     {
         GraphRow row;
         row.tracks_before = active_tracks;
-        auto current = std::find(active_nodes.begin(), active_nodes.end(), index);
-        if (current == active_nodes.end())
+        std::vector<int> incoming;
+        for (int column = 0; column < static_cast<int>(active_nodes.size()); ++column)
+            if (active_nodes[static_cast<std::size_t>(column)] == index)
+                incoming.push_back(column);
+        if (incoming.empty())
         {
             row.column = static_cast<int>(active_nodes.size());
-            row.track = next_track++;
+            row.track = preferred[static_cast<std::size_t>(index)] ? 0 : next_track++;
         }
         else
         {
-            row.column = static_cast<int>(current - active_nodes.begin());
-            row.track = active_tracks[static_cast<std::size_t>(row.column)];
-            active_nodes.erase(current);
-            active_tracks.erase(active_tracks.begin() + row.column);
+            int primary = incoming.front();
+            if (preferred[static_cast<std::size_t>(index)])
+            {
+                const auto preferred_incoming = std::find_if(incoming.begin(), incoming.end(), [&](int column) {
+                    return active_tracks[static_cast<std::size_t>(column)] == 0;
+                });
+                if (preferred_incoming != incoming.end()) primary = *preferred_incoming;
+            }
+            row.column = primary - static_cast<int>(
+                std::find(incoming.begin(), incoming.end(), primary) - incoming.begin());
+            row.track = preferred[static_cast<std::size_t>(index)] ? 0
+                : active_tracks[static_cast<std::size_t>(primary)];
+            for (const int column : incoming)
+            {
+                row.incoming_columns.push_back(column);
+                row.incoming_tracks.push_back(active_tracks[static_cast<std::size_t>(column)]);
+            }
+            for (auto current = incoming.rbegin(); current != incoming.rend(); ++current)
+            {
+                active_nodes.erase(active_nodes.begin() + *current);
+                active_tracks.erase(active_tracks.begin() + *current);
+            }
         }
         int insert_at = row.column;
         for (std::size_t parent_index = 0; parent_index < nodes[static_cast<std::size_t>(index)].parents.size(); ++parent_index)
         {
             const int parent_index_value = indices.at(nodes[static_cast<std::size_t>(index)].parents[parent_index]);
             auto parent = std::find(active_nodes.begin(), active_nodes.end(), parent_index_value);
-            if (parent == active_nodes.end())
+            const bool preferred_edge = preferred[static_cast<std::size_t>(index)] && parent_index == 0;
+            if (preferred_edge)
+            {
+                for (auto candidate = parent; candidate != active_nodes.end();
+                    candidate = std::find(candidate + 1, active_nodes.end(), parent_index_value))
+                    if (active_tracks[static_cast<std::size_t>(candidate - active_nodes.begin())] == row.track)
+                    {
+                        parent = candidate;
+                        break;
+                    }
+            }
+            else if (preferred[static_cast<std::size_t>(parent_index_value)])
+            {
+                for (auto candidate = parent; candidate != active_nodes.end();
+                    candidate = std::find(candidate + 1, active_nodes.end(), parent_index_value))
+                    if (active_tracks[static_cast<std::size_t>(candidate - active_nodes.begin())] != 0)
+                    {
+                        parent = candidate;
+                        break;
+                    }
+            }
+            const bool needs_preferred_lane = preferred_edge && (parent == active_nodes.end()
+                || active_tracks[static_cast<std::size_t>(parent - active_nodes.begin())] != row.track);
+            const bool needs_side_lane = !preferred_edge && preferred[static_cast<std::size_t>(parent_index_value)]
+                && parent != active_nodes.end()
+                && active_tracks[static_cast<std::size_t>(parent - active_nodes.begin())] == 0;
+            if (parent == active_nodes.end() || needs_preferred_lane || needs_side_lane)
             {
                 const int column = std::min(insert_at, static_cast<int>(active_nodes.size()));
                 parent = active_nodes.insert(active_nodes.begin() + column, parent_index_value);

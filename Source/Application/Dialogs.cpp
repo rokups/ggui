@@ -30,6 +30,15 @@ void Application::OpenDialog(Dialog dialog)
     _input_flag_secondary = false;
     _input_flag_tertiary = false;
     _input_mode = 0;
+    if (dialog == Dialog::Abandon)
+    {
+        _abandon_revisions = {_selected_revision};
+        _abandon_revisions_revision = _selected_revision;
+        _abandon_revisions_requested.clear();
+        _abandon_revisions_complete = false;
+        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        _abandon_modifies_locked = IsLocked(_selected_revision);
+    }
     if (dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
@@ -124,7 +133,7 @@ void Application::RenderDialogs()
         if (ImGui::Button("Apply from Clipboard"))
         {
             const char* clipboard = ImGui::GetClipboardText();
-            _engine.Enqueue(ApplyPatch{clipboard == nullptr ? "" : clipboard, {}});
+            EnqueueAction(ApplyPatch{clipboard == nullptr ? "" : clipboard, {}});
             ImGui::CloseCurrentPopup();
         }
         ImGui::Spacing();
@@ -132,7 +141,7 @@ void Application::RenderDialogs()
         ImGui::InputText("File", patch_apply_path, IM_ARRAYSIZE(patch_apply_path));
         if (ImGui::Button("Apply from File"))
         {
-            _engine.Enqueue(ApplyPatch{{}, patch_apply_path});
+            EnqueueAction(ApplyPatch{{}, patch_apply_path});
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -226,7 +235,18 @@ void Application::RenderDialogs()
     case Dialog::Squash:
         TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
-        DialogInput("Into", "defaults to parent", &_input_secondary, focus_first);
+        if (_input_flag_tertiary)
+        {
+            ImGui::TextWrapped("Squash this change and all descendants into its parent.");
+            if (_input_secondary.empty())
+                ImGui::TextColored(ImVec4(1.0f, 0.38f, 0.35f, 1.0f),
+                    "The selected change must have exactly one parent.");
+            else
+                TextLabelledId("Parent: ", _input_secondary, RevisionPrefix(_input_secondary),
+                    CommitIdColor(_input_secondary == _snapshot->working_copy));
+        }
+        else
+            DialogInput("Into", "defaults to parent", &_input_secondary, focus_first);
         DialogMultiline("Combined description", &_input_primary, 90.0f);
         break;
     case Dialog::Split:
@@ -244,30 +264,42 @@ void Application::RenderDialogs()
         break;
     case Dialog::Abandon:
     {
+        PollAbandonRevisions();
         TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
             CommitIdColor(_selected_revision == _snapshot->working_copy));
         ImGui::SameLine();
         ImGui::TextWrapped("and restack its descendants. This remains undoable.");
-        if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary)
-            && _input_flag_tertiary)
+        if (_selected_revision == _snapshot->working_copy)
+            ImGui::TextDisabled("A new empty working-copy change will be created at its parents.");
+        if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary))
         {
-            const std::vector<std::string> revisions = AbandonRevisions(_selected_revision, true);
-            _input_flag = _input_flag || std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-                    && std::ranges::find(revisions, ref.target) != revisions.end();
-            });
+            if (_input_flag_tertiary)
+                RequestAbandonRevisions(_selected_revision);
+            else
+            {
+                _abandon_revisions = {_selected_revision};
+                _abandon_revisions_revision = _selected_revision;
+                _abandon_revisions_requested.clear();
+                _abandon_revisions_complete = false;
+                _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+                _abandon_modifies_locked = IsLocked(_selected_revision);
+            }
         }
-        const std::vector<std::string> revisions =
-            AbandonRevisions(_selected_revision, _input_flag_tertiary);
         if (_input_flag_tertiary)
-            ImGui::TextDisabled("%zu changes will be abandoned.", revisions.size());
+        {
+            if (_abandon_revisions_requested.empty())
+                RequestAbandonRevisions(_selected_revision);
+            if (_abandon_revisions_complete && _abandon_revisions_revision == _selected_revision)
+                ImGui::TextDisabled("%zu changes will be abandoned.", _abandon_revisions.size());
+            else
+                ImGui::TextDisabled("Calculating affected changes...");
+        }
         ImGui::Checkbox("Retain bookmarks", &_input_flag);
-        const std::vector<RemoteBookmarkDelete> remote_bookmarks = RemoteBookmarksAt(revisions);
-        if (!remote_bookmarks.empty())
+        if (!_abandon_remote_bookmarks.empty())
         {
             ImGui::Checkbox("Also delete bookmark from remote", &_input_flag_secondary);
             if (_input_flag_secondary)
-                for (const RemoteBookmarkDelete& bookmark : remote_bookmarks)
+                for (const RemoteBookmarkDelete& bookmark : _abandon_remote_bookmarks)
                     ImGui::TextDisabled("%s/%s", bookmark.remote.c_str(), bookmark.bookmark.c_str());
         }
         break;
@@ -469,43 +501,50 @@ void Application::SubmitDialog()
 {
     switch (_dialog)
     {
-    case Dialog::Clone: _engine.Enqueue(CloneRepository{_input_primary, _input_secondary}); break;
-    case Dialog::Commit: _engine.Enqueue(Commit{_input_primary, SplitLines(_input_filesets)}); break;
-    case Dialog::Metaedit: _engine.Enqueue(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
-    case Dialog::Rebase: _engine.Enqueue(Rebase{_input_secondary, _input_primary}); break;
-    case Dialog::Squash: _engine.Enqueue(Squash{_selected_revision, _input_secondary, _input_primary}); break;
-    case Dialog::Split: _engine.Enqueue(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
+    case Dialog::Clone: EnqueueAction(CloneRepository{_input_primary, _input_secondary}); break;
+    case Dialog::Commit: EnqueueAction(Commit{_input_primary, SplitLines(_input_filesets)}); break;
+    case Dialog::Metaedit: EnqueueAction(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
+    case Dialog::Rebase: EnqueueAction(Rebase{_input_secondary, _input_primary}); break;
+    case Dialog::Squash:
+        EnqueueAction(Squash{
+            _selected_revision, _input_secondary, _input_primary, false, _input_flag_tertiary, true});
+        break;
+    case Dialog::Split: EnqueueAction(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Abandon:
     {
-        const std::vector<std::string> revisions =
-            AbandonRevisions(_selected_revision, _input_flag_tertiary);
-        _engine.Enqueue(Abandon{revisions, _input_flag, false,
+        // The cached list is only authoritative for the optional full-branch
+        // calculation. A normal abandon must always submit the commit that is
+        // named in the dialog, regardless of stale or cancelled calculations.
+        const std::vector<std::string> revisions = _input_flag_tertiary
+            ? _abandon_revisions : std::vector<std::string>{_selected_revision};
+        EnqueueAction(Abandon{revisions, _input_flag, false,
             _input_flag_secondary ? RemoteBookmarksAt(revisions)
                                   : std::vector<RemoteBookmarkDelete>{}});
         break;
     }
     case Dialog::Restore:
-        _engine.Enqueue(Restore{_input_primary, _selected_revision, SplitLines(_input_filesets)});
+        EnqueueAction(Restore{_input_primary, _selected_revision, SplitLines(_input_filesets)});
         break;
     case Dialog::Bookmark:
-        _engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {_input_primary},
+        _pending_created_bookmark = _input_primary;
+        EnqueueAction(Bookmark{GG_BOOKMARK_CREATE, {_input_primary},
             _input_secondary.empty() ? _selected_revision : _input_secondary, {}});
         break;
     case Dialog::BookmarkRename:
-        _engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {_input_secondary}, {}, _input_primary});
+        EnqueueAction(Bookmark{GG_BOOKMARK_RENAME, {_input_secondary}, {}, _input_primary});
         break;
     case Dialog::Tag:
-        _engine.Enqueue(Tag{GG_TAG_SET, {_input_primary},
+        EnqueueAction(Tag{GG_TAG_SET, {_input_primary},
             _input_secondary.empty() ? _selected_revision : _input_secondary, _input_flag});
         break;
-    case Dialog::RemoteAdd: _engine.Enqueue(AddRemote{_input_primary, _input_secondary}); break;
+    case Dialog::RemoteAdd: EnqueueAction(AddRemote{_input_primary, _input_secondary}); break;
     case Dialog::WorkspaceAdd:
-        _engine.Enqueue(WorkspaceAdd{_input_primary, _input_secondary,
+        EnqueueAction(WorkspaceAdd{_input_primary, _input_secondary,
             _input_tertiary.empty() ? "@" : _input_tertiary, {}});
         break;
-    case Dialog::WorkspaceRename: _engine.Enqueue(WorkspaceRename{_input_primary}); break;
-    case Dialog::PushTo: _engine.Enqueue(Push{_input_secondary, _input_primary, _input_flag}); break;
-    case Dialog::Reconcile: _engine.Enqueue(Rebase{_input_tertiary, _input_filesets, true}); break;
+    case Dialog::WorkspaceRename: EnqueueAction(WorkspaceRename{_input_primary}); break;
+    case Dialog::PushTo: EnqueueAction(Push{_input_secondary, _input_primary, _input_flag}); break;
+    case Dialog::Reconcile: EnqueueAction(Rebase{_input_tertiary, _input_filesets, true}); break;
     case Dialog::Credentials:
     {
         CredentialResponse response;
@@ -520,24 +559,25 @@ void Application::SubmitDialog()
     }
     case Dialog::ConfirmDrop:
         if (_pending_drop.action == DropAction::Squash)
-            _engine.Enqueue(
+            EnqueueAction(
                 Squash{_pending_drop.source, _pending_drop.target, {}, _pending_drop.entire_branch});
         else if (_pending_drop.action == DropAction::Rebase)
-            _engine.Enqueue(Rebase{_pending_drop.source, _pending_drop.target, _pending_drop.entire_branch});
+            EnqueueAction(Rebase{_pending_drop.source, _pending_drop.target, _pending_drop.entire_branch});
         else
-            _engine.Enqueue(Reorder{
+            EnqueueAction(Reorder{
                 _pending_drop.source, _pending_drop.target, DropPlacement(_pending_drop.action), _pending_drop.copy});
         break;
     case Dialog::ConfirmLocked:
-        for (Command& command : _pending_commands)
-            _engine.Enqueue(std::move(command));
+        if (!_pending_commands.empty() && EnqueueAction(std::move(_pending_commands.front())))
+            for (Command& command : _pending_commands | std::views::drop(1))
+                _engine.Enqueue(std::move(command));
         _pending_commands.clear();
         if (_pending_change_info_save)
             _change_info_dirty = false;
         _pending_change_info_save = false;
         break;
     case Dialog::ConfirmBookmarkMove:
-        _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {_input_primary}, _input_tertiary, {}, true});
+        EnqueueAction(Bookmark{GG_BOOKMARK_MOVE, {_input_primary}, _input_tertiary, {}, true});
         break;
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }

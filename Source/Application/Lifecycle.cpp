@@ -82,13 +82,13 @@ int Application::Run(int argc, char** argv)
     if (_test_mode)
         InitializeTestEngine(test_filter);
     else if (!repository_path.empty())
-        _engine.Enqueue(OpenRepository{repository_path});
+        EnqueueAction(OpenRepository{repository_path});
 #else
     if (argc > 1)
-        _engine.Enqueue(OpenRepository{argv[1]});
+        EnqueueAction(OpenRepository{argv[1]});
 #endif
     else if (!_recent_repositories.empty() && std::filesystem::exists(_recent_repositories.front()))
-        _engine.Enqueue(OpenRepository{_recent_repositories.front()});
+        EnqueueAction(OpenRepository{_recent_repositories.front()});
 
     while (_running)
     {
@@ -153,7 +153,7 @@ void Application::ProcessEvent(SDL_Event& event)
         || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(_window)))
         _running = false;
     if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr && _active_operation.empty())
-        _engine.Enqueue(OpenRepository{event.drop.data});
+        EnqueueAction(OpenRepository{event.drop.data});
     if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST
         && event.window.windowID == SDL_GetWindowID(_window))
     {
@@ -182,6 +182,9 @@ void Application::ProcessEvent(SDL_Event& event)
 
 bool Application::Initialize()
 {
+    // SDL 3.4.2+ can force the non-sRGB WGL pixel format instead of merely
+    // requesting one. This keeps Windows presentation consistent with Linux.
+    SDL_SetHint(SDL_HINT_OPENGL_FORCE_SRGB_FRAMEBUFFER, "0");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         spdlog::error("SDL_Init failed: {}", SDL_GetError());
@@ -216,7 +219,7 @@ bool Application::Initialize()
     glDisable(GL_FRAMEBUFFER_SRGB);
     SDL_GL_SetSwapInterval(1);
 
-    char* preferences = SDL_GetPrefPath("gg", "ggui");
+    char* preferences = SettingsPersistenceEnabled() ? SDL_GetPrefPath("gg", "ggui") : nullptr;
     if (preferences != nullptr)
     {
         _settings_path = std::filesystem::path(preferences) / "settings.json";
@@ -388,9 +391,18 @@ void Application::Shutdown()
     SDL_Quit();
 }
 
+bool Application::SettingsPersistenceEnabled() const
+{
+#ifdef IMGUI_BUILD_TESTING
+    return !_test_mode && !_smoke_mode;
+#else
+    return true;
+#endif
+}
+
 void Application::LoadSettings()
 {
-    if (_settings_path.empty() || !std::filesystem::exists(_settings_path))
+    if (!SettingsPersistenceEnabled() || _settings_path.empty() || !std::filesystem::exists(_settings_path))
         return;
     try
     {
@@ -418,7 +430,7 @@ void Application::LoadSettings()
 
 void Application::SaveSettings()
 {
-    if (_settings_path.empty())
+    if (!SettingsPersistenceEnabled() || _settings_path.empty())
         return; // GCOV_EXCL_LINE: SDL supplied no preferences directory
     try
     {
@@ -453,6 +465,12 @@ void Application::RememberRepository(const std::string& path)
     _recent_repositories.insert(_recent_repositories.begin(), path);
     if (_recent_repositories.size() > 10)
         _recent_repositories.resize(10);
+}
+
+void Application::ForgetRepository(const std::string& path)
+{
+    std::erase(_recent_repositories, path);
+    SaveSettings();
 }
 
 } // namespace Ggui

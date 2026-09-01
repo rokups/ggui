@@ -38,7 +38,9 @@ endif()
 CPMAddPackage(
   NAME SDL3
   GITHUB_REPOSITORY libsdl-org/SDL
-  GIT_TAG release-3.4.0
+  # 3.4.0 regressed OpenGL framebuffer color handling on Windows, causing
+  # display-encoded ImGui colors to be encoded a second time.
+  GIT_TAG release-3.4.4
   OPTIONS "SDL_STATIC ON" "SDL_SHARED OFF" "SDL_TEST_LIBRARY OFF" "SDL_X11_XTEST OFF"
   EXCLUDE_FROM_ALL TRUE)
 

@@ -10,7 +10,6 @@
 #include <cctype>
 #include <deque>
 #include <exception>
-#include <functional>
 #include <iterator>
 #include <limits>
 #include <mutex>
@@ -61,78 +60,49 @@ std::vector<std::size_t> HistoryTopologicalOrder(
     std::unordered_map<std::string_view, std::size_t> indexes;
     for (std::size_t index = 0; index < items.size(); ++index) indexes.emplace(items[index].id, index);
     std::vector<std::size_t> children(items.size());
-    std::vector<std::vector<std::size_t>> neighbors(items.size());
     for (std::size_t index = 0; index < items.size(); ++index)
         for (const std::string& parent : items[index].parents)
             if (const auto found = indexes.find(parent); found != indexes.end())
-            {
                 ++children[found->second];
-                neighbors[index].push_back(found->second);
-                neighbors[found->second].push_back(index);
-            }
 
-    struct Component
-    {
-        std::vector<std::size_t> items;
-        std::int64_t timestamp = std::numeric_limits<std::int64_t>::min();
-        std::size_t priority = std::numeric_limits<std::size_t>::max();
-        std::string_view id;
+    std::vector<std::size_t> priorities(items.size(), std::numeric_limits<std::size_t>::max());
+    for (std::size_t priority = 0; priority < preferred_heads.size(); ++priority)
+        if (const auto found = indexes.find(preferred_heads[priority]); found != indexes.end())
+            priorities[found->second] = priority;
+    const auto timestamp = [&](std::size_t index) {
+        return items[index].kind == HistoryItemKind::Commit
+            ? items[index].revision.timestamp : std::numeric_limits<std::int64_t>::min();
     };
-    std::vector<Component> components;
-    std::vector<bool> seen(items.size());
-    for (std::size_t start = 0; start < items.size(); ++start)
-    {
-        if (seen[start]) continue;
-        Component component;
-        std::vector<std::size_t> pending{start};
-        while (!pending.empty())
-        {
-            const std::size_t index = pending.back();
-            pending.pop_back();
-            if (seen[index]) continue;
-            seen[index] = true;
-            component.items.push_back(index);
-            if (items[index].kind == HistoryItemKind::Commit)
-                component.timestamp = std::max(component.timestamp, items[index].revision.timestamp);
-            if (const auto preferred = std::ranges::find(preferred_heads, items[index].id);
-                preferred != preferred_heads.end())
-                component.priority = std::min(component.priority,
-                    static_cast<std::size_t>(preferred - preferred_heads.begin()));
-            if (component.id.empty() || items[index].id < component.id) component.id = items[index].id;
-            for (const std::size_t neighbor : neighbors[index])
-                if (!seen[neighbor]) pending.push_back(neighbor);
-        }
-        components.push_back(std::move(component));
-    }
-    std::ranges::sort(components, [](const Component& left, const Component& right) {
-        if (left.timestamp != right.timestamp) return left.timestamp > right.timestamp;
-        if (left.priority != right.priority) return left.priority < right.priority;
-        return left.id < right.id;
-    });
+    const auto newer = [&](std::size_t left, std::size_t right) {
+        const bool left_region = items[left].kind == HistoryItemKind::CollapsedRegion;
+        const bool right_region = items[right].kind == HistoryItemKind::CollapsedRegion;
+        if (left_region != right_region) return left_region;
+        if (timestamp(left) != timestamp(right)) return timestamp(left) > timestamp(right);
+        if (priorities[left] != priorities[right]) return priorities[left] < priorities[right];
+        return items[left].id < items[right].id;
+    };
 
+    std::vector<std::size_t> ready;
+    for (std::size_t index = 0; index < items.size(); ++index)
+        if (children[index] == 0) ready.push_back(index);
     std::vector<std::size_t> result;
-    for (const Component& component : components)
+    result.reserve(items.size());
+    // Kahn's algorithm enforces children-before-parents topology. A collapsed
+    // parent is emitted as soon as all of its visible children have appeared,
+    // so branch terminators stay beside their branch instead of collecting at
+    // the bottom. Date chooses among the remaining unconstrained commits.
+    while (!ready.empty())
     {
-        const std::size_t component_begin = result.size();
-        std::vector<std::size_t> ready;
-        for (const std::size_t index : component.items)
-            if (children[index] == 0) ready.push_back(index);
-        std::ranges::sort(ready, std::greater<>());
-        while (!ready.empty())
+        const auto best = std::ranges::min_element(ready, newer);
+        const std::size_t index = *best;
+        ready.erase(best);
+        result.push_back(index);
+        for (const std::string& parent : items[index].parents)
+            if (const auto found = indexes.find(parent);
+                found != indexes.end() && --children[found->second] == 0)
         {
-            const std::size_t index = ready.back();
-            ready.pop_back();
-            result.push_back(index);
-            for (const std::string& parent : items[index].parents)
-                if (const auto found = indexes.find(parent);
-                    found != indexes.end() && --children[found->second] == 0)
-                {
-                    ready.push_back(found->second);
-                    std::ranges::sort(ready, std::greater<>());
-                }
+            ready.push_back(found->second);
         }
-        if (result.size() - component_begin != component.items.size())
-            throw std::runtime_error("history graph is not acyclic");
     }
     if (result.size() != items.size()) throw std::runtime_error("history graph is not acyclic");
     return result;
@@ -142,7 +112,8 @@ std::vector<std::size_t> HistoryTopologicalOrder(
 void RepositoryEngine::Impl::Execute(const Command& command)
 {
     const std::string name = CommandName(command);
-    const bool quiet = std::holds_alternative<Refresh>(command) || std::holds_alternative<RebuildHistory>(command)
+    const auto* refresh = std::get_if<Refresh>(&command);
+    const bool quiet = (refresh != nullptr && !refresh->foreground) || std::holds_alternative<RebuildHistory>(command)
         || std::holds_alternative<ExpandHistoryRegion>(command)
         || std::holds_alternative<LoadDiff>(command)
         || std::holds_alternative<LoadFileContent>(command);

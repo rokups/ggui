@@ -54,12 +54,12 @@ void Application::OpenTestRepository(const std::string& path)
 #ifdef GGUI_TESTING
     _engine.SetCommandsSuppressedForTest(false);
 #endif
-    _engine.Enqueue(OpenRepository{path});
+    EnqueueAction(OpenRepository{path});
 }
 
 void Application::RefreshForTest()
 {
-    _engine.Enqueue(Refresh{});
+    EnqueueAction(Refresh{true, {}, true});
 }
 
 std::shared_ptr<const RepoSnapshot> Application::SnapshotForTest() const
@@ -182,6 +182,11 @@ const std::string& Application::DialogDestinationForTest() const
     return _input_primary;
 }
 
+const std::string& Application::DialogDescriptionForTest() const
+{
+    return _input_primary;
+}
+
 const MoveDiffLines& Application::PendingMoveDiffLinesForTest() const
 {
     return std::get<MoveDiffLines>(_pending_commands.front());
@@ -236,6 +241,7 @@ void Application::ShowBookmarkRenameForTest(const std::string& name)
 void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 {
     _test_snapshot_mode = true;
+    _pending_created_bookmark.clear();
 #ifdef GGUI_TESTING
     _engine.SetCommandsSuppressedForTest(true);
 #endif
@@ -271,7 +277,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
         _history_revisions.push_back(item.revision);
         nodes.push_back({item.id, item.parents});
     }
-    _graph_rows = BuildGraphLayout(nodes);
+    _graph_rows = BuildGraphLayout(nodes, _snapshot->working_copy);
     _history_search_scrolled_request = 0;
     _history_hovered_track = -1;
     _history_hovered_commit_row = -1;

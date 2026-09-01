@@ -23,16 +23,16 @@ using namespace RepositoryInternal;
 RepositoryEngine::RepositoryEngine() : _impl(std::make_unique<Impl>()) {}
 RepositoryEngine::~RepositoryEngine() = default;
 
-void RepositoryEngine::Enqueue(Command command)
+bool RepositoryEngine::Enqueue(Command command)
 {
 #ifdef GGUI_TESTING
     if (_impl->test_commands_suppressed)
-        return;
+        return false;
 #endif
     if (auto* rebuild = std::get_if<RebuildHistory>(&command))
     {
         _impl->RequestHistory(std::move(rebuild->query));
-        return;
+        return true;
     }
     if (auto* expand = std::get_if<ExpandHistoryRegion>(&command))
     {
@@ -42,7 +42,7 @@ void RepositoryEngine::Enqueue(Command command)
             query = _impl->active_history_query;
         }
         _impl->RequestHistory(std::move(query), std::move(expand->id));
-        return;
+        return true;
     }
     if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command))
     {
@@ -62,7 +62,7 @@ void RepositoryEngine::Enqueue(Command command)
             _impl->inspector_requests.push_back(std::move(queued));
         }
         _impl->inspector_cv.notify_one();
-        return;
+        return true;
     }
     {
         std::lock_guard lock(_impl->queue_mutex);
@@ -78,6 +78,7 @@ void RepositoryEngine::Enqueue(Command command)
         _impl->commands.push_back(std::move(command));
     }
     _impl->queue_cv.notify_one();
+    return true;
 }
 
 std::vector<Event> RepositoryEngine::PollEvents()

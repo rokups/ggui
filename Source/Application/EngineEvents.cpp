@@ -45,6 +45,17 @@ void Application::ApplyEvent(Event event)
                     _history_refs_by_revision.clear();
                     for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
                         _history_refs_by_revision[_snapshot->refs[index].target].push_back(index);
+                    if (!_pending_created_bookmark.empty()
+                        && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
+                            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                                && ref.name == _pending_created_bookmark;
+                        }))
+                    {
+                        _visible_bookmarks = {_pending_created_bookmark};
+                        _visible_bookmarks_user_selected = true;
+                        _pending_created_bookmark.clear();
+                        RememberRepositorySelections();
+                    }
                     const bool repository_changed = old_root != _snapshot->root;
                     if (repository_changed)
                     {
@@ -128,7 +139,7 @@ void Application::ApplyEvent(Event event)
                         }
                         else _visible_revisions.push_back(-1);
                     }
-                    try { _graph_rows = BuildGraphLayout(nodes); }
+                    try { _graph_rows = BuildGraphLayout(nodes, _snapshot->working_copy); }
                     catch (const std::exception& error)
                     {
                         _error_message = error.what();
@@ -247,12 +258,17 @@ void Application::ApplyEvent(Event event)
                 else if constexpr (std::is_same_v<T, ErrorEvent>)
                 {
                     _error_message = value.message;
-                    _active_operation.clear();
-                    _progress_phase.clear();
+                    if (value.operation == _active_operation)
+                    {
+                        _active_operation.clear();
+                        _progress_phase.clear();
+                    }
                     if (value.operation == "diff")
                         _diff_loading = false;
                     if (value.operation == "history")
                         _history_expansion_pending.clear();
+                    if (value.operation == "bookmark")
+                        _pending_created_bookmark.clear();
                 }
                 else if constexpr (std::is_same_v<T, CredentialRequest>)
                 {

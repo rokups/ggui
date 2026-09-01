@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <algorithm>
+#include <deque>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -128,10 +132,101 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const Squash& value) {
+                if (value.descendants)
+                {
+                    Sync();
+                    git_oid selected{};
+                    Check(gg_repository_resolve(&selected, gg, value.source.c_str()), "resolve squash source");
+                    git_commit* raw_selected = nullptr;
+                    Check(git_commit_lookup(&raw_selected, git.get(), &selected), "load squash source");
+                    std::unique_ptr<git_commit, decltype(&git_commit_free)>
+                        selected_commit(raw_selected, git_commit_free);
+                    if (git_commit_parentcount(selected_commit.get()) != 1)
+                        throw std::runtime_error("squash source must have exactly one parent");
+                    const std::string destination = OidString(*git_commit_parent_id(selected_commit.get(), 0));
+
+                    git_revwalk* raw_walk = nullptr;
+                    Check(git_revwalk_new(&raw_walk, git.get()), "walk squash descendants");
+                    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
+                    const auto push_glob = [&](const char* pattern) {
+                        const int result = git_revwalk_push_glob(walk.get(), pattern);
+                        if (result != GIT_OK && result != GIT_ENOTFOUND)
+                            Check(result, "find squash descendants");
+                    };
+                    push_glob("refs/*");
+                    git_oid working{};
+                    if (gg_repository_working_copy(&working, gg) == GIT_OK)
+                        Check(git_revwalk_push(walk.get(), &working), "find working-copy descendants");
+
+                    std::unordered_map<std::string, std::vector<git_oid>> children;
+                    git_oid candidate{};
+                    while (git_revwalk_next(&candidate, walk.get()) == GIT_OK)
+                    {
+                        git_oid current = candidate;
+                        const std::string candidate_id = OidString(candidate);
+                        if (gg_repository_resolve(&current, gg, candidate_id.c_str()) != GIT_OK)
+                            continue;
+                        git_commit* raw_commit = nullptr;
+                        Check(git_commit_lookup(&raw_commit, git.get(), &current), "load squash descendant");
+                        std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                        // A merge with an outside branch is a convergence
+                        // boundary, not part of either branch being squashed.
+                        if (git_commit_parentcount(commit.get()) == 1)
+                            children[OidString(*git_commit_parent_id(commit.get(), 0))].push_back(current);
+                    }
+                    std::vector<git_oid> revisions;
+                    std::deque<git_oid> pending{selected};
+                    std::unordered_set<std::string> revision_ids;
+                    while (!pending.empty())
+                    {
+                        const git_oid revision = pending.front();
+                        pending.pop_front();
+                        const std::string id = OidString(revision);
+                        if (!revision_ids.insert(id).second) continue;
+                        revisions.push_back(revision);
+                        if (const auto found = children.find(id); found != children.end())
+                            pending.insert(pending.end(), found->second.begin(), found->second.end());
+                    }
+                    std::vector<std::string> tips;
+                    for (const git_oid& revision : revisions)
+                    {
+                        const std::string id = OidString(revision);
+                        const auto found = children.find(id);
+                        if (found == children.end()
+                            || std::ranges::none_of(found->second, [&](const git_oid& child) {
+                                   return revision_ids.contains(OidString(child));
+                               }))
+                            tips.push_back(id);
+                    }
+                    std::ranges::sort(tips);
+                    try
+                    {
+                        for (const std::string& tip : tips)
+                        {
+                            gg_squash_options options = GG_SQUASH_OPTIONS_INIT;
+                            options.source = tip.c_str();
+                            options.destination = destination.c_str();
+                            options.message = value.message_provided || !value.message.empty()
+                                ? value.message.c_str() : nullptr;
+                            Mutation mutation;
+                            gg_operation_options operation = OperationOptions();
+                            Check(gg_repository_squash_ex(&mutation.value, gg, &options, true, &operation),
+                                "squash descendants");
+                            PublishSnapshot(true, true);
+                        }
+                    }
+                    catch (...)
+                    {
+                        PublishSnapshot(true, true);
+                        throw;
+                    }
+                    return;
+                }
                 gg_squash_options options = GG_SQUASH_OPTIONS_INIT;
                 options.source = value.source.c_str();
                 options.destination = value.destination.c_str();
-                options.message = value.message.c_str();
+                options.message = value.message_provided || !value.message.empty()
+                    ? value.message.c_str() : nullptr;
                 Mutate("squash change", [&](auto* out, auto* operation) {
                     return gg_repository_squash_ex(out, gg, &options, value.entire_branch, operation);
                 });
@@ -277,7 +372,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
         command);
 }
 
-std::string RepositoryEngine::Impl::CommandName(const Command& command)
+std::string CommandName(const Command& command)
 {
     return std::visit(
         Overloaded{[](const OpenRepository&) { return "open"; }, [](const CloseRepository&) { return "close"; },

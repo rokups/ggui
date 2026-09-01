@@ -29,7 +29,7 @@ bool RepositoryEngine::Impl::Sync(bool report_progress, const std::vector<std::s
     return changed != 0;
 }
 
-std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_worktree)
+std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_worktree, bool history_changed)
 {
     auto result = std::make_shared<RepoSnapshot>();
     result->generation = ++generation;
@@ -57,6 +57,23 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
         result->refs.push_back({source.name == nullptr ? "" : source.name,
             source.remote == nullptr ? "" : source.remote, OidString(source.target), source.kind,
             source.tracked != 0, source.conflicted != 0});
+    }
+    for (NamedRef& remote : result->refs)
+    {
+        if (remote.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
+            continue;
+        const auto local = std::ranges::find_if(result->refs, [&](const NamedRef& candidate) {
+            return candidate.kind == GG_NAMED_REF_LOCAL_BOOKMARK && candidate.name == remote.name;
+        });
+        if (local == result->refs.end())
+            continue;
+        git_oid local_oid{};
+        git_oid remote_oid{};
+        if (git_oid_fromstr(&local_oid, local->target.c_str(), git_repository_oid_type(git.get())) != GIT_OK
+            || git_oid_fromstr(&remote_oid, remote.target.c_str(), git_repository_oid_type(git.get())) != GIT_OK)
+            continue;
+        remote.desync_known = git_graph_ahead_behind(
+            &remote.local_commits, &remote.remote_commits, git.get(), &local_oid, &remote_oid) == GIT_OK;
     }
     result->worktree_state = include_worktree || worktree_ready
         ? RepoSnapshot::WorktreeState::Ready
@@ -128,7 +145,7 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
     }
     {
         std::lock_guard lock(snapshot_mutex);
-        const bool same_topology = latest_snapshot != nullptr
+        const bool same_topology = !history_changed && latest_snapshot != nullptr
             && latest_snapshot->root == result->root
             && latest_snapshot->working_copy == result->working_copy
             && latest_snapshot->head == result->head
@@ -143,11 +160,11 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
     return result;
 }
 
-void RepositoryEngine::Impl::PublishSnapshot(bool include_worktree)
+void RepositoryEngine::Impl::PublishSnapshot(bool include_worktree, bool history_changed)
 {
     if (gg != nullptr)
     {
-        std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree);
+        std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree, history_changed);
         RequestClosestBookmark(snapshot);
         // History is request-versioned separately. The UI rebuilds it with
         // its persisted head selections after observing this generation.

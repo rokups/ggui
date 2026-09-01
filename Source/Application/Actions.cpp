@@ -14,12 +14,27 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 namespace Ggui
 {
 using namespace ApplicationInternal;
+
+bool Application::EnqueueAction(Command command)
+{
+    if (!_active_operation.empty())
+        return false;
+    const std::string name = CommandName(command);
+    ApplyEvent(OperationStarted{name});
+    if (_engine.Enqueue(std::move(command)))
+        return true;
+    // Synthetic UI snapshots suppress engine commands. Do not leave their
+    // controls permanently locked when a test intentionally exercises them.
+    ApplyEvent(OperationFinished{name});
+    return false;
+}
 
 namespace
 {
@@ -63,6 +78,76 @@ SDL_Process* StartBackgroundProcess(const char* const* arguments)
         process = SDL_CreateProcessWithProperties(properties);
     SDL_DestroyProperties(properties);
     return process;
+}
+
+std::vector<std::string> FindAbandonRevisions(
+    const std::string& root, const std::string& selected)
+{
+    std::vector<std::string> result{selected};
+    git_repository* raw = nullptr;
+    if (git_repository_open_ext(&raw, root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
+        return {};
+    std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
+    git_oid selected_oid{};
+    if (git_oid_fromstr(&selected_oid, selected.c_str(), git_repository_oid_type(repository.get())) != GIT_OK)
+        return {};
+    git_revwalk* raw_walk = nullptr;
+    if (git_revwalk_new(&raw_walk, repository.get()) != GIT_OK) return {};
+    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
+    if (git_revwalk_push_glob(walk.get(), "refs/*") != GIT_OK) return {};
+    git_oid candidate{};
+    while (git_revwalk_next(&candidate, walk.get()) == GIT_OK)
+    {
+        if (git_oid_equal(&candidate, &selected_oid) != 0) continue;
+        const int descendant = git_graph_descendant_of(repository.get(), &candidate, &selected_oid);
+        if (descendant < 0) return {};
+        if (descendant != 0) result.emplace_back(git_oid_tostr_s(&candidate));
+    }
+    return result;
+}
+
+std::string SquashDescription(
+    const std::vector<Revision>& revisions, const std::string& selected_id, bool descendants)
+{
+    const auto selected = std::ranges::find(revisions, selected_id, &Revision::oid);
+    if (selected == revisions.end()) return {};
+
+    std::vector<const Revision*> combined;
+    if (selected->parents.size() == 1)
+    {
+        const auto parent = std::ranges::find(revisions, selected->parents.front(), &Revision::oid);
+        if (parent != revisions.end()) combined.push_back(&*parent);
+    }
+
+    std::unordered_set<std::string> included{selected->oid};
+    if (descendants)
+    {
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (const Revision& revision : revisions)
+            {
+                if (included.contains(revision.oid)
+                    || std::ranges::none_of(revision.parents,
+                        [&](const std::string& parent) { return included.contains(parent); }))
+                    continue;
+                included.insert(revision.oid);
+                changed = true;
+            }
+        }
+    }
+    for (const Revision& revision : revisions | std::views::reverse)
+        if (included.contains(revision.oid)) combined.push_back(&revision);
+
+    std::string result;
+    for (const Revision* revision : combined)
+    {
+        if (revision->description.empty()) continue;
+        if (!result.empty()) result += "\n\n";
+        result += revision->description;
+    }
+    return result;
 }
 
 } // namespace
@@ -188,19 +273,20 @@ void Application::CreateChange(const std::string& parent)
         : parent == "@" && !_snapshot->working_copy.empty()        ? std::vector<std::string>{"@"}
                                                                    : std::vector{selected_revision};
     NewChange create{{}, create_parents, {}, {}, false};
-    if (selected != _history_revisions.end() && selected->empty)
-    {
-        // An empty working-copy change is already the writable change the
-        // user is asking for. Creating another one can produce the exact same
-        // Git object (timestamps have one-second precision), and then trying
-        // to abandon the "old" object abandons the new one as well.
-        if (selected->oid == _snapshot->working_copy)
-            return;
-        QueueCommands({std::move(create), Abandon{{selected->oid}, true, false, {}}}, {selected->oid},
-            "Creating a new change will rewrite a locked empty parent.");
-        return;
-    }
-    _engine.Enqueue(std::move(create));
+    std::vector<std::string> bookmarks;
+    for (const NamedRef& ref : _snapshot->refs)
+        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == selected_revision)
+            bookmarks.push_back(ref.name);
+    std::vector<Command> commands;
+    commands.emplace_back(std::move(create));
+    // Another empty, undescribed change would carry no useful boundary. Keep
+    // the newly-created child and splice its empty parent out of history.
+    if (selected != _history_revisions.end() && selected->empty && selected->description.empty()
+        && !selected->pushed)
+        commands.emplace_back(Abandon{{selected_revision}, true, false, {}});
+    if (!bookmarks.empty())
+        commands.emplace_back(Bookmark{GG_BOOKMARK_ADVANCE, std::move(bookmarks), "@", {}});
+    QueueCommands(std::move(commands), {}, {});
 }
 
 bool Application::IsLocked(const std::string& identifier) const
@@ -227,12 +313,7 @@ bool Application::DialogModifiesLockedCommit() const
     case Dialog::Metaedit:
     case Dialog::Split: return IsLocked(_selected_revision);
     case Dialog::Abandon:
-    {
-        const std::vector<std::string> revisions =
-            AbandonRevisions(_selected_revision, _input_flag_tertiary);
-        return std::ranges::any_of(
-            revisions, [this](const std::string& revision) { return IsLocked(revision); });
-    }
+        return _abandon_modifies_locked;
     case Dialog::Rebase:
     {
         const Revision* source = RebaseSource();
@@ -282,8 +363,9 @@ void Application::QueueCommands(
         return;
     if (std::ranges::none_of(revisions, [this](const std::string& revision) { return IsLocked(revision); }))
     {
-        for (Command& command : commands)
-            _engine.Enqueue(std::move(command));
+        if (!commands.empty() && EnqueueAction(std::move(commands.front())))
+            for (Command& command : commands | std::views::drop(1))
+                _engine.Enqueue(std::move(command));
         return;
     }
     _pending_commands = std::move(commands);
@@ -297,37 +379,88 @@ std::vector<std::string> Application::AbandonRevisions(
     std::vector<std::string> result{selected};
     if (!include_descendants)
         return result;
-    git_repository* raw = nullptr;
-    if (_snapshot == nullptr || git_repository_open_ext(
-            &raw, _snapshot->root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
-        return {};
-    std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
-    git_oid selected_oid{};
-    if (git_oid_fromstr(&selected_oid, selected.c_str(), git_repository_oid_type(repository.get())) != GIT_OK)
-        return {};
-    git_revwalk* raw_walk = nullptr;
-    if (git_revwalk_new(&raw_walk, repository.get()) != GIT_OK) return {};
-    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
-    if (git_revwalk_push_glob(walk.get(), "refs/*") != GIT_OK) return {};
-    git_oid candidate{};
-    while (git_revwalk_next(&candidate, walk.get()) == GIT_OK)
+    return _snapshot == nullptr ? std::vector<std::string>{}
+                                : FindAbandonRevisions(_snapshot->root, selected);
+}
+
+void Application::RequestAbandonRevisions(const std::string& revision)
+{
+    _abandon_revisions_requested = revision;
+#ifdef IMGUI_BUILD_TESTING
+    if (_test_snapshot_mode)
     {
-        if (git_oid_equal(&candidate, &selected_oid) != 0) continue;
-        const int descendant = git_graph_descendant_of(repository.get(), &candidate, &selected_oid);
-        if (descendant < 0) return {};
-        if (descendant != 0) result.emplace_back(git_oid_tostr_s(&candidate));
+        _abandon_revisions = {revision};
+        for (std::size_t index = 0; index < _abandon_revisions.size(); ++index)
+            for (const Revision& candidate : _history_revisions)
+                if (std::ranges::find(candidate.parents, _abandon_revisions[index]) != candidate.parents.end()
+                    && std::ranges::find(_abandon_revisions, candidate.oid) == _abandon_revisions.end())
+                    _abandon_revisions.push_back(candidate.oid);
+        _abandon_revisions_revision = revision;
+        _abandon_revisions_complete = true;
+        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        _abandon_modifies_locked = std::ranges::any_of(
+            _abandon_revisions, [this](const std::string& oid) { return IsLocked(oid); });
+        return;
     }
-    return result;
+#endif
+    if ((_abandon_revisions_complete && _abandon_revisions_revision == revision)
+        || _abandon_revisions_future.valid())
+        return;
+    _abandon_revisions_in_flight = revision;
+    const std::string root = _snapshot == nullptr ? "" : _snapshot->root;
+    _abandon_revisions_future = std::async(
+        std::launch::async, [root, revision] { return FindAbandonRevisions(root, revision); });
+}
+
+void Application::PollAbandonRevisions()
+{
+    using namespace std::chrono_literals;
+    if (!_abandon_revisions_future.valid()
+        || _abandon_revisions_future.wait_for(0ms) != std::future_status::ready)
+        return;
+    std::vector<std::string> revisions = _abandon_revisions_future.get();
+    const std::string completed = std::move(_abandon_revisions_in_flight);
+    if (_abandon_revisions_requested == completed)
+    {
+        if (revisions.empty())
+        {
+            _error_message = "Could not determine the changes in this branch.";
+            _input_flag_tertiary = false;
+            _abandon_revisions = {_selected_revision};
+            _abandon_revisions_revision = _selected_revision;
+            _abandon_revisions_requested.clear();
+            _abandon_revisions_complete = false;
+            return;
+        }
+        _abandon_revisions = std::move(revisions);
+        _abandon_revisions_revision = completed;
+        _abandon_revisions_complete = true;
+        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        const std::unordered_set<std::string> abandoned(
+            _abandon_revisions.begin(), _abandon_revisions.end());
+        _abandon_modifies_locked = std::ranges::any_of(_history_revisions, [&](const Revision& revision) {
+            return revision.pushed && (abandoned.contains(revision.oid)
+                || std::ranges::any_of(revision.aliases,
+                    [&](const std::string& alias) { return abandoned.contains(alias); }));
+        });
+        _input_flag = _input_flag || std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+                && std::ranges::find(_abandon_revisions, ref.target) != _abandon_revisions.end();
+        });
+    }
+    else if (!_abandon_revisions_requested.empty())
+        RequestAbandonRevisions(_abandon_revisions_requested);
 }
 
 std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(
     const std::vector<std::string>& revisions) const
 {
     std::vector<RemoteBookmarkDelete> result;
+    const std::unordered_set<std::string> revision_set(revisions.begin(), revisions.end());
     for (const NamedRef& local : _snapshot->refs)
     {
         if (local.kind != GG_NAMED_REF_LOCAL_BOOKMARK
-            || std::ranges::find(revisions, local.target) == revisions.end())
+            || !revision_set.contains(local.target))
             continue;
         for (const NamedRef& remote : _snapshot->refs)
         {
@@ -351,20 +484,47 @@ void Application::RequestAbandon(const std::string& revision, bool include_desce
     if (_selected_revision != revision)
         SelectRevision(revision);
     const auto selected = std::ranges::find(_history_revisions, revision, &Revision::oid);
-    const bool has_refs = std::ranges::any_of(
-        _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
-    if (!include_descendants && selected != _history_revisions.end() && selected->empty && !has_refs
-        && !selected->pushed)
-        _engine.Enqueue(Abandon{{revision}, false, false, {}});
+    if (!include_descendants && selected != _history_revisions.end() && selected->empty
+        && selected->description.empty() && !selected->pushed)
+    {
+        std::vector<Command> commands;
+        commands.emplace_back(Abandon{{revision}, true, false, {}});
+        // gg temporarily supplies a writable replacement when the current
+        // change is abandoned. Move to the old parent afterwards so that
+        // replacement becomes unreachable instead of appearing in history.
+        if (revision == _snapshot->working_copy && !selected->parents.empty())
+            commands.emplace_back(Edit{selected->parents.front()});
+        QueueCommands(std::move(commands), {revision},
+            "Abandoning this empty change will modify locked history.");
+    }
     else
     {
         OpenDialog(Dialog::Abandon);
         _input_flag_tertiary = include_descendants;
-        const std::vector<std::string> revisions = AbandonRevisions(revision, include_descendants);
+        if (include_descendants)
+            RequestAbandonRevisions(revision);
+        const std::vector<std::string>& revisions = _abandon_revisions;
         _input_flag = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
             return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
                 && std::ranges::find(revisions, ref.target) != revisions.end();
         });
+    }
+}
+
+void Application::RequestSquash(const std::string& revision, bool include_descendants)
+{
+    if (!_active_operation.empty() || revision.empty())
+        return;
+    if (_selected_revision != revision)
+        SelectRevision(revision);
+    OpenDialog(Dialog::Squash);
+    _input_flag_tertiary = include_descendants;
+    _input_primary = SquashDescription(_history_revisions, revision, include_descendants);
+    if (include_descendants)
+    {
+        const auto selected = std::ranges::find(_history_revisions, revision, &Revision::oid);
+        if (selected != _history_revisions.end() && selected->parents.size() == 1)
+            _input_secondary = selected->parents.front();
     }
 }
 
@@ -378,6 +538,10 @@ bool Application::CanSubmitDialog() const
             && _snapshot->generation == _dialog_snapshot_generation
             && CurrentCommit(*_snapshot) == _input_secondary;
     case Dialog::Split: return HasText(_input_filesets);
+    case Dialog::Squash: return !_input_flag_tertiary || !_input_secondary.empty();
+    case Dialog::Abandon:
+        return !_input_flag_tertiary
+            || (_abandon_revisions_complete && _abandon_revisions_revision == _selected_revision);
     case Dialog::Bookmark:
         return HasText(_input_primary);
     case Dialog::BookmarkRename:
@@ -523,6 +687,7 @@ void Application::ResetRepositoryState()
     _default_layout = true;
     _status_message.clear();
     _error_message.clear();
+    _pending_created_bookmark.clear();
     if (_window != nullptr)
         SDL_SetWindowTitle(_window, "ggui");
 }
@@ -822,7 +987,7 @@ void Application::MarkConflictResolved(const std::string& path)
         _error_message = "Resolved file is unavailable in the working copy";
         return;
     }
-    _engine.Enqueue(Refresh{});
+    EnqueueAction(Refresh{true, {}, true});
     _status_message = "Conflict resolution queued";
 }
 
@@ -847,7 +1012,7 @@ void Application::FinishConflictMerge(bool resolved)
             {
                 throw std::runtime_error("The merge result is not a file");
             }
-            _engine.Enqueue(std::move(resolution));
+            EnqueueAction(std::move(resolution));
             _status_message = "Conflict resolution queued";
         }
         catch (const std::exception& error)
@@ -976,7 +1141,7 @@ void Application::PickAndOpen(bool initialize)
         return;
     const std::string path = PickFolder();
     if (!path.empty())
-        _engine.Enqueue(initialize ? Command{InitRepository{path}} : Command{OpenRepository{path}});
+        EnqueueAction(initialize ? Command{InitRepository{path}} : Command{OpenRepository{path}});
 }
 
 std::string Application::PickFolder(const std::string& initial)

@@ -88,6 +88,7 @@ void Application::RenderSettings()
     ImGui::Separator();
 
     // Native configuration scopes
+    ImGui::BeginDisabled(!_active_operation.empty());
     const bool repository_available = _snapshot != nullptr;
     if (ImGui::BeginTabBar("Settings scopes"))
     {
@@ -125,7 +126,8 @@ void Application::RenderSettings()
                 }
 
                 // Persist valid edits
-                if (ImGui::IsItemDeactivatedAfterEdit() && _max_new_file_size_errors[index].empty())
+                if (_active_operation.empty() && ImGui::IsItemDeactivatedAfterEdit()
+                    && _max_new_file_size_errors[index].empty())
                 {
                     const std::optional<std::string> value = _max_new_file_size_inputs[index].empty()
                         ? std::nullopt : std::optional(_max_new_file_size_inputs[index]);
@@ -136,7 +138,7 @@ void Application::RenderSettings()
                             scope, value);
                         _max_new_file_size_values[index] = value;
                         if (_snapshot != nullptr)
-                            _engine.Enqueue(Refresh{});
+                            EnqueueAction(Refresh{true, {}, true});
                     }
                     catch (const std::exception& error)
                     {
@@ -158,7 +160,7 @@ void Application::RenderSettings()
                 const std::string editor_label = "##GUI editor " + std::string(ConfigScopeName(scope));
                 ImGui::InputTextWithHint(
                     editor_label.c_str(), editor_hint.c_str(), &_editor_inputs[index]);
-                if (ImGui::IsItemDeactivatedAfterEdit())
+                if (_active_operation.empty() && ImGui::IsItemDeactivatedAfterEdit())
                 {
                     const std::optional<std::string> value = _editor_inputs[index].empty()
                         ? std::nullopt : std::optional(_editor_inputs[index]);
@@ -183,6 +185,7 @@ void Application::RenderSettings()
     _settings_select_user = false;
     if (!repository_available)
         ImGui::TextDisabled("Open a repository to configure Repository and Workspace overrides.");
+    ImGui::EndDisabled();
     ImGui::End();
 }
 

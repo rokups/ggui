@@ -23,6 +23,9 @@ struct Refresh
     // Empty means a full reconciliation. Watcher-originated refreshes carry
     // coalesced repository-relative paths.
     std::vector<std::string> paths;
+    // Explicit refreshes participate in the foreground operation lifecycle;
+    // watcher refreshes remain unobtrusive background reconciliation.
+    bool foreground = false;
 };
 struct RebuildHistory { HistoryQuery query; };
 struct ExpandHistoryRegion { std::string id; };
@@ -105,6 +108,8 @@ struct Squash
     std::string destination;
     std::string message;
     bool entire_branch = false;
+    bool descendants = false;
+    bool message_provided = false;
 };
 struct RemoteBookmarkDelete { std::string bookmark; std::string remote; };
 struct Abandon
@@ -162,5 +167,7 @@ using Command = std::variant<OpenRepository, CloseRepository, InitRepository, Cl
     Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
+
+std::string CommandName(const Command& command);
 
 } // namespace Ggui

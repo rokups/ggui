@@ -247,8 +247,8 @@ struct RepositoryEngine::Impl
     void PushBookmark(const Push& command);
     void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish);
     bool Sync(bool report_progress = true, const std::vector<std::string>& paths = {});
-    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true);
-    void PublishSnapshot(bool include_worktree = true);
+    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true, bool history_changed = false);
+    void PublishSnapshot(bool include_worktree = true, bool history_changed = false);
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);
     void LoadPatch(const LoadDiff& command, git_repository* repository, gg_repository* gg_repository,
@@ -268,10 +268,9 @@ struct RepositoryEngine::Impl
         RepositoryInternal::Check(function(&mutation.value, &options), action);
         if (snapshot_after)
             Sync();
-        PublishSnapshot();
+        PublishSnapshot(true, true);
     }
     void DispatchMutation(const Command& command);
-    std::string CommandName(const Command& command);
     void Execute(const Command& command);
     void Run();
     void RunInspector();

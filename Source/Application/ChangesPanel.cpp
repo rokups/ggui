@@ -362,7 +362,7 @@ void Application::RenderChangeInformation()
         }
         else
         {
-            _engine.Enqueue(Describe{revision->oid, _change_info_message});
+            EnqueueAction(Describe{revision->oid, _change_info_message});
             _change_info_dirty = false;
         }
     }

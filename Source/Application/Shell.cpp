@@ -122,7 +122,7 @@ void Application::RenderFrame()
     {
         if (_active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_O)) PickAndOpen(false);
         if (_snapshot != nullptr && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W))
-            _engine.Enqueue(CloseRepository{});
+            EnqueueAction(CloseRepository{});
         if (CanCreateChange() && _active_operation.empty() && io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N))
             CreateChange();
     }
@@ -130,12 +130,12 @@ void Application::RenderFrame()
     {
         if (_snapshot != nullptr && _snapshot->can_undo && _active_operation.empty() && io.KeyCtrl
             && ImGui::IsKeyPressed(ImGuiKey_Z))
-            _engine.Enqueue(Undo{});
+            EnqueueAction(Undo{});
         if (_snapshot != nullptr && _snapshot->can_redo && _active_operation.empty() && io.KeyCtrl
             && ImGui::IsKeyPressed(ImGuiKey_Y))
-            _engine.Enqueue(Redo{});
+            EnqueueAction(Redo{});
         if (_snapshot != nullptr && _active_operation.empty() && ImGui::IsKeyPressed(ImGuiKey_F5))
-            _engine.Enqueue(Refresh{});
+            EnqueueAction(Refresh{true, {}, true});
         if (_snapshot != nullptr && _dialog == Dialog::None && ImGui::IsKeyPressed(ImGuiKey_F6))
             NavigateChangedFile(io.KeyShift ? -1 : 1);
     }
@@ -249,11 +249,11 @@ void Application::RenderMenuBar()
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
                 ImGui::SetClipboardText(_snapshot->root.c_str());
             if (ActionMenuItem(ICON_MS_CLOSE, "Close repository", "Ctrl+W"))
-                _engine.Enqueue(CloseRepository{});
+                EnqueueAction(CloseRepository{});
             ImGui::Separator();
         }
         if (ActionMenuItem(ICON_MS_REFRESH, "Refresh", "F5", _snapshot != nullptr))
-            _engine.Enqueue(Refresh{});
+            EnqueueAction(Refresh{true, {}, true});
         ImGui::EndDisabled();
         ImGui::Separator();
         if (ActionMenuItem(ICON_MS_SETTINGS, "Settings..."))
@@ -270,8 +270,8 @@ void Application::RenderMenuBar()
             CreateChange();
         if (ActionMenuItem(ICON_MS_COMMIT, "Commit...", nullptr, _compare_to.empty())) OpenDialog(Dialog::Commit);
         ImGui::Separator();
-        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to previous")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
-        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to previous")) EnqueueAction(MoveChange{GG_MOVE_PREVIOUS});
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to next")) EnqueueAction(MoveChange{GG_MOVE_NEXT});
         ImGui::Separator();
         RenderSelectedChangeActions(_selected_revision, false);
         ImGui::EndMenu();
@@ -281,9 +281,9 @@ void Application::RenderMenuBar()
     if (ImGui::BeginMenu("Edit", _snapshot != nullptr && !actions_locked))
     {
         if (ActionMenuItem(ICON_MS_UNDO, "Undo", "Ctrl+Z", _snapshot->can_undo && _active_operation.empty()))
-            _engine.Enqueue(Undo{});
+            EnqueueAction(Undo{});
         if (ActionMenuItem(ICON_MS_REDO, "Redo", "Ctrl+Y", _snapshot->can_redo && _active_operation.empty()))
-            _engine.Enqueue(Redo{});
+            EnqueueAction(Redo{});
         ImGui::Separator();
         if (ActionMenuItem(ICON_MS_UPLOAD_FILE, "Apply patch...", nullptr, _compare_to.empty()))
             _open_apply_patch = true;
@@ -336,6 +336,7 @@ void Application::RenderRecentRepositories()
 
     // Repository list
     bool any_visible = false;
+    std::string remove;
     for (const RecentRepository& repository : RecentRepositories(_recent_repositories))
     {
         if (!ContainsInsensitive(repository.visible, _recent_filter)) continue;
@@ -354,11 +355,16 @@ void Application::RenderRecentRepositories()
         draw->AddText(text, ImGui::GetColorU32(ImGuiCol_TextDisabled), repository.parent.c_str());
         text.x += ImGui::CalcTextSize(repository.parent.c_str()).x;
         draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), repository.name.c_str());
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", repository.path.c_str());
-        if (open && !selected) _engine.Enqueue(OpenRepository{repository.path});
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("%s", repository.path.c_str());
+            if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) remove = repository.path;
+        }
+        if (open && !selected && remove.empty()) EnqueueAction(OpenRepository{repository.path});
         if (selected) ImGui::SetItemDefaultFocus();
         ImGui::PopID();
     }
+    if (!remove.empty()) ForgetRepository(remove);
     if (!any_visible) ImGui::TextDisabled("No matching repositories.");
 }
 
@@ -383,7 +389,7 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E", enabled))
     {
         select();
-        _engine.Enqueue(Edit{revision});
+        EnqueueAction(Edit{revision});
     }
     const std::string duplicate_label = IconLabel(ICON_MS_CONTENT_COPY, "Duplicate");
     if (ImGui::BeginMenu(duplicate_label.c_str(), enabled))
@@ -391,12 +397,12 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Change", "D"))
         {
             select();
-            _engine.Enqueue(Duplicate{revision, false});
+            EnqueueAction(Duplicate{revision, false});
         }
         if (ActionMenuItem(ICON_MS_ACCOUNT_TREE, "Branch", "Shift+D"))
         {
             select();
-            _engine.Enqueue(Duplicate{revision, true});
+            EnqueueAction(Duplicate{revision, true});
         }
         ImGui::EndMenu();
     }
@@ -408,9 +414,22 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
         if (select_revision)
             _input_primary = revision;
     }
-    dialog(ICON_MS_MERGE, "Squash...", "Shift+S", Dialog::Squash);
-    dialog(ICON_MS_DIFFERENCE, "Split...", "Alt+S", Dialog::Split);
-    dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
+    const bool squash_descendants = select_revision && ImGui::GetIO().KeyShift;
+    if (ActionMenuItem(ICON_MS_MERGE,
+            squash_descendants ? "Squash with descendants..." : "Squash...",
+            squash_descendants ? "Shift+S" : "S", enabled))
+    {
+        select();
+        RequestSquash(revision, squash_descendants);
+    }
+    if (!select_revision && ActionMenuItem(
+            ICON_MS_MERGE, "Squash with descendants...", "Shift+S", enabled))
+        RequestSquash(revision, true);
+    if (!select_revision)
+    {
+        dialog(ICON_MS_DIFFERENCE, "Split...", "Alt+S", Dialog::Split);
+        dialog(ICON_MS_RESTORE, "Restore...", nullptr, Dialog::Restore, _compare_to.empty());
+    }
     const bool abandon_branch = select_revision && ImGui::GetIO().KeyShift;
     if (ActionMenuItem(ICON_MS_DELETE, abandon_branch ? "Abandon branch..." : "Abandon...",
             abandon_branch ? "Shift+A" : "A", enabled))
@@ -464,8 +483,7 @@ void Application::RenderToolbar()
     ImGui::BeginDisabled(current_commit.empty());
     if (ActionButton(ICON_MS_ADD, "New")) CreateChange("@");
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip(
-            "Create and edit an empty change on @. An empty current change is replaced.");
+        ImGui::SetTooltip("Create and edit a new empty change on @.");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!_compare_to.empty());
@@ -477,45 +495,24 @@ void Application::RenderToolbar()
     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.122f, 0.161f, 0.216f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.176f, 0.235f, 0.314f, 1.0f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.208f, 0.278f, 0.369f, 1.0f));
-    if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Prev")) _engine.Enqueue(MoveChange{GG_MOVE_PREVIOUS});
+    if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Prev")) EnqueueAction(MoveChange{GG_MOVE_PREVIOUS});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Move the working copy to its parent. This modifies the repository and can be undone.");
     ImGui::SameLine();
-    if (ActionButton(ICON_MS_ARROW_UPWARD, "Next")) _engine.Enqueue(MoveChange{GG_MOVE_NEXT});
+    if (ActionButton(ICON_MS_ARROW_UPWARD, "Next")) EnqueueAction(MoveChange{GG_MOVE_NEXT});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Move the working copy to its child. This modifies the repository and can be undone.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_undo);
-    if (ActionButton(ICON_MS_UNDO, "Undo")) _engine.Enqueue(Undo{});
+    if (ActionButton(ICON_MS_UNDO, "Undo")) EnqueueAction(Undo{});
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_redo);
-    if (ActionButton(ICON_MS_REDO, "Redo")) _engine.Enqueue(Redo{});
+    if (ActionButton(ICON_MS_REDO, "Redo")) EnqueueAction(Redo{});
     ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ActionButton(ICON_MS_REFRESH, "Refresh")) _engine.Enqueue(Refresh{});
+    if (ActionButton(ICON_MS_REFRESH, "Refresh")) EnqueueAction(Refresh{true, {}, true});
 
-        // Remote actions
-        const Remote* remote = DefaultRemote(*_snapshot);
-        const NamedRef* bookmark = BookmarkAt(*_snapshot, current_commit);
-        const std::string push_remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
-        ImGui::SameLine();
-        ImGui::BeginDisabled(remote == nullptr);
-        if (ActionButton(ICON_MS_CLOUD_DOWNLOAD, "Pull")) _engine.Enqueue(Fetch{remote->name, true});
-        ImGui::SameLine();
-        if (ActionButton(ICON_MS_SYNC, "Fetch")) _engine.Enqueue(Fetch{remote->name, false});
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        ImGui::BeginDisabled(bookmark == nullptr || push_remote.empty());
-        if (ActionButton(ICON_MS_CLOUD_UPLOAD, "Push")) _engine.Enqueue(Push{bookmark->name, push_remote});
-        ImGui::SameLine();
-        if (ActionButton(ICON_MS_PUBLISH, "Push to..."))
-        {
-            OpenDialog(Dialog::PushTo);
-            _input_primary = push_remote;
-            _input_secondary = bookmark->name;
-        }
-        ImGui::EndDisabled();
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
     }
@@ -598,8 +595,10 @@ void Application::RenderToolbar()
     if (!_active_operation.empty())
     {
         ImGui::SameLine();
+        static constexpr std::array spinner{'|', '/', '-', '\\'};
+        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
         if (_progress_phase.empty())
-            ImGui::Text("Working: %s", _active_operation.c_str());
+            ImGui::Text("%c Working: %s", spinner[frame], _active_operation.c_str());
         else if (_progress_total == 0)
             ImGui::Text("Working: %s (%s)", _active_operation.c_str(), _progress_phase.c_str());
         else
@@ -696,10 +695,19 @@ void Application::RenderWelcome()
     {
         ImGui::SeparatorText("Recent repositories");
         ImGui::BeginDisabled(!_active_operation.empty());
+        std::string remove;
         for (const std::string& path : _recent_repositories)
-            if (ImGui::Selectable(path.c_str(), false, 0, ImVec2(width, 34.0f)))
-                _engine.Enqueue(OpenRepository{path});
+        {
+            const bool open = ImGui::Selectable(path.c_str(), false, 0, ImVec2(width, 34.0f));
+            if (ImGui::IsItemHovered())
+            {
+                if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) remove = path;
+            }
+            if (open && remove.empty())
+                EnqueueAction(OpenRepository{path});
+        }
         ImGui::EndDisabled();
+        if (!remove.empty()) ForgetRepository(remove);
     }
     ImGui::EndGroup();
     ImGui::End();

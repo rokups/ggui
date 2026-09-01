@@ -355,21 +355,40 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         IM_CHECK(empty_change.has_value());
         IM_CHECK(empty_change->empty);
-        const std::vector<std::string> empty_parents = empty_change->parents;
         const std::size_t revision_count = Application::Instance().HistoryRevisionsForTest().size();
         IM_CHECK(Application::Instance().ActiveOperationForTest().empty());
+        const auto advanced_bookmark = std::ranges::find_if(
+            Application::Instance().SnapshotForTest()->refs, [](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+            });
+        IM_CHECK_NE(advanced_bookmark, Application::Instance().SnapshotForTest()->refs.end());
+        IM_CHECK_EQ(advanced_bookmark->target, empty_working_copy);
         IM_CHECK_EQ(Application::Instance().SelectedRevisionsForTest(),
             std::vector<std::string>{empty_working_copy});
         Application::Instance().CreateChangeForTest("@");
-        context->Yield(3);
-        const auto unchanged = Application::Instance().SnapshotForTest();
-        IM_CHECK_EQ(unchanged->working_copy, empty_working_copy);
-        const auto& unchanged_revisions = Application::Instance().HistoryRevisionsForTest();
-        IM_CHECK_EQ(unchanged_revisions.size(), revision_count);
-        const auto unchanged_change =
-            std::ranges::find(unchanged_revisions, unchanged->working_copy, &Revision::oid);
-        IM_CHECK_NE(unchanged_change, unchanged_revisions.end());
-        IM_CHECK_EQ(unchanged_change->parents, empty_parents);
+        for (int attempt = 0; attempt < 1000
+            && Application::Instance().SnapshotForTest()->working_copy == empty_working_copy; ++attempt)
+        {
+            context->Yield();
+            std::this_thread::sleep_for(5ms);
+        }
+        const auto next = Application::Instance().SnapshotForTest();
+        IM_CHECK_NE(next->working_copy, empty_working_copy);
+        std::optional<Revision> next_change;
+        for (int attempt = 0; attempt < 1000 && !next_change.has_value(); ++attempt)
+        {
+            context->Yield();
+            const auto& revisions = Application::Instance().HistoryRevisionsForTest();
+            const auto found = std::ranges::find(revisions, next->working_copy, &Revision::oid);
+            if (found != revisions.end()) next_change = *found;
+            else std::this_thread::sleep_for(5ms);
+        }
+        IM_CHECK(next_change.has_value());
+        IM_CHECK(next_change->empty);
+        IM_CHECK_EQ(next_change->parents, empty_change->parents);
+        IM_CHECK_EQ(Application::Instance().HistoryRevisionsForTest().size(), revision_count);
+        IM_CHECK(std::ranges::none_of(Application::Instance().HistoryRevisionsForTest(),
+            [&](const Revision& revision) { return revision.oid == empty_working_copy; }));
 
         Repository().Write("tracked.txt", "changed\n");
         Application::Instance().RefreshForTest();
@@ -599,10 +618,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         for (const char* action : {"Pull", "Fetch", "Push", "Push to..."})
-        {
-            IM_CHECK(context->ItemExists(action));
-            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        }
+            IM_CHECK(!context->ItemExists(action));
 
         snapshot = RichSnapshot();
         snapshot.can_undo = true;
@@ -614,7 +630,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Undo").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("Redo").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         for (const char* action : {"Pull", "Fetch", "Push", "Push to..."})
-            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+            IM_CHECK(!context->ItemExists(action));
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "ActionsLockDuringOperation");
@@ -625,8 +641,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         context->SetRef("ggui dockspace");
-        for (const char* action : {"New", "Commit", "Prev", "Next", "Undo", "Redo",
-                 "Refresh", "Pull", "Fetch", "Push", "Push to..."})
+        for (const char* action : {"New", "Commit", "Prev", "Next", "Undo", "Redo", "Refresh"})
         {
             IM_CHECK(context->ItemExists(action));
             IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
@@ -634,6 +649,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Cancel").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK_GE(context->ItemInfo("Cancel").RectFull.GetHeight(),
             context->ItemInfo("Refresh").RectFull.GetHeight() - 1.0f);
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK_GT(context->ItemInfo("Cancel").RectFull.Min.x,
+            context->ItemInfo("Open repository folder").RectFull.Max.x);
 
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
@@ -1251,6 +1269,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
     test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
     test->TestFunc = [](ImGuiTestContext* context) {
+        IM_CHECK(ImGui::GetIO().IniFilename == nullptr);
         std::size_t original_size = 0;
         const char* original_data = ImGui::SaveIniSettingsToMemory(&original_size);
         const std::string original(original_data, original_size);
@@ -1345,11 +1364,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(Application::ClosestBookmarkForTest(snapshot, "third"), "upstream/remote-only");
         IM_CHECK(Application::ClosestBookmarkForTest(snapshot, "missing").empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[5], snapshot.refs),
-            std::make_pair(std::string("origin/remote-bookmark"), std::size_t{7}));
+            std::make_pair(std::string("remote-bookmark"), std::size_t{0}));
         IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[6], snapshot.refs).first.empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[8], snapshot.refs).first, "diverged");
-        IM_CHECK_EQ(
-            Application::ReferenceBadgeLabelForTest(snapshot.refs[9], snapshot.refs).first, "origin/diverged");
+        IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[9], snapshot.refs).first, "diverged");
+        IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[2], snapshot.refs).first, "coverage-tag");
+        IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[3], snapshot.refs).first.empty());
+        IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[4], snapshot.refs).first, "remote-tag");
         const std::array bookmark_colors{
             Application::BookmarkColorForTest("coverage-bookmark", snapshot.refs),
             Application::BookmarkColorForTest("remote-only", snapshot.refs),
@@ -1358,6 +1379,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         for (std::size_t left = 0; left < bookmark_colors.size(); ++left)
             for (std::size_t right = left + 1; right < bookmark_colors.size(); ++right)
                 IM_CHECK_NE(bookmark_colors[left], bookmark_colors[right]);
+        std::vector<NamedRef> desynchronized{
+            {"feature", {}, "local", GG_NAMED_REF_LOCAL_BOOKMARK},
+            {"feature", "origin", "remote", GG_NAMED_REF_REMOTE_BOOKMARK, true, false, 3, 2, true}};
+        IM_CHECK_EQ(ApplicationInternal::RefRemotes(
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+            "origin -2 +3");
+        desynchronized[1].remote_commits = 0;
+        IM_CHECK_EQ(ApplicationInternal::RefRemotes(
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+            "origin +3");
+        desynchronized[1].local_commits = 0;
+        IM_CHECK_EQ(ApplicationInternal::RefRemotes(
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+            "origin");
         IM_CHECK_EQ(Application::FormatTimestampForTest(0), "Unknown date");
         IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
         IM_CHECK_EQ(Application::DropPlacementForTest(0), GG_REORDER_AFTER);
@@ -1509,6 +1544,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         IM_CHECK(!ActionDialogOpen());
 
+        RepoSnapshot empty_working_copy = RichSnapshot();
+        empty_working_copy.working_copy = "third";
+        application.SetSnapshotForTest(std::move(empty_working_copy));
+        application.SelectRevisionForTest("third");
+        FocusWindow(context, "History");
+        context->KeyPress(ImGuiKey_A);
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
+
+        application.SetSnapshotForTest(RichSnapshot());
+
         application.SelectRevisionForTest("right");
         FocusWindow(context, "History");
         context->KeyPress(ImGuiKey_A);
@@ -1587,6 +1633,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         context->SetRef("//$FOCUSED");
         IM_CHECK(context->ItemExists("##recent repository filter"));
+        const ImGuiTestItemInfo removed = context->ItemInfo("**/codex-solo");
+        context->MouseMoveToPos(removed.RectFull.GetCenter());
+        context->Yield();
+        context->KeyPress(ImGuiKey_Delete);
+        context->Yield();
+        IM_CHECK(!context->ItemExists("**/codex-solo"));
         context->KeyPress(ImGuiKey_Escape);
         context->KeyPress(ImGuiKey_Escape);
     };
@@ -2121,6 +2173,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/remote-only", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK((context->ItemInfo("**/Merge into @").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Rebase @ onto bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Rename...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
 
@@ -2155,6 +2209,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         context->ItemClick("**/remote-bookmark", ImGuiMouseButton_Right);
         context->Yield();
+        IM_CHECK((context->ItemInfo("**/Merge into @").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Rebase @ onto bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(!context->ItemExists("**/reconcile-origin"));
@@ -2695,9 +2751,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Interactions", "GraphAndContextMenus");
     test->TestFunc = [](ImGuiTestContext* context) {
         const float dense_lane_width = ApplicationInternal::HistoryLaneWidth(680.0f, 40);
-        IM_CHECK_LT(dense_lane_width, ApplicationInternal::kLaneWidth);
-        IM_CHECK_LE(40.0f * dense_lane_width + ApplicationInternal::kGraphPadding * 2.0f + 8.0f,
-            680.0f * 0.4f);
+        IM_CHECK_EQ(dense_lane_width, ApplicationInternal::kLaneWidth);
         IM_CHECK_EQ(ApplicationInternal::HistoryLaneWidth(680.0f, 3),
             ApplicationInternal::kLaneWidth);
         IM_CHECK_LT(ApplicationInternal::HistoryContentOffset(dense_lane_width, 3),
@@ -2706,6 +2760,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(4);
+
+        IM_CHECK_EQ(GatherItems(context, "//History", "remote-bookmark").size(), 1U);
+        IM_CHECK_EQ(GatherItems(context, "//History", "diverged").size(), 2U);
+        IM_CHECK_EQ(GatherItems(context, "//History", "coverage-tag").size(), 1U);
+        IM_CHECK_EQ(GatherItems(context, "//History", "remote-tag").size(), 1U);
+        IM_CHECK(GatherItems(context, "//History", "origin/remote-bookmark").empty());
 
         const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
         IM_CHECK_GE(rows.size(), 2U);
@@ -2827,8 +2887,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
             IM_CHECK(!context->ItemExists("**/Describe..."));
             IM_CHECK(!context->ItemExists("**/Metaedit..."));
-            constexpr std::array change_actions{"Edit", "Duplicate", "Rebase...", "Squash...", "Split...",
-                "Restore...", "Abandon...", "Simplify parents"};
+            constexpr std::array change_actions{
+                "Edit", "Duplicate", "Rebase...", "Squash...", "Abandon...", "Simplify parents"};
             float previous_y = -FLT_MAX;
             for (const char* action : change_actions)
             {
@@ -2840,6 +2900,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK(!context->ItemExists("**/Abandon branch..."));
             context->KeyDown(ImGuiMod_Shift);
             context->Yield();
+            IM_CHECK(!context->ItemExists("**/Squash..."));
+            IM_CHECK(context->ItemExists("**/Squash with descendants..."));
             IM_CHECK(!context->ItemExists("**/Abandon..."));
             IM_CHECK(context->ItemExists("**/Abandon branch..."));
             context->KeyUp(ImGuiMod_Shift);
@@ -2872,7 +2934,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("Cancel");
             context->Yield(2);
 
-            for (const char* action : {"Edit", "Squash...", "Split...", "Restore...", "Abandon..."})
+            for (const char* action : {"Edit", "Squash...", "Abandon..."})
             {
                 context->SetRef("History");
                 context->ItemClick(rows[0], ImGuiMouseButton_Right);
@@ -2904,7 +2966,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->SetRef("History");
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
-            IM_CHECK(context->ItemExists("**/Split..."));
+            IM_CHECK(!context->ItemExists("**/Split..."));
+            IM_CHECK(!context->ItemExists("**/Restore..."));
             context->KeyPress(ImGuiKey_Escape);
         }
 
@@ -3604,14 +3667,20 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(!ActionDialogOpen());
 
         context->KeyPress(ImGuiKey_S);
-        context->Yield(2);
-        IM_CHECK(!ActionDialogOpen());
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(context->ItemExists("Into"));
+        IM_CHECK(!context->ItemExists("Squash this change and all descendants into its parent."));
+        IM_CHECK_EQ(application.DialogDescriptionForTest(), "Base\n\nLeft");
+        context->ItemClick("Cancel");
 
         context->KeyPress(ImGuiMod_Shift | ImGuiKey_S);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
-        IM_CHECK(context->ItemExists("Into"));
+        IM_CHECK(!context->ItemExists("Into"));
+        IM_CHECK(context->ItemExists("Squash this change and all descendants into its parent."));
         IM_CHECK(!context->ItemExists("Selected filesets"));
+        IM_CHECK_EQ(application.DialogDescriptionForTest(), "Base\n\nLeft\n\nMerge subject\nbody");
         context->ItemClick("Cancel");
 
         context->KeyPress(ImGuiMod_Alt | ImGuiKey_S);
