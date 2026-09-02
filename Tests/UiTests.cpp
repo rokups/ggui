@@ -317,7 +317,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
+        application.AddRecentForTest("/tmp/ggui-switch-target");
         context->Yield(2);
+        context->SetRef("ggui dockspace");
+        const std::string repository_name = Repository().Path().filename().string();
+        context->ComboClick(("Repository/" + repository_name).c_str());
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        context->ItemClick("**/ggui-switch-target");
+        context->Yield(2);
+        IM_CHECK_NE(application.SnapshotForTest(), nullptr);
+
         application.ApplyEventForTest(OperationStarted{"open"});
         context->Yield(2);
         IM_CHECK_EQ(application.SnapshotForTest(), nullptr);

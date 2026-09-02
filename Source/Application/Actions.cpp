@@ -27,7 +27,16 @@ bool Application::EnqueueAction(Command command)
     if (!_active_operation.empty())
         return false;
     const std::string name = CommandName(command);
-    ApplyEvent(OperationStarted{name});
+    // Lock actions immediately, but leave repository-opening state changes to
+    // the engine event at the start of the next frame. Repository switches can
+    // be initiated from the toolbar itself; clearing the snapshot here would
+    // invalidate the rest of the frame while it is still rendering it.
+    _active_operation = name;
+    _error_message.clear();
+    _status_message.clear();
+    _progress_phase.clear();
+    _progress_completed = 0;
+    _progress_total = 0;
     if (_engine.Enqueue(std::move(command)))
         return true;
     // Synthetic UI snapshots suppress engine commands. Do not leave their
