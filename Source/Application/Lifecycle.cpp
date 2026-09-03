@@ -56,6 +56,8 @@ SDL_Rect ApplicationInternal::FitWindowToDisplays(
 
 int Application::Run(int argc, char** argv)
 {
+    if (argc > 0 && argv[0] != nullptr)
+        _executable_path = std::filesystem::absolute(argv[0]);
 #ifdef IMGUI_BUILD_TESTING
     test_application = this;
     std::string repository_path;

@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <future>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -90,7 +91,6 @@ public:
     static std::string ReferenceLabelForTest(const NamedRef& ref);
     static std::pair<std::string, std::size_t> ReferenceBadgeLabelForTest(
         const NamedRef& ref, const std::vector<NamedRef>& refs);
-    static std::string ClosestBookmarkForTest(const RepoSnapshot& snapshot, const std::string& revision);
     static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
@@ -131,6 +131,7 @@ private:
         RemoteAdd,
         WorkspaceAdd,
         WorkspaceRename,
+        WorkspaceRemove,
         PushTo,
         Reconcile,
         Credentials,
@@ -231,6 +232,7 @@ private:
     void RenderRevisionTooltip(
         std::string_view label, const std::string& revision, std::string_view hint = {});
     void OpenExternalPath(const std::filesystem::path& path, std::string_view description);
+    void OpenWorkspaceInNewWindow(const std::string& path);
     void OpenExternalDiff(const std::string& path, const std::string& compare_to);
     std::vector<std::string> SelectedParentRevisions() const;
     std::vector<std::string> AbandonRevisions(
@@ -263,7 +265,6 @@ private:
     RepositoryEngine _engine;
     std::shared_ptr<const RepoSnapshot> _snapshot;
     std::shared_ptr<const HistoryView> _history_view;
-    std::string _closest_bookmark;
     std::vector<Revision> _history_revisions;
     DiffResult _diff;
     std::vector<int> _visible_revisions;
@@ -323,6 +324,7 @@ private:
     bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;
     std::filesystem::path _settings_path;
+    std::filesystem::path _executable_path;
     std::string _imgui_ini_path;
     std::string _status_message;
     std::string _error_message;
@@ -336,6 +338,7 @@ private:
     std::vector<RemoteBookmarkDelete> _abandon_remote_bookmarks;
     bool _abandon_modifies_locked = false;
     std::string _active_operation;
+    std::map<std::uint64_t, std::string> _background_activities;
     std::string _progress_phase;
     std::size_t _progress_completed = 0;
     std::size_t _progress_total = 0;

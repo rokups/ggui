@@ -148,7 +148,6 @@ std::pair<std::string, std::size_t> ReferenceBadgeLabel(
     const NamedRef& ref, const std::vector<NamedRef>& refs);
 const Remote* DefaultRemote(const RepoSnapshot& snapshot);
 const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revision);
-const NamedRef* ClosestBookmark(const RepoSnapshot& snapshot, const std::string& revision);
 std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark);
 std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name, gg_named_ref_kind kind);
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,

@@ -159,7 +159,8 @@ void Application::RenderDialogs()
         "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
-        "Add workspace###ggui action", "Rename workspace###ggui action", "Push bookmark###ggui action",
+        "Add workspace###ggui action", "Rename workspace###ggui action", "Remove workspace###ggui action",
+        "Push bookmark###ggui action",
         "Reconcile bookmark###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action", "Locked commit warning###ggui action",
         "Force bookmark move###ggui action"};
@@ -346,8 +347,12 @@ void Application::RenderDialogs()
         DialogInput("Revision", "defaults to @", &_input_tertiary);
         break;
     case Dialog::WorkspaceRename:
-        ImGui::TextUnformatted("Rename current workspace");
+        ImGui::Text("Rename workspace %s", _input_secondary.c_str());
         DialogInput("New name", "workspace name", &_input_primary, focus_first);
+        break;
+    case Dialog::WorkspaceRemove:
+        ImGui::Text("Remove workspace %s?", _input_primary.c_str());
+        ImGui::TextWrapped("The linked worktree directory will be deleted. Recoverable tracked changes are retained in operation history, but filesystem deletion is not undoable.");
         break;
     case Dialog::PushTo:
         ImGui::Text("Push bookmark %s", _input_secondary.c_str());
@@ -464,17 +469,19 @@ void Application::RenderDialogs()
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
-        || _dialog == Dialog::ConfirmBookmarkMove;
+        || _dialog == Dialog::ConfirmBookmarkMove || _dialog == Dialog::WorkspaceRemove;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
     const char* submit_label = _dialog == Dialog::PushTo ? "Push"
+        : _dialog == Dialog::WorkspaceRemove ? "Remove"
         : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmBookmarkMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
-        || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBookmarkMove;
+        || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBookmarkMove
+        || _dialog == Dialog::WorkspaceRemove;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -542,7 +549,27 @@ void Application::SubmitDialog()
         EnqueueAction(WorkspaceAdd{_input_primary, _input_secondary,
             _input_tertiary.empty() ? "@" : _input_tertiary, {}});
         break;
-    case Dialog::WorkspaceRename: EnqueueAction(WorkspaceRename{_input_primary}); break;
+    case Dialog::WorkspaceRename: EnqueueAction(WorkspaceRename{_input_secondary, _input_primary}); break;
+    case Dialog::WorkspaceRemove:
+    {
+        std::string controller;
+        if (_snapshot != nullptr)
+        {
+            const auto preferred = std::ranges::find_if(_snapshot->workspaces, [](const Workspace& workspace) {
+                return workspace.primary && !workspace.stale && !workspace.current;
+            });
+            if (preferred != _snapshot->workspaces.end()) controller = preferred->root;
+            if (controller.empty())
+            {
+                const auto available = std::ranges::find_if(_snapshot->workspaces, [](const Workspace& workspace) {
+                    return !workspace.stale && !workspace.current;
+                });
+                if (available != _snapshot->workspaces.end()) controller = available->root;
+            }
+        }
+        EnqueueAction(WorkspaceRemove{_input_primary, _input_secondary, controller, _input_flag});
+        break;
+    }
     case Dialog::PushTo: EnqueueAction(Push{_input_secondary, _input_primary, _input_flag}); break;
     case Dialog::Reconcile: EnqueueAction(Rebase{_input_tertiary, _input_filesets, true}); break;
     case Dialog::Credentials:

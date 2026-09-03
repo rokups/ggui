@@ -63,6 +63,18 @@ struct Revisions
     ~Revisions() { gg_revision_array_dispose(&value); }
 };
 
+struct Oids
+{
+    gg_oid_array value{};
+    ~Oids() { gg_oid_array_dispose(&value); }
+};
+
+struct References
+{
+    gg_reference_array value{};
+    ~References() { gg_reference_array_dispose(&value); }
+};
+
 struct NamedRefs
 {
     gg_named_ref_array value{};
@@ -174,6 +186,9 @@ struct RepositoryEngine::Impl
     struct InspectorRequest
     {
         std::variant<LoadDiff, LoadFileContent> command;
+        std::string path;
+        std::uint64_t repository_generation = 0;
+        std::uint64_t snapshot_generation = 0;
         std::uint64_t session = 0;
         std::uint64_t request = 0;
     };
@@ -196,35 +211,31 @@ struct RepositoryEngine::Impl
     };
     std::optional<HistoryRequest> history_request;
     std::string repository_path;
+    std::uint64_t repository_path_session = 0;
     HistoryQuery active_history_query;
     std::vector<std::string> expanded_history_regions;
     std::atomic_uint64_t history_request_version = 0;
-    struct ClosestBookmarkRequest
-    {
-        std::string path;
-        std::string current;
-        std::vector<NamedRef> refs;
-        std::uint64_t repository_generation = 0;
-        std::uint64_t session = 0;
-        std::uint64_t request = 0;
-    };
-    std::mutex closest_bookmark_mutex;
-    std::condition_variable closest_bookmark_cv;
-    std::optional<ClosestBookmarkRequest> closest_bookmark_request;
-    std::thread closest_bookmark_worker;
-    std::atomic_uint64_t closest_bookmark_request_version = 0;
-    std::uint64_t closest_bookmark_completed_generation = 0;
-    std::uint64_t closest_bookmark_active_generation = 0;
-
     RepositoryInternal::GitRepositoryPtr git;
     gg_repository* gg = nullptr;
     std::atomic_uint64_t session = 0;
     std::atomic_uint64_t generation = 0;
     std::atomic_uint64_t topology_generation = 0;
+    std::atomic_uint64_t background_activity_id = 0;
     std::mutex snapshot_mutex;
     std::shared_ptr<RepoSnapshot> latest_snapshot;
     std::vector<StatusEntry> cached_status;
     bool worktree_ready = false;
+
+    struct BackgroundActivityGuard
+    {
+        BackgroundActivityGuard(Impl& owner, std::string name);
+        ~BackgroundActivityGuard();
+        BackgroundActivityGuard(const BackgroundActivityGuard&) = delete;
+        BackgroundActivityGuard& operator=(const BackgroundActivityGuard&) = delete;
+
+        Impl& owner;
+        std::uint64_t id = 0;
+    };
 
     Impl();
     ~Impl();
@@ -275,9 +286,7 @@ struct RepositoryEngine::Impl
     void Run();
     void RunInspector();
     void RunHistory();
-    void RequestHistory(HistoryQuery query, std::string expand = {});
-    void RequestClosestBookmark(const std::shared_ptr<const RepoSnapshot>& snapshot);
-    void RunClosestBookmark();
+    void RequestHistory(HistoryQuery query, std::string expand = {}, bool toggle = false);
 };
 
 } // namespace Ggui

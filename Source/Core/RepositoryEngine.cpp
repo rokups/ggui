@@ -41,11 +41,22 @@ bool RepositoryEngine::Enqueue(Command command)
             std::lock_guard lock(_impl->history_mutex);
             query = _impl->active_history_query;
         }
-        _impl->RequestHistory(std::move(query), std::move(expand->id));
+        _impl->RequestHistory(std::move(query), std::move(expand->id), expand->merge_history);
         return true;
     }
     if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command))
     {
+        std::string path;
+        std::uint64_t repository_generation = 0;
+        std::uint64_t snapshot_generation = 0;
+        std::uint64_t request_session = 0;
+        {
+            std::lock_guard lock(_impl->history_mutex);
+            path = _impl->repository_path;
+            request_session = _impl->repository_path_session;
+        }
+        repository_generation = _impl->topology_generation.load();
+        snapshot_generation = _impl->generation.load();
         const std::uint64_t request = ++_impl->inspector_request;
         {
             std::lock_guard lock(_impl->inspector_mutex);
@@ -53,7 +64,10 @@ bool RepositoryEngine::Enqueue(Command command)
             // their generation check prevents them from publishing stale UI.
             _impl->inspector_requests.clear();
             RepositoryEngine::Impl::InspectorRequest queued;
-            queued.session = _impl->session.load();
+            queued.path = std::move(path);
+            queued.repository_generation = repository_generation;
+            queued.snapshot_generation = snapshot_generation;
+            queued.session = request_session;
             queued.request = request;
             if (auto* diff = std::get_if<LoadDiff>(&command))
                 queued.command = std::move(*diff);

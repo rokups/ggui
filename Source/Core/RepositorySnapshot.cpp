@@ -120,7 +120,7 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
         result->workspaces.push_back({source.name == nullptr ? "" : source.name,
             source.root == nullptr ? "" : source.root,
             source.has_working_copy != 0 ? OidString(source.working_copy) : "",
-            source.stale != 0, source.managed != 0});
+            source.stale != 0, source.managed != 0, source.current != 0, source.primary != 0});
     }
 
     GitStringArray remote_names;
@@ -165,7 +165,6 @@ void RepositoryEngine::Impl::PublishSnapshot(bool include_worktree, bool history
     if (gg != nullptr)
     {
         std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree, history_changed);
-        RequestClosestBookmark(snapshot);
         // History is request-versioned separately. The UI rebuilds it with
         // its persisted head selections after observing this generation.
         Post(SnapshotReady{std::move(snapshot)});

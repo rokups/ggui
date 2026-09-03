@@ -22,12 +22,98 @@
 #include <utility>
 #include <variant>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#ifdef DeleteFile
+#undef DeleteFile
+#endif
+#endif
+
 namespace Ggui
 {
 using namespace RepositoryInternal;
 
 namespace
 {
+struct GgRepositoryDeleter
+{
+    void operator()(gg_repository* value) const { gg_repository_free(value); }
+};
+using GgRepositoryPtr = std::unique_ptr<gg_repository, GgRepositoryDeleter>;
+
+struct RepositoryReadContext
+{
+    void Ensure(std::string_view requested_path, std::uint64_t requested_session,
+        std::uint64_t requested_generation, bool attach_gg)
+    {
+        if (repository == nullptr || path != requested_path || session != requested_session)
+        {
+            gg.reset();
+            repository.reset();
+            std::string opened_path(requested_path);
+            git_repository* raw = nullptr;
+            Check(git_repository_open_ext(&raw, opened_path.c_str(),
+                GIT_REPOSITORY_OPEN_CROSS_FS, nullptr), "open reader repository");
+            repository.reset(raw);
+            path = std::move(opened_path);
+            session = requested_session;
+            repository_generation = 0;
+        }
+        if (attach_gg && (gg == nullptr || repository_generation != requested_generation))
+        {
+            gg.reset();
+            gg_repository* raw = nullptr;
+            Check(gg_repository_attach(&raw, repository.get()), "attach reader repository");
+            gg.reset(raw);
+            repository_generation = requested_generation;
+        }
+    }
+
+    void Reset()
+    {
+        gg.reset();
+        repository.reset();
+        path.clear();
+        session = 0;
+        repository_generation = 0;
+    }
+
+    std::string path;
+    std::uint64_t session = 0;
+    std::uint64_t repository_generation = 0;
+    GitRepositoryPtr repository;
+    GgRepositoryPtr gg;
+};
+
+class BackgroundScheduling
+{
+public:
+    BackgroundScheduling()
+    {
+#ifdef _WIN32
+        _enabled = SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN) != 0;
+#endif
+    }
+
+    ~BackgroundScheduling()
+    {
+#ifdef _WIN32
+        if (_enabled) SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+#endif
+    }
+
+    BackgroundScheduling(const BackgroundScheduling&) = delete;
+    BackgroundScheduling& operator=(const BackgroundScheduling&) = delete;
+
+private:
+#ifdef _WIN32
+    bool _enabled = false;
+#endif
+};
+
 Revision ConvertRevision(const gg_revision& source, std::string_view working_copy)
 {
     Revision value;
@@ -109,6 +195,17 @@ std::vector<std::size_t> HistoryTopologicalOrder(
 }
 } // namespace
 
+RepositoryEngine::Impl::BackgroundActivityGuard::BackgroundActivityGuard(Impl& owner, std::string name)
+    : owner(owner), id(++owner.background_activity_id)
+{
+    owner.Post(BackgroundActivityStarted{id, std::move(name)});
+}
+
+RepositoryEngine::Impl::BackgroundActivityGuard::~BackgroundActivityGuard()
+{
+    owner.Post(BackgroundActivityFinished{id});
+}
+
 void RepositoryEngine::Impl::Execute(const Command& command)
 {
     const std::string name = CommandName(command);
@@ -119,6 +216,14 @@ void RepositoryEngine::Impl::Execute(const Command& command)
         || std::holds_alternative<LoadFileContent>(command);
     if (!quiet)
         Post(OperationStarted{name});
+    std::optional<BackgroundActivityGuard> background_activity;
+    std::optional<BackgroundScheduling> background_scheduling;
+    if (refresh != nullptr && !refresh->foreground)
+    {
+        background_activity.emplace(*this,
+            refresh->snapshot_working_copy ? "Scanning working copy" : "Refreshing repository metadata");
+        background_scheduling.emplace();
+    }
     if (!std::holds_alternative<LoadDiff>(command) && !std::holds_alternative<LoadFileContent>(command)
         && !std::holds_alternative<RebuildHistory>(command)
         && !std::holds_alternative<ExpandHistoryRegion>(command) && !std::holds_alternative<Refresh>(command))
@@ -209,7 +314,7 @@ void RepositoryEngine::Impl::Execute(const Command& command)
     }
 }
 
-void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expand)
+void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expand, bool toggle)
 {
     std::string path;
     {
@@ -220,110 +325,22 @@ void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expa
     const std::uint64_t request = ++history_request_version;
     {
         std::lock_guard lock(history_mutex);
+        if (repository_path != path || repository_path_session != session.load()) return;
         if (expand.empty())
         {
             if (query.repository_generation != active_history_query.repository_generation)
                 expanded_history_regions.clear();
             active_history_query = query;
         }
-        else if (std::ranges::find(expanded_history_regions, expand) == expanded_history_regions.end())
+        else if (const auto found = std::ranges::find(expanded_history_regions, expand);
+            found == expanded_history_regions.end())
             expanded_history_regions.push_back(expand);
-        history_request = HistoryRequest{active_history_query, std::move(expand), std::move(path), session.load(), request};
+        else if (toggle)
+            expanded_history_regions.erase(found);
+        history_request = HistoryRequest{active_history_query, std::move(expand), std::move(path),
+            repository_path_session, request};
     }
     history_cv.notify_one();
-}
-
-void RepositoryEngine::Impl::RequestClosestBookmark(const std::shared_ptr<const RepoSnapshot>& snapshot)
-{
-    if (snapshot == nullptr) return;
-    const std::string current = snapshot->working_copy.empty() ? snapshot->head : snapshot->working_copy;
-    {
-        std::lock_guard lock(closest_bookmark_mutex);
-        if (closest_bookmark_completed_generation == snapshot->repository_generation
-            || closest_bookmark_active_generation == snapshot->repository_generation
-            || (closest_bookmark_request.has_value()
-                && closest_bookmark_request->repository_generation == snapshot->repository_generation))
-            return;
-        const std::uint64_t request = ++closest_bookmark_request_version;
-        closest_bookmark_request = ClosestBookmarkRequest{snapshot->root, current, snapshot->refs,
-            snapshot->repository_generation, session.load(), request};
-    }
-    closest_bookmark_cv.notify_one();
-}
-
-void RepositoryEngine::Impl::RunClosestBookmark()
-{
-    while (true)
-    {
-        ClosestBookmarkRequest request;
-        {
-            std::unique_lock lock(closest_bookmark_mutex);
-            closest_bookmark_cv.wait(lock, [this] { return stopping || closest_bookmark_request.has_value(); });
-            if (stopping) break;
-            request = std::move(*closest_bookmark_request);
-            closest_bookmark_request.reset();
-            closest_bookmark_active_generation = request.repository_generation;
-        }
-        const auto stale = [&] {
-            return stopping.load() || request.session != session.load()
-                || request.request != closest_bookmark_request_version.load();
-        };
-        std::string label;
-        try
-        {
-            git_repository* raw = nullptr;
-            Check(git_repository_open_ext(&raw, request.path.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr),
-                "open closest-bookmark repository");
-            GitRepositoryPtr repository(raw);
-            git_oid current{};
-            const NamedRef* closest = nullptr;
-            std::size_t closest_distance = std::numeric_limits<std::size_t>::max();
-            if (git_oid_fromstr(&current, request.current.c_str(),
-                    git_repository_oid_type(repository.get())) == GIT_OK)
-            {
-                for (const NamedRef& ref : request.refs)
-                {
-                    if (stale()) break;
-                    if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK
-                        && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK) continue;
-                    git_oid target{};
-                    if (git_oid_fromstr(&target, ref.target.c_str(),
-                            git_repository_oid_type(repository.get())) != GIT_OK) continue;
-                    std::size_t ahead = 0;
-                    std::size_t behind = 0;
-                    const int graph = git_oid_equal(&current, &target) != 0 ? GIT_OK
-                        : git_graph_ahead_behind(&ahead, &behind, repository.get(), &current, &target);
-                    if (graph != GIT_OK || behind != 0) continue;
-                    if (ahead < closest_distance || (ahead == closest_distance && closest != nullptr
-                            && ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-                            && closest->kind == GG_NAMED_REF_REMOTE_BOOKMARK))
-                    {
-                        closest = &ref;
-                        closest_distance = ahead;
-                    }
-                }
-            }
-            if (!stale() && closest != nullptr)
-                label = closest->remote.empty() ? closest->name : closest->remote + "/" + closest->name;
-            if (!stale())
-            {
-                {
-                    std::lock_guard lock(closest_bookmark_mutex);
-                    closest_bookmark_completed_generation = request.repository_generation;
-                }
-                Post(ClosestBookmarkReady{request.repository_generation, std::move(label)});
-            }
-        }
-        catch (const std::exception& error)
-        {
-            if (!stale()) Post(ErrorEvent{"closest bookmark", error.what()});
-        }
-        {
-            std::lock_guard lock(closest_bookmark_mutex);
-            if (closest_bookmark_active_generation == request.repository_generation)
-                closest_bookmark_active_generation = 0;
-        }
-    }
 }
 
 void RepositoryEngine::Impl::RunHistory()
@@ -332,14 +349,41 @@ void RepositoryEngine::Impl::RunHistory()
     std::string cached_search_text;
     std::uint64_t cached_search_generation = 0;
     std::vector<git_oid> cached_description_matches;
+    std::string cached_revision_path;
+    std::uint64_t cached_revision_generation = 0;
+    std::unordered_map<std::string, Revision> cached_revisions;
+    std::unique_ptr<NamedRefs> cached_named_refs;
+    std::unique_ptr<References> cached_references;
+    std::unique_ptr<Workspaces> cached_workspaces;
+    std::vector<git_oid> cached_collapsed_materialized;
+    RepositoryReadContext context;
     while (true)
     {
         HistoryRequest request;
         std::vector<std::string> expansions;
         {
             std::unique_lock lock(history_mutex);
-            history_cv.wait(lock, [this] { return stopping || history_request.has_value(); });
+            history_cv.wait(lock, [this, &context] {
+                return stopping || history_request.has_value()
+                    || (context.repository != nullptr && context.session != session.load());
+            });
             if (stopping) break;
+            if (!history_request.has_value())
+            {
+                context.Reset();
+                cached_search_path.clear();
+                cached_search_text.clear();
+                cached_search_generation = 0;
+                cached_description_matches.clear();
+                cached_revision_path.clear();
+                cached_revision_generation = 0;
+                cached_revisions.clear();
+                cached_named_refs.reset();
+                cached_references.reset();
+                cached_workspaces.reset();
+                cached_collapsed_materialized.clear();
+                continue;
+            }
             request = std::move(*history_request);
             history_request.reset();
             expansions = expanded_history_regions;
@@ -350,18 +394,35 @@ void RepositoryEngine::Impl::RunHistory()
         };
         try
         {
-            git_repository* raw = nullptr;
-            Check(git_repository_open_ext(&raw, request.path.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr),
-                "open history repository");
-            GitRepositoryPtr repository(raw);
-            gg_repository* raw_gg = nullptr;
-            Check(gg_repository_attach(&raw_gg, repository.get()), "attach history repository");
-            std::unique_ptr<gg_repository, decltype(&gg_repository_free)> history_gg(raw_gg, gg_repository_free);
+            context.Ensure(request.path, request.session, request.query.repository_generation, true);
+            GitRepositoryPtr& repository = context.repository;
+            GgRepositoryPtr& history_gg = context.gg;
+            if (cached_revision_path != request.path
+                || cached_revision_generation != request.query.repository_generation)
+            {
+                cached_revision_path = request.path;
+                cached_revision_generation = request.query.repository_generation;
+                cached_revisions.clear();
+                cached_named_refs.reset();
+                cached_references.reset();
+                cached_workspaces.reset();
+                cached_collapsed_materialized.clear();
+            }
 
-            NamedRefs named;
-            Check(gg_repository_named_refs(&named.value, history_gg.get()), "load history refs");
-            Workspaces workspaces;
-            Check(gg_repository_workspaces(&workspaces.value, history_gg.get()), "load history workspaces");
+            if (cached_named_refs == nullptr)
+            {
+                cached_named_refs = std::make_unique<NamedRefs>();
+                cached_references = std::make_unique<References>();
+                cached_workspaces = std::make_unique<Workspaces>();
+                Check(gg_repository_named_refs(&cached_named_refs->value, history_gg.get()), "load history refs");
+                Check(gg_repository_references(&cached_references->value, history_gg.get()),
+                    "load history references");
+                Check(gg_repository_workspaces(&cached_workspaces->value, history_gg.get()),
+                    "load history workspaces");
+            }
+            const NamedRefs& named = *cached_named_refs;
+            const References& references = *cached_references;
+            const Workspaces& workspaces = *cached_workspaces;
             const auto selected = [](const std::vector<std::string>& values, std::string_view value) {
                 return std::ranges::find(values, value) != values.end();
             };
@@ -455,9 +516,8 @@ void RepositoryEngine::Impl::RunHistory()
                     add(conservatively_locked_heads, ref.target);
                 }
             }
-            // Other workspaces are visible leaf heads only when they continue a
-            // selected bookmark and are not inside a branch claimed by an
-            // unselected bookmark.
+            // Preserve the selected-bookmark filtering for other workspaces,
+            // including native worktrees which do not have a gg reference.
             for (std::size_t index = 0; index < workspaces.value.count; ++index)
             {
                 const git_oid& candidate = workspaces.value.items[index].working_copy;
@@ -467,24 +527,31 @@ void RepositoryEngine::Impl::RunHistory()
                     || (!unselected_result.complete && !unselected_bookmarks.empty());
                 if (selected_result.matched && !claimed) add(heads, candidate);
             }
-            git_reference_iterator* raw_visible = nullptr;
-            if (git_reference_iterator_glob_new(
-                    &raw_visible, repository.get(), "refs/gg/visible-heads/*") == GIT_OK)
+            // Alias, workspace, and explicit visible-head refs retain local
+            // unnamed changes. Resolve their actual DAG heads so switching the
+            // working copy cannot make a sibling head disappear. Tags are not
+            // visible heads and remain governed by their panel selection.
+            std::unordered_set<std::string> unnamed_targets;
+            for (std::size_t index = 0; index < references.value.count; ++index)
             {
-                std::unique_ptr<git_reference_iterator, decltype(&git_reference_iterator_free)>
-                    visible(raw_visible, git_reference_iterator_free);
-                git_reference* raw_ref = nullptr;
-                while (git_reference_next(&raw_ref, visible.get()) == GIT_OK)
-                {
-                    std::unique_ptr<git_reference, decltype(&git_reference_free)> ref(raw_ref, git_reference_free);
-                    const git_oid* target = git_reference_target(ref.get());
-                    if (target == nullptr) continue;
-                    const BoundedReachability selected_result = descends_from_any(*target, selected_bookmarks);
-                    const BoundedReachability unselected_result = descends_from_any(*target, unselected_bookmarks);
-                    const bool claimed = unselected_result.matched
-                        || (!unselected_result.complete && !unselected_bookmarks.empty());
-                    if (selected_result.matched && !claimed) add(heads, *target);
-                }
+                const gg_reference& ref = references.value.items[index];
+                const std::string_view name = ref.name == nullptr ? "" : ref.name;
+                if (name.starts_with("refs/gg/aliases/")
+                    || name.starts_with("refs/gg/visible-heads/")
+                    || name.starts_with("refs/gg/workspaces/"))
+                    unnamed_targets.insert(OidString(ref.target));
+            }
+            Oids local_heads;
+            Check(gg_repository_resolve_set(&local_heads.value, history_gg.get(), "visible_heads()"),
+                "resolve local history heads");
+            for (std::size_t index = 0; index < local_heads.value.count; ++index)
+            {
+                const git_oid& candidate = local_heads.value.ids[index];
+                if (!unnamed_targets.contains(OidString(candidate))) continue;
+                const BoundedReachability unselected_result = descends_from_any(candidate, unselected_bookmarks);
+                const bool claimed = unselected_result.matched
+                    || (!unselected_result.complete && !unselected_bookmarks.empty());
+                if (!claimed) add(heads, candidate);
             }
             if (stale()) continue;
 
@@ -536,15 +603,29 @@ void RepositoryEngine::Impl::RunHistory()
                 }
 
             const auto hydrate = [&](const std::vector<git_oid>& oids) {
-                Revisions values;
-                gg_oid_array input{const_cast<git_oid*>(oids.data()), oids.size()};
-                Check(gg_repository_lookup_revisions(&values.value, history_gg.get(), input),
-                    "hydrate history revisions");
-                std::unordered_map<std::string, Revision> result;
-                for (std::size_t index = 0; index < values.value.count; ++index)
+                std::vector<git_oid> missing;
+                missing.reserve(oids.size());
+                for (const git_oid& oid : oids)
+                    if (!cached_revisions.contains(OidString(oid)))
+                        missing.push_back(oid);
+                if (!missing.empty())
                 {
-                    Revision revision = ConvertRevision(values.value.items[index], working_copy);
-                    result.emplace(revision.oid, std::move(revision));
+                    Revisions values;
+                    gg_oid_array input{missing.data(), missing.size()};
+                    Check(gg_repository_lookup_revisions(&values.value, history_gg.get(), input),
+                        "hydrate history revisions");
+                    for (std::size_t index = 0; index < values.value.count; ++index)
+                    {
+                        Revision revision = ConvertRevision(values.value.items[index], working_copy);
+                        cached_revisions.insert_or_assign(revision.oid, std::move(revision));
+                    }
+                }
+                std::unordered_map<std::string, Revision> result;
+                result.reserve(oids.size());
+                for (const git_oid& oid : oids)
+                {
+                    const std::string id = OidString(oid);
+                    result.emplace(id, cached_revisions.at(id));
                 }
                 return result;
             };
@@ -594,59 +675,92 @@ void RepositoryEngine::Impl::RunHistory()
             }
             if (stale()) continue;
 
-            std::vector<git_oid> materialized = heads;
-            std::deque<git_oid> pending(heads.begin(), heads.end());
-            std::unordered_set<std::string> visited;
-            std::size_t ordinary = 0;
-            while (!pending.empty() && ordinary < 256 && !stale())
+            const std::unordered_set<std::string> expanded(expansions.begin(), expansions.end());
+            std::vector<git_oid> materialized;
+            if (!request.expand.empty() && !cached_collapsed_materialized.empty())
+                materialized = cached_collapsed_materialized;
+            else
             {
-                const git_oid oid = pending.front();
-                pending.pop_front();
-                if (!visited.insert(OidString(oid)).second) continue;
-                git_commit* raw_commit = nullptr;
-                const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
-                if (lookup == GIT_ENOTFOUND) continue;
-                Check(lookup, "traverse bounded history");
-                std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
-                if (std::ranges::none_of(materialized,
-                        [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
+                materialized = heads;
+                std::deque<git_oid> pending(heads.begin(), heads.end());
+                std::unordered_set<std::string> visited;
+                std::size_t ordinary = 0;
+                while (!pending.empty() && ordinary < 256 && !stale())
                 {
-                    materialized.push_back(oid);
-                    ++ordinary;
+                    const git_oid oid = pending.front();
+                    pending.pop_front();
+                    if (!visited.insert(OidString(oid)).second) continue;
+                    git_commit* raw_commit = nullptr;
+                    const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
+                    if (lookup == GIT_ENOTFOUND) continue;
+                    Check(lookup, "traverse bounded history");
+                    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                    if (std::ranges::none_of(materialized,
+                            [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
+                    {
+                        materialized.push_back(oid);
+                        ++ordinary;
+                    }
+                    const unsigned int parent_count = git_commit_parentcount(commit.get());
+                    const unsigned int visible_parents = parent_count > 1 ? 1U : parent_count;
+                    for (unsigned int index = 0; index < visible_parents; ++index)
+                        pending.push_back(*git_commit_parent_id(commit.get(), index));
                 }
-                for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
-                    pending.push_back(*git_commit_parent_id(commit.get(), index));
+                if (!stale()) cached_collapsed_materialized = materialized;
             }
+
+            std::unordered_set<std::string> present;
+            for (const git_oid& oid : materialized) present.insert(OidString(oid));
+            const auto expand_from = [&](std::deque<git_oid> nearby, std::size_t limit) {
+                std::unordered_set<std::string> local;
+                for (std::size_t added = 0; !nearby.empty() && added < limit && !stale();)
+                {
+                    const git_oid oid = nearby.front();
+                    nearby.pop_front();
+                    const std::string id = OidString(oid);
+                    if (!local.insert(id).second || present.contains(id)) continue;
+                    git_commit* raw_commit = nullptr;
+                    const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
+                    if (lookup == GIT_ENOTFOUND) continue;
+                    Check(lookup, "expand history");
+                    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                    materialized.push_back(oid);
+                    present.insert(id);
+                    ++added;
+                    const unsigned int parent_count = git_commit_parentcount(commit.get());
+                    const unsigned int visible_parents = parent_count > 1 && !expanded.contains(id)
+                        ? 1U : parent_count;
+                    for (unsigned int index = 0; index < visible_parents; ++index)
+                        nearby.push_back(*git_commit_parent_id(commit.get(), index));
+                }
+            };
             for (const std::string& region : expansions)
             {
                 if (stale()) break;
+                if (!region.starts_with("region:"))
+                {
+                    if (!present.contains(region)) continue;
+                    git_oid merge_oid{};
+                    if (git_oid_fromstr(&merge_oid, region.c_str(),
+                            git_repository_oid_type(repository.get())) != GIT_OK) continue;
+                    git_commit* raw_merge = nullptr;
+                    const int lookup = git_commit_lookup(&raw_merge, repository.get(), &merge_oid);
+                    if (lookup == GIT_ENOTFOUND) continue;
+                    Check(lookup, "expand merge history");
+                    std::unique_ptr<git_commit, decltype(&git_commit_free)> merge(raw_merge, git_commit_free);
+                    std::deque<git_oid> parents;
+                    for (unsigned int index = 1; index < git_commit_parentcount(merge.get()); ++index)
+                        parents.push_back(*git_commit_parent_id(merge.get(), index));
+                    expand_from(std::move(parents), 128);
+                    continue;
+                }
                 const std::size_t begin = std::string_view("region:").size();
                 const std::size_t end = region.find(':', begin);
                 if (end == std::string::npos) continue;
                 git_oid seed{};
                 if (git_oid_fromstr(&seed, region.substr(begin, end - begin).c_str(),
                         git_repository_oid_type(repository.get())) != GIT_OK) continue;
-                std::deque<git_oid> nearby{seed};
-                std::unordered_set<std::string> local;
-                for (std::size_t added = 0; !nearby.empty() && added < 128 && !stale();)
-                {
-                    const git_oid oid = nearby.front();
-                    nearby.pop_front();
-                    if (!local.insert(OidString(oid)).second) continue;
-                    git_commit* raw_commit = nullptr;
-                    const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
-                    if (lookup == GIT_ENOTFOUND) continue;
-                    Check(lookup, "expand history region");
-                    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
-                    if (std::ranges::none_of(materialized,
-                            [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
-                    {
-                        materialized.push_back(oid);
-                        ++added;
-                    }
-                    for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
-                        nearby.push_back(*git_commit_parent_id(commit.get(), index));
-                }
+                expand_from(std::deque<git_oid>{seed}, 128);
             }
 
             const auto make_view = [&] {
@@ -655,8 +769,6 @@ void RepositoryEngine::Impl::RunHistory()
                 view->request = request.request;
                 view->search = request.query.search;
                 auto revisions = hydrate(materialized);
-                std::unordered_set<std::string> present;
-                for (const git_oid& oid : materialized) present.insert(OidString(oid));
                 std::unordered_set<std::string> regions;
                 for (const git_oid& oid : materialized)
                 {
@@ -666,8 +778,12 @@ void RepositoryEngine::Impl::RunHistory()
                     item.kind = HistoryItemKind::Commit;
                     item.revision = revisions.at(id);
                     item.search_match = search_matches.contains(id);
-                    for (const std::string& parent : item.revision.parents)
+                    const bool merge_expanded = item.revision.parents.size() > 1 && expanded.contains(id);
+                    const std::size_t visible_parents = item.revision.parents.size() > 1
+                            && !merge_expanded ? 1 : item.revision.parents.size();
+                    for (std::size_t parent_index = 0; parent_index < visible_parents; ++parent_index)
                     {
+                        const std::string& parent = item.revision.parents[parent_index];
                         if (present.contains(parent))
                         {
                             item.parents.push_back(parent);
@@ -766,6 +882,10 @@ void RepositoryEngine::Impl::RunHistory()
         }
         catch (const std::exception& error)
         {
+            cached_named_refs.reset();
+            cached_references.reset();
+            cached_workspaces.reset();
+            cached_collapsed_materialized.clear();
             if (!stale()) Post(ErrorEvent{"history", error.what()});
         }
     }
@@ -773,36 +893,34 @@ void RepositoryEngine::Impl::RunHistory()
 
 void RepositoryEngine::Impl::RunInspector()
 {
+    RepositoryReadContext context;
     while (true)
     {
         InspectorRequest request;
         {
             std::unique_lock lock(inspector_mutex);
-            inspector_cv.wait(lock, [this] { return stopping || !inspector_requests.empty(); });
+            inspector_cv.wait(lock, [this, &context] {
+                return stopping || !inspector_requests.empty()
+                    || (context.repository != nullptr && context.session != session.load());
+            });
             if (stopping) break;
+            if (inspector_requests.empty())
+            {
+                context.Reset();
+                continue;
+            }
             request = std::move(inspector_requests.front());
             inspector_requests.pop_front();
         }
         if (request.session != session.load() || request.request != inspector_request.load()) continue;
         try
         {
-            std::string path;
-            {
-                std::lock_guard lock(history_mutex);
-                path = repository_path;
-            }
-            git_repository* raw = nullptr;
-            Check(git_repository_open_ext(&raw, path.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr),
-                "open inspector repository");
-            GitRepositoryPtr repository(raw);
-            gg_repository* read_gg = nullptr;
-            Check(gg_repository_attach(&read_gg, repository.get()), "attach inspector repository");
-            std::unique_ptr<gg_repository, decltype(&gg_repository_free)> owned_gg(read_gg, gg_repository_free);
-            const std::uint64_t snapshot_generation = generation;
+            context.Ensure(request.path, request.session, request.repository_generation, true);
             if (const auto* diff = std::get_if<LoadDiff>(&request.command))
-                LoadPatch(*diff, repository.get(), read_gg, snapshot_generation, request.request, request.session);
+                LoadPatch(*diff, context.repository.get(), context.gg.get(), request.snapshot_generation,
+                    request.request, request.session);
             else
-                LoadFile(std::get<LoadFileContent>(request.command), repository.get(), read_gg,
+                LoadFile(std::get<LoadFileContent>(request.command), context.repository.get(), context.gg.get(),
                     request.request, request.session);
         }
         catch (const std::exception& error)

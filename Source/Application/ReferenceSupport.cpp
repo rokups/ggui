@@ -3,8 +3,6 @@
 #include "ApplicationInternal.hpp"
 
 #include <ranges>
-#include <limits>
-#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -105,32 +103,6 @@ const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revi
         return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision;
     });
     return local == snapshot.refs.end() ? nullptr : &*local;
-}
-
-const NamedRef* ClosestBookmark(const RepoSnapshot& snapshot, const std::string& revision)
-{
-    git_repository* raw = nullptr;
-    if (git_repository_open_ext(&raw, snapshot.root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
-        return nullptr;
-    std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
-    git_oid oid{};
-    if (git_oid_fromstr(&oid, revision.c_str(), git_repository_oid_type(repository.get())) != GIT_OK) return nullptr;
-    const NamedRef* closest = nullptr;
-    std::size_t closest_distance = std::numeric_limits<std::size_t>::max();
-    for (const NamedRef& ref : snapshot.refs)
-    {
-        if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK) continue;
-        git_oid target{};
-        if (git_oid_fromstr(&target, ref.target.c_str(), git_repository_oid_type(repository.get())) != GIT_OK) continue;
-        std::size_t ahead = 0;
-        std::size_t behind = 0;
-        if (git_graph_ahead_behind(&ahead, &behind, repository.get(), &oid, &target) != GIT_OK || behind != 0)
-            continue;
-        if (ahead < closest_distance || (ahead == closest_distance && closest != nullptr
-                && ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && closest->kind == GG_NAMED_REF_REMOTE_BOOKMARK))
-        { closest = &ref; closest_distance = ahead; }
-    }
-    return closest;
 }
 
 std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark)

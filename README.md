@@ -11,6 +11,9 @@ it with up to 256 nearby commits. Ellipsis rows are real collapsed ancestry
 regions: selecting one adds up to 128 nearby commits while preserving the
 viewport anchor, and both the row and toolbar report that expansion is
 loading. Very fast expansions leave a brief “Commits loaded” acknowledgement.
+Merge commits show their first-parent history by default. Their graph dot has
+a `+` control for revealing the merged branch and a `-` control for collapsing
+it again; nested merges remain independently collapsed.
 Collapsed regions never imply a relationship between unrelated
 histories and never require a full-history count.
 
@@ -107,10 +110,21 @@ menus provide portable open, copy, and rename actions. **Ctrl+W** closes the
 current repository without changing it and returns to the recent-repository
 welcome screen.
 
-The toolbar shows the closest bookmark reachable from the working-copy change.
+The Workspaces panel discovers both gg workspaces and native linked Git
+worktrees. A single click leaves the current selection unchanged; double-click
+an available non-current row to switch this window, or use its context menu to
+open another ggui window. Opening a native linked worktree adopts it into gg.
+Rows identify the current, primary, unmanaged, and stale states. Context actions
+can reveal the working change, rename the selected managed workspace, and
+safely remove a linked worktree or clean stale metadata after confirmation.
+Removal snapshots recoverable tracked changes and refuses unsafe files, locks,
+and conflicts; deleting the worktree directory itself is not undoable.
+
 The Bookmarks panel controls which branches are visible in History: click to
 add or remove a branch, or Ctrl-click to show only that branch. At least one
 bookmark stays selected whenever bookmarks exist.
+Local unnamed heads are always included, so switching the working-copy change
+does not hide another unbookmarked line of work.
 No tags are selected by default. Select tags in the Tags panel to ensure their
 tagged history is found and revealed, or Ctrl-click to surface only one.
 Tags and bookmarks on commits already present in History are always shown as

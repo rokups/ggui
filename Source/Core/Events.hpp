@@ -4,6 +4,7 @@
 
 #include "Model.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <variant>
@@ -13,7 +14,6 @@ namespace Ggui
 
 struct SnapshotReady { std::shared_ptr<const RepoSnapshot> snapshot; };
 struct HistoryReady { std::shared_ptr<const HistoryView> view; };
-struct ClosestBookmarkReady { std::uint64_t repository_generation = 0; std::string label; };
 struct ChangedFilesReady
 {
     std::string revision;
@@ -25,6 +25,8 @@ struct ChangedFilesReady
 };
 struct DiffReady { DiffResult diff; };
 struct FileContentReady { std::string revision; std::string path; std::string contents; };
+struct BackgroundActivityStarted { std::uint64_t id = 0; std::string name; };
+struct BackgroundActivityFinished { std::uint64_t id = 0; };
 struct OperationStarted { std::string name; };
 struct OperationProgress
 {
@@ -34,6 +36,7 @@ struct OperationProgress
 };
 struct OperationFinished { std::string name; };
 struct ErrorEvent { std::string operation; std::string message; };
+struct WorkspaceRemoved { std::string root; bool current = false; };
 struct CredentialRequest
 {
     std::string url;
@@ -41,8 +44,9 @@ struct CredentialRequest
     unsigned int allowed_types = 0;
 };
 
-using Event = std::variant<SnapshotReady, HistoryReady, ClosestBookmarkReady, ChangedFilesReady, DiffReady,
-    FileContentReady, OperationStarted, OperationProgress, OperationFinished, ErrorEvent, CredentialRequest>;
+using Event = std::variant<SnapshotReady, HistoryReady, ChangedFilesReady, DiffReady,
+    FileContentReady, BackgroundActivityStarted, BackgroundActivityFinished, OperationStarted,
+    OperationProgress, OperationFinished, ErrorEvent, WorkspaceRemoved, CredentialRequest>;
 
 struct CredentialResponse
 {

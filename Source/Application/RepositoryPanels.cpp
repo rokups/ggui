@@ -472,24 +472,39 @@ void Application::RenderWorkspaces()
     for (const Workspace& workspace : _snapshot->workspaces)
     {
         ImGui::PushID(&workspace);
-        const ImU32 accent = workspace.stale ? kStatusDeleted : kBadgeWorkingCopy;
+        const ImU32 accent = workspace.stale ? kStatusDeleted
+            : workspace.current ? kBadgeWorkingCopy : kTextMuted;
         bool elided = false;
-        if (BadgedSelectable(workspace.name,
+        (void)BadgedSelectable(workspace.name,
                 !workspace.working_copy.empty() && workspace.working_copy == _selected_revision,
-                40.0f, accent, {}, &elided)
-            && !workspace.working_copy.empty())
-            SelectRevision(workspace.working_copy);
+                40.0f, accent, {}, &elided);
         const bool hovered = ImGui::IsItemHovered();
+        const bool resolving_conflicts = !_snapshot->conflicts.empty()
+            || _merge_process != nullptr || _open_merge_confirmation || !_merge_conflict_path.empty();
+        if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)
+            && !workspace.stale && !workspace.current && !actions_locked && !resolving_conflicts)
+            EnqueueAction(OpenRepository{workspace.root});
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
-        const std::string_view location = workspace.stale ? std::string_view("Unavailable")
-                                                          : std::string_view(workspace.root);
+        std::string location = workspace.stale ? "Unavailable" : workspace.root;
+        if (workspace.current) location += "  • current";
+        if (workspace.primary) location += "  • primary";
+        if (!workspace.managed) location += "  • unmanaged";
         elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 23.0f),
             maximum.x - 8.0f, location, kTextMuted);
 
         // Workspace context menu
         if (ImGui::BeginPopupContextItem("workspace context"))
         {
+            if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal change", nullptr, !workspace.working_copy.empty()))
+                RevealRevision(workspace.working_copy);
+            const bool can_open = !workspace.stale && !workspace.current && !actions_locked && !resolving_conflicts;
+            if (ActionMenuItem(ICON_MS_FOLDER_OPEN, "Open here", nullptr, can_open))
+                EnqueueAction(OpenRepository{workspace.root});
+            if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "Open in new window", nullptr,
+                    !workspace.stale && !workspace.current))
+                OpenWorkspaceInNewWindow(workspace.root);
+            ImGui::Separator();
             if (ActionMenuItem(ICON_MS_FOLDER, "Open directory", nullptr, !workspace.stale))
                 OpenExternalPath(workspace.root, "Workspace directory"); // GCOV_EXCL_LINE: external application handoff
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name"))
@@ -497,10 +512,24 @@ void Application::RenderWorkspaces()
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy path"))
                 ImGui::SetClipboardText(workspace.root.c_str());
             ImGui::BeginDisabled(actions_locked);
-            if (ActionMenuItem(ICON_MS_DELETE, "Forget", nullptr, workspace.managed))
-                EnqueueAction(WorkspaceForget{{workspace.name}});
-            if (ActionMenuItem(ICON_MS_EDIT, "Rename current...", nullptr, workspace.managed))
+            if (ActionMenuItem(ICON_MS_EDIT, "Rename...", nullptr, workspace.managed))
+            {
                 OpenDialog(Dialog::WorkspaceRename);
+                _input_secondary = workspace.name;
+            }
+            const bool has_controller = std::ranges::any_of(
+                _snapshot->workspaces, [](const Workspace& candidate) {
+                    return !candidate.current && !candidate.stale;
+                });
+            const bool can_remove = !workspace.primary
+                && !(workspace.current && (resolving_conflicts || !has_controller));
+            if (ActionMenuItem(ICON_MS_DELETE, "Remove...", nullptr, can_remove))
+            {
+                OpenDialog(Dialog::WorkspaceRemove);
+                _input_primary = workspace.name;
+                _input_secondary = workspace.root;
+                _input_flag = workspace.current;
+            }
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
@@ -510,7 +539,7 @@ void Application::RenderWorkspaces()
         {
             ImGui::BeginTooltip();
             ImGui::Text("Workspace: %s", workspace.name.c_str());
-            ImGui::Text("Directory: %.*s", static_cast<int>(location.size()), location.data());
+            ImGui::Text("Directory: %s", location.c_str());
             if (workspace.working_copy.empty())
                 ImGui::TextDisabled("No commit checked out");
             else

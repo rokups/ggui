@@ -24,7 +24,6 @@ RepositoryEngine::Impl::Impl()
         inspectors.emplace_back([this] { RunInspector(); });
         inspectors.emplace_back([this] { RunInspector(); });
         history_worker = std::thread([this] { RunHistory(); });
-        closest_bookmark_worker = std::thread([this] { RunClosestBookmark(); });
     }
     catch (...) // GCOV_EXCL_START: forced standard-library thread construction failure
     {
@@ -32,12 +31,10 @@ RepositoryEngine::Impl::Impl()
         queue_cv.notify_all();
         inspector_cv.notify_all();
         history_cv.notify_all();
-        closest_bookmark_cv.notify_all();
         if (worker.joinable()) worker.join();
         for (std::thread& inspector : inspectors)
             if (inspector.joinable()) inspector.join();
         if (history_worker.joinable()) history_worker.join();
-        if (closest_bookmark_worker.joinable()) closest_bookmark_worker.join();
         git_libgit2_shutdown();
         throw;
     }
@@ -57,7 +54,6 @@ RepositoryEngine::Impl::~Impl()
     queue_cv.notify_all();
     inspector_cv.notify_all();
     history_cv.notify_all();
-    closest_bookmark_cv.notify_all();
     credential_cv.notify_all();
     if (worker.joinable())
         worker.join();
@@ -66,8 +62,6 @@ RepositoryEngine::Impl::~Impl()
             inspector.join();
     if (history_worker.joinable())
         history_worker.join();
-    if (closest_bookmark_worker.joinable())
-        closest_bookmark_worker.join();
     Close();
     git_libgit2_shutdown();
 }
@@ -83,19 +77,13 @@ void RepositoryEngine::Impl::Close()
     cached_status.clear();
     worktree_ready = false;
     ++history_request_version;
-    ++closest_bookmark_request_version;
     {
         std::lock_guard lock(history_mutex);
         history_request.reset();
         active_history_query = {};
         expanded_history_regions.clear();
         repository_path.clear();
-    }
-    {
-        std::lock_guard lock(closest_bookmark_mutex);
-        closest_bookmark_request.reset();
-        closest_bookmark_completed_generation = 0;
-        closest_bookmark_active_generation = 0;
+        repository_path_session = 0;
     }
     {
         std::lock_guard lock(snapshot_mutex);
@@ -106,6 +94,8 @@ void RepositoryEngine::Impl::Close()
         inspector_requests.clear();
         ++inspector_request;
     }
+    inspector_cv.notify_all();
+    history_cv.notify_all();
 }
 
 void RepositoryEngine::Impl::Post(Event event)
@@ -214,6 +204,7 @@ void RepositoryEngine::Impl::Attach(GitRepositoryPtr repository)
         {
             std::lock_guard lock(history_mutex);
             repository_path = root;
+            repository_path_session = session.load();
         }
         // Watch before reconciliation so no filesystem transition can fall in
         // the open/first-scan gap.

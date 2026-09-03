@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -347,8 +348,51 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
             },
             [&](const WorkspaceRename& value) {
                 Mutate("rename workspace", [&](auto* out, auto* operation) {
-                    return gg_repository_workspace_rename(out, gg, value.name.c_str(), operation);
+                    return value.old_name.empty()
+                        ? gg_repository_workspace_rename(out, gg, value.name.c_str(), operation)
+                        : gg_repository_workspace_rename_named(
+                            out, gg, value.old_name.c_str(), value.name.c_str(), operation);
                 });
+            },
+            [&](const WorkspaceRemove& value) {
+                const auto remove = [&] {
+                    Mutation mutation;
+                    gg_operation_options operation = OperationOptions();
+                    Check(gg_repository_workspace_remove(
+                              &mutation.value, gg, value.name.c_str(), &operation),
+                        "remove workspace");
+                };
+                if (!value.current)
+                {
+                    remove();
+                    PublishSnapshot();
+                    Post(WorkspaceRemoved{value.root, false});
+                    return;
+                }
+                Close();
+                try
+                {
+                    OpenPath(value.controller);
+                    remove();
+                    Close();
+                    {
+                        std::lock_guard lock(queue_mutex);
+                        std::erase_if(commands, [](const Command& queued) {
+                            return std::holds_alternative<Refresh>(queued)
+                                || std::holds_alternative<RebuildHistory>(queued)
+                                || std::holds_alternative<ExpandHistoryRegion>(queued)
+                                || std::holds_alternative<LoadDiff>(queued)
+                                || std::holds_alternative<LoadFileContent>(queued);
+                        });
+                    }
+                    Post(WorkspaceRemoved{value.root, true});
+                }
+                catch (...)
+                {
+                    Close();
+                    if (std::filesystem::is_directory(value.root)) OpenPath(value.root);
+                    throw;
+                }
             },
             [&](const TrackPaths& value) {
                 const StringArray paths(value.filesets);
@@ -408,6 +452,7 @@ std::string CommandName(const Command& command)
             [](const WorkspaceAdd&) { return "add workspace"; },
             [](const WorkspaceForget&) { return "forget workspace"; },
             [](const WorkspaceRename&) { return "rename workspace"; },
+            [](const WorkspaceRemove&) { return "remove workspace"; },
             [](const TrackPaths&) { return "track paths"; }, [](const UntrackPaths&) { return "untrack paths"; },
             [](const ChmodPaths&) { return "chmod"; }},
         command);

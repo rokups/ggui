@@ -424,12 +424,6 @@ std::pair<std::string, std::size_t> Application::ReferenceBadgeLabelForTest(
     return ReferenceBadgeLabel(ref, refs);
 }
 
-std::string Application::ClosestBookmarkForTest(const RepoSnapshot& snapshot, const std::string& revision)
-{
-    const NamedRef* bookmark = ClosestBookmark(snapshot, revision);
-    return bookmark == nullptr ? "" : ReferenceLabel(*bookmark);
-}
-
 unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
 {
     return BookmarkBadgeColor(name, refs);

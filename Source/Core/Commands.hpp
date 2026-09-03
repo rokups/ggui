@@ -28,7 +28,12 @@ struct Refresh
     bool foreground = false;
 };
 struct RebuildHistory { HistoryQuery query; };
-struct ExpandHistoryRegion { std::string id; };
+struct ExpandHistoryRegion
+{
+    std::string id;
+    // Merge history is toggleable; ordinary collapsed regions only expand.
+    bool merge_history = false;
+};
 struct Fetch { std::string remote; bool tracked_only = false; };
 struct Push { std::string bookmark; std::string remote; bool force = false; };
 struct AddRemote { std::string name; std::string url; };
@@ -156,7 +161,21 @@ struct WorkspaceAdd
     std::string message;
 };
 struct WorkspaceForget { std::vector<std::string> names; };
-struct WorkspaceRename { std::string name; };
+struct WorkspaceRename
+{
+    explicit WorkspaceRename(std::string name) : name(std::move(name)) {}
+    WorkspaceRename(std::string old_name, std::string name)
+        : old_name(std::move(old_name)), name(std::move(name)) {}
+    std::string old_name;
+    std::string name;
+};
+struct WorkspaceRemove
+{
+    std::string name;
+    std::string root;
+    std::string controller;
+    bool current = false;
+};
 struct TrackPaths { std::vector<std::string> filesets; bool include_ignored = false; };
 struct UntrackPaths { std::vector<std::string> filesets; };
 struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; };
@@ -166,7 +185,7 @@ using Command = std::variant<OpenRepository, CloseRepository, InitRepository, Cl
     AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
     Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
-    WorkspaceAdd, WorkspaceForget, WorkspaceRename, TrackPaths, UntrackPaths, ChmodPaths>;
+    WorkspaceAdd, WorkspaceForget, WorkspaceRename, WorkspaceRemove, TrackPaths, UntrackPaths, ChmodPaths>;
 
 std::string CommandName(const Command& command);
 

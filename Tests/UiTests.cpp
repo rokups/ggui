@@ -208,7 +208,8 @@ RepoSnapshot RichSnapshot()
     };
     snapshot.operations = {{"operation-id", "Undoable operation", 1}};
     snapshot.workspaces = {
-        {"current", snapshot.root, "merge", false}, {"stale", "/missing/workspace", "left", true}};
+        {"current", snapshot.root, "merge", false, true, true, false},
+        {"stale", "/missing/workspace", "left", true}};
     snapshot.remotes = {{"origin", "https://example.test/repository.git", "ssh://example.test/repository.git"}};
     snapshot.conflicts = {{"conflict file.txt", 2, 3}};
     snapshot.can_undo = true;
@@ -723,6 +724,41 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         FocusWindow(context, "Bookmarks");
         IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "ShowsConcurrentBackgroundActivity");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.ApplyEventForTest(OperationStarted{"close"});
+        application.ApplyEventForTest(OperationFinished{"close"});
+        application.SetSnapshotForTest(RichSnapshot());
+        application.ApplyEventForTest(BackgroundActivityStarted{41, "Scanning working copy"});
+        application.ApplyEventForTest(BackgroundActivityStarted{42, "Refreshing repository metadata"});
+        context->Yield(3);
+
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK_EQ(context->ItemInfo("Repository activity").RectFull.Min.y,
+            context->ItemInfo("**/Refresh").RectFull.Min.y);
+        context->MouseMove("Repository activity");
+        context->Yield(2);
+        const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
+        IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
+
+        application.ApplyEventForTest(BackgroundActivityFinished{41});
+        application.ApplyEventForTest(OperationStarted{"fetch"});
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK_EQ(context->ItemInfo("Repository activity").RectFull.GetHeight(), ImGui::GetFrameHeight());
+        context->MouseMove("Repository activity");
+        context->Yield(2);
+        IM_CHECK(GImGui->TooltipPreviousWindow != nullptr);
+        application.ApplyEventForTest(OperationFinished{"fetch"});
+        application.ApplyEventForTest(BackgroundActivityFinished{42});
+        context->Yield(2);
     };
 
     test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBookmarkBranches");
@@ -1370,9 +1406,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                         {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BOOKMARK}),
             "origin/feature");
         const RepoSnapshot snapshot = RichSnapshot();
-        IM_CHECK_EQ(Application::ClosestBookmarkForTest(snapshot, "merge"), "coverage-bookmark");
-        IM_CHECK_EQ(Application::ClosestBookmarkForTest(snapshot, "third"), "upstream/remote-only");
-        IM_CHECK(Application::ClosestBookmarkForTest(snapshot, "missing").empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[5], snapshot.refs),
             std::make_pair(std::string("remote-bookmark"), std::size_t{0}));
         IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[6], snapshot.refs).first.empty());
@@ -1915,6 +1948,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         RepoSnapshot snapshot = RichSnapshot();
+        snapshot.conflicts.clear();
         snapshot.workspaces.push_back(
             {"existing-git-worktree", "/tmp/existing-git-worktree", "base", false, false});
         application.SetSnapshotForTest(std::move(snapshot));
@@ -1922,10 +1956,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         FocusWindow(context, "Workspaces");
         IM_CHECK(context->ItemExists("**/existing-git-worktree"));
+        const std::string selected = application.SelectedRevisionsForTest().front();
+        context->ItemClick("**/existing-git-worktree");
+        context->Yield();
+        IM_CHECK_EQ(application.SelectedRevisionsForTest().front(), selected);
         context->ItemClick("**/existing-git-worktree", ImGuiMouseButton_Right);
         context->Yield();
-        IM_CHECK((context->ItemInfo("**/Forget").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Rename current...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Rename...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Open here").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Open in new window").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Remove...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->KeyPress(ImGuiKey_Escape);
     };
 
@@ -2377,6 +2417,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             item.parents = {index == 14 ? "region:hidden-0:old" : "c" + std::to_string(index + 1)};
             initial->items.push_back(std::move(item));
         }
+        initial->items[12].revision.parents.push_back("merge-side");
         HistoryItem region;
         region.id = "region:hidden-0:old";
         region.kind = HistoryItemKind::CollapsedRegion;
@@ -2422,8 +2463,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         IM_CHECK(application.HistoryExpansionPendingForTest());
         IM_CHECK(context->ItemExists("**/Loading..."));
+        application.ApplyEventForTest(BackgroundActivityStarted{84, "Scanning working copy"});
+        context->Yield(2);
         context->SetRef("ggui dockspace");
-        IM_CHECK(context->ItemExists("**/Loading more commits..."));
+        IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("**/Refresh"));
+        context->MouseMove("Repository activity");
+        context->Yield(2);
+        IM_CHECK(GImGui->TooltipPreviousWindow != nullptr);
 
         auto expanded = std::make_shared<HistoryView>(*initial);
         expanded->request++;
@@ -2448,8 +2495,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(5);
         IM_CHECK(!application.HistoryExpansionPendingForTest());
         IM_CHECK(application.HistoryExpansionFeedbackForTest());
-        IM_CHECK(context->ItemExists("**/Commits loaded"));
+        IM_CHECK(!context->ItemExists("**/Commits loaded"));
+        IM_CHECK(context->ItemExists("Repository activity"));
+        application.ApplyEventForTest(BackgroundActivityFinished{84});
         IM_CHECK_LE(std::fabs((*graph)->Scroll.y - scroll_before), 0.01f);
+
+        context->Yield(2);
+        context->SetRef("History");
+        IM_CHECK(context->ItemExists("**/Expand merge"));
+        context->MouseMoveToPos(context->ItemInfo("**/Expand merge").RectFull.GetCenter());
+        context->MouseClick();
+        context->Yield(2);
+        IM_CHECK(application.HistoryExpansionPendingForTest());
+        context->SetRef("ggui dockspace");
+        IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("**/Refresh"));
     };
 
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");
@@ -3055,13 +3115,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Workspaces");
         context->ItemClick("**/stale", ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Forget");
+        context->ItemClick("**/Remove...");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Remove");
         context->Yield(2);
         FocusWindow(context, "Workspaces");
         context->ItemClick("**/current");
         context->ItemClick("**/current", ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Rename current...");
+        context->ItemClick("**/Rename...");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");

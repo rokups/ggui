@@ -458,27 +458,6 @@ void Application::RenderToolbar()
     const bool expansion_feedback = expansion_loading
         || std::chrono::steady_clock::now() < _history_expansion_feedback_until;
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
-    if (expansion_feedback)
-    {
-        static constexpr std::array spinner{'|', '/', '-', '\\'};
-        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
-        if (expansion_loading)
-        {
-            const std::string visible = std::string(1, spinner[frame]) + " Loading more commits...";
-            const ImVec2 position = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton("Loading more commits...", ImGui::CalcTextSize(visible.c_str()));
-            ImGui::GetWindowDrawList()->AddText(position, kTextMuted, visible.c_str());
-        }
-        else
-        {
-            constexpr std::string_view visible = "Commits loaded";
-            const ImVec2 position = ImGui::GetCursorScreenPos();
-            ImGui::InvisibleButton(visible.data(), ImGui::CalcTextSize(visible.data()));
-            ImGui::GetWindowDrawList()->AddText(position, kTextMuted, visible.data());
-        }
-    }
-    else
-    {
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(current_commit.empty());
     if (ActionButton(ICON_MS_ADD, "New")) CreateChange("@");
@@ -515,7 +494,6 @@ void Application::RenderToolbar()
 
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
-    }
 
     // A cancellable history search takes precedence over repository metadata
     // in the fixed-width toolbar. Rendering it before the selector keeps the
@@ -535,12 +513,30 @@ void Application::RenderToolbar()
         history_activity = "Finding " + ShortId(_reveal_revision) + " ("
             + std::to_string(_history_revisions.size()) + " visible)...";
     else if (!_history_expansion_pending.empty())
-        history_activity = "Loading more commits...";
+        history_activity = _history_expansion_pending.starts_with("region:")
+            ? "Loading more commits..." : "Updating commit graph...";
     else if (_history_view == nullptr || _history_view->repository_generation != _snapshot->repository_generation)
         history_activity = "Preparing commit graph...";
+    std::string foreground_activity;
+    if (!_active_operation.empty())
+    {
+        foreground_activity = "Working: " + _active_operation;
+        if (!_progress_phase.empty())
+        {
+            foreground_activity += " (" + _progress_phase;
+            if (_progress_total != 0)
+                foreground_activity += " " + std::to_string(_progress_completed) + "/"
+                    + std::to_string(_progress_total);
+            foreground_activity += ")";
+        }
+    }
+    else
+        foreground_activity = history_activity;
+    const bool activity_running = !foreground_activity.empty() || !_background_activities.empty();
+    const bool completion_feedback = expansion_feedback && !expansion_loading;
     // Repository metadata yields the limited toolbar space while transient
     // history work needs a reachable cancel control.
-    if (history_activity.empty() && !expansion_feedback)
+    if (!activity_running && !completion_feedback)
     {
         ImGui::SameLine();
         ImGui::TextDisabled("REPOSITORY");
@@ -568,7 +564,7 @@ void Application::RenderToolbar()
 
     // Current commit and bookmark. Transient activity takes this same compact
     // status slot so it remains visible even when the action bar is crowded.
-    if (!current_commit.empty() && history_activity.empty() && !expansion_feedback)
+    if (!current_commit.empty() && !activity_running && !completion_feedback)
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
@@ -582,41 +578,42 @@ void Application::RenderToolbar()
             IdCopyMenuItems("commit ID", current_commit, RevisionPrefix(current_commit));
             ImGui::EndPopup();
         }
-        if (!_closest_bookmark.empty())
+    }
+
+    // All repository work shares one status indicator. Interactive work gets
+    // the label; otherwise background work remains visible without competing
+    // spinners. The tooltip always exposes every concurrent background task.
+    if (activity_running)
+    {
+        ImGui::SameLine();
+        static constexpr std::array spinner{'|', '/', '-', '\\'};
+        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
+        const std::string label = foreground_activity.empty()
+            ? std::string("Background activity") : foreground_activity;
+        const std::string visible = std::string(1, spinner[frame]) + " " + label;
+        ImVec2 position = ImGui::GetCursorScreenPos();
+        position.y += ImGui::GetStyle().FramePadding.y;
+        ImGui::InvisibleButton("Repository activity",
+            ImVec2(ImGui::CalcTextSize(visible.c_str()).x, ImGui::GetFrameHeight()));
+        ImGui::GetWindowDrawList()->AddText(position, kTextMuted, visible.c_str());
+        if (ImGui::IsItemHovered())
+        {
+            if (!_background_activities.empty())
+            {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted("Background work may temporarily slow repository reads.");
+                ImGui::Separator();
+                for (const auto& activity : _background_activities)
+                    ImGui::BulletText("%s", activity.second.c_str());
+                ImGui::EndTooltip();
+            }
+        }
+        if (!_active_operation.empty())
         {
             ImGui::SameLine();
-            ImGui::TextDisabled("%s%s", ICON_MS_BOOKMARK, _closest_bookmark.c_str());
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Closest bookmark to the current commit");
+            if (ActionButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
         }
-    }
-
-    // Active operation progress
-    if (!_active_operation.empty())
-    {
-        ImGui::SameLine();
-        static constexpr std::array spinner{'|', '/', '-', '\\'};
-        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
-        if (_progress_phase.empty())
-            ImGui::Text("%c Working: %s", spinner[frame], _active_operation.c_str());
-        else if (_progress_total == 0)
-            ImGui::Text("Working: %s (%s)", _active_operation.c_str(), _progress_phase.c_str());
-        else
-            ImGui::Text("Working: %s (%s %zu/%zu)", _active_operation.c_str(), _progress_phase.c_str(),
-                _progress_completed, _progress_total);
-        ImGui::SameLine();
-        if (ActionButton(ICON_MS_CLOSE, "Cancel")) _engine.Cancel();
-    }
-
-    // Draw transient history state last so the right-anchored cancel button
-    // is not covered by repository metadata rendered later in the toolbar.
-    if (!history_activity.empty() && !expansion_feedback)
-    {
-        static constexpr std::array spinner{'|', '/', '-', '\\'};
-        const std::size_t frame = static_cast<std::size_t>(ImGui::GetTime() * 8.0) % spinner.size();
-        ImGui::SameLine();
-        ImGui::TextDisabled("%c %s", spinner[frame], history_activity.c_str());
-        if (history_searching)
+        else if (history_searching)
         {
             const float cancel_width = ImGui::CalcTextSize("Cancel").x
                 + ImGui::GetStyle().FramePadding.x * 2.0f;
@@ -625,6 +622,12 @@ void Application::RenderToolbar()
             if (cancel_history || ImGui::IsItemClicked())
                 CancelHistorySearch();
         }
+    }
+    else if (completion_feedback)
+    {
+        ImGui::SameLine();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Commits loaded");
     }
 
     // Error banner

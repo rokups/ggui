@@ -560,7 +560,8 @@ bool Application::CanSubmitDialog() const
                });
     case Dialog::Tag:
     case Dialog::WorkspaceAdd:
-    case Dialog::WorkspaceRename: return HasText(_input_primary);
+    case Dialog::WorkspaceRename:
+    case Dialog::WorkspaceRemove: return HasText(_input_primary);
     case Dialog::RemoteAdd: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::PushTo: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::Reconcile:
@@ -693,6 +694,7 @@ void Application::ResetRepositoryState()
     _built_filter.clear();
     _built_bookmarks.clear();
     _diff_loading = false;
+    _background_activities.clear();
     _default_layout = true;
     _status_message.clear();
     _error_message.clear();
@@ -1110,6 +1112,31 @@ void Application::OpenExternalPath(const std::filesystem::path& path, std::strin
         _error_message = SDL_GetError();
     else
         _status_message = std::string(description) + " opened";
+}
+
+void Application::OpenWorkspaceInNewWindow(const std::string& path)
+{
+    std::filesystem::path executable_path = _executable_path;
+    if (!std::filesystem::exists(executable_path))
+    {
+        if (const char* base = SDL_GetBasePath(); base != nullptr)
+            executable_path = std::filesystem::path(base) / _executable_path.filename();
+    }
+    if (executable_path.empty() || !std::filesystem::exists(executable_path))
+    {
+        _error_message = "Cannot determine the ggui executable path";
+        return;
+    }
+    const std::string executable = executable_path.string();
+    const char* arguments[]{executable.c_str(), path.c_str(), nullptr};
+    SDL_Process* process = StartBackgroundProcess(arguments); // GCOV_EXCL_LINE: external application handoff
+    if (process == nullptr)
+        _error_message = SDL_GetError(); // GCOV_EXCL_LINE: platform process failure
+    else
+    {
+        SDL_DestroyProcess(process); // GCOV_EXCL_LINE: external process owns its lifetime
+        _status_message = "Workspace opened in a new window";
+    }
 }
 
 void Application::OpenExternalDiff(const std::string& path, const std::string& compare_to)

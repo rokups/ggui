@@ -87,12 +87,21 @@ bool Application::HistoryTargetConnected(std::string_view target) const
     });
 }
 
-void Application::ExpandGraphRow(std::size_t visible_row, bool)
+void Application::ExpandGraphRow(std::size_t visible_row, bool merge_history)
 {
-    if (_history_view == nullptr || visible_row >= _history_view->items.size()) return;
+    if (_history_view == nullptr || visible_row >= _history_view->items.size()
+        || !_history_expansion_pending.empty()) return;
     const HistoryItem& item = _history_view->items[visible_row];
     if (item.kind == HistoryItemKind::CollapsedRegion)
+    {
+        _history_expansion_pending = item.id;
         _engine.Enqueue(ExpandHistoryRegion{item.id});
+    }
+    else if (merge_history && item.revision.parents.size() > 1)
+    {
+        _history_expansion_pending = item.id;
+        _engine.Enqueue(ExpandHistoryRegion{item.id, true});
+    }
 }
 
 std::size_t Application::RevisionPrefix(const std::string& oid) const
@@ -395,13 +404,52 @@ void Application::RenderHistory()
             }
 
             const Revision& revision = item.revision;
-            if (clicked) SelectRevision(revision.oid, io.KeyCtrl);
+            const float dot_radius = std::min(kDotRadius, lane_width * 0.35f);
+            const ImRect dot_rect({dot_x - dot_radius - 3.0f, center - dot_radius - 3.0f},
+                {dot_x + dot_radius + 3.0f, center + dot_radius + 3.0f});
+            const bool merge = revision.parents.size() > 1;
+            const bool merge_expanded = item.parents.size() > 1;
+            const bool merge_hovered = merge && history_window_hovered
+                && ImGui::GetDragDropPayload() == nullptr
+                && ImGui::IsMouseHoveringRect(dot_rect.Min, dot_rect.Max);
+            if (merge_hovered)
+            {
+                next_hovered_track = row.track;
+                next_hovered_commit_row = index;
+            }
+            const bool merge_clicked = merge_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            if (clicked && !merge_clicked) SelectRevision(revision.oid, io.KeyCtrl);
             if (highlighted_commit_row == index)
-                draw->AddCircle({dot_x, center}, std::min(kDotRadius, lane_width * 0.35f) + 2.5f,
+                draw->AddCircle({dot_x, center}, dot_radius + 2.5f,
                     IM_COL32(255, 255, 255, 180), 0, 2.5f);
-            draw->AddCircleFilled({dot_x, center}, std::min(kDotRadius, lane_width * 0.35f),
+            draw->AddCircleFilled({dot_x, center}, dot_radius,
                 revision.conflicted ? kStatusConflict : revision.working_copy ? kWorkingCommitId
                     : revision.pushed ? kStatusPushed : kStatusUnpushed);
+            if (merge)
+            {
+                const ImU32 sign_color = IM_COL32(25, 25, 25, 255);
+                const float half = std::max(2.0f, dot_radius - 2.0f);
+                draw->AddLine({dot_x - half, center}, {dot_x + half, center}, sign_color, 1.5f);
+                if (!merge_expanded)
+                    draw->AddLine({dot_x, center - half}, {dot_x, center + half}, sign_color, 1.5f);
+                const char* action = merge_expanded ? "Collapse merge" : "Expand merge";
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                ImGuiContext& g = *GImGui;
+                const ImGuiID merge_id = ImGui::GetID(action);
+                IMGUI_TEST_ENGINE_ITEM_ADD(merge_id, dot_rect, nullptr);
+                ImGuiTestEngineHook_ItemInfo(&g, merge_id, action, ImGuiItemStatusFlags_None);
+#endif
+                if (merge_hovered)
+                {
+                    ImGui::BeginTooltip(); ImGui::TextUnformatted(action); ImGui::EndTooltip();
+                }
+                if (merge_clicked)
+                {
+                    _history_anchor = revision.oid;
+                    _history_anchor_offset = index * kRowHeight - ImGui::GetScrollY();
+                    ExpandGraphRow(static_cast<std::size_t>(index), true);
+                }
+            }
             const std::string title = FirstLine(revision.description);
             ImVec2 cursor{content_x, center - ImGui::GetTextLineHeight() * 0.5f};
             struct HistoryBadge

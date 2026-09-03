@@ -37,11 +37,9 @@ void Application::ApplyEvent(Event event)
                 {
                     const std::string old_root = _snapshot == nullptr ? "" : _snapshot->root;
                     const std::string old_current = _snapshot == nullptr ? "" : CurrentCommit(*_snapshot);
-                    const std::uint64_t old_topology = _snapshot == nullptr ? 0 : _snapshot->repository_generation;
                     const std::string old_selection = _selected_revision;
                     const std::string old_compare_to = _compare_to;
                     _snapshot = std::move(value.snapshot);
-                    if (old_topology != _snapshot->repository_generation) _closest_bookmark.clear();
                     _history_refs_by_revision.clear();
                     for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
                         _history_refs_by_revision[_snapshot->refs[index].target].push_back(index);
@@ -181,12 +179,6 @@ void Application::ApplyEvent(Event event)
                         RequestDiff(true);
                     }
                 }
-                else if constexpr (std::is_same_v<T, ClosestBookmarkReady>)
-                {
-                    if (_snapshot != nullptr
-                        && value.repository_generation == _snapshot->repository_generation)
-                        _closest_bookmark = std::move(value.label);
-                }
                 else if constexpr (std::is_same_v<T, ChangedFilesReady>)
                 {
                     if (value.revision != _selected_revision || value.compare_to != _compare_to
@@ -226,6 +218,10 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, FileContentReady>)
                     OpenTemporaryFileInEditor(value);
+                else if constexpr (std::is_same_v<T, BackgroundActivityStarted>)
+                    _background_activities.insert_or_assign(value.id, std::move(value.name));
+                else if constexpr (std::is_same_v<T, BackgroundActivityFinished>)
+                    _background_activities.erase(value.id);
                 else if constexpr (std::is_same_v<T, OperationStarted>)
                 {
                     _active_operation = value.name;
@@ -269,6 +265,11 @@ void Application::ApplyEvent(Event event)
                         _history_expansion_pending.clear();
                     if (value.operation == "bookmark")
                         _pending_created_bookmark.clear();
+                }
+                else if constexpr (std::is_same_v<T, WorkspaceRemoved>)
+                {
+                    ForgetRepository(value.root);
+                    if (value.current) ResetRepositoryState();
                 }
                 else if constexpr (std::is_same_v<T, CredentialRequest>)
                 {
