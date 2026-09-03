@@ -34,8 +34,11 @@ ctest --preset linux-x64-debug
 ```
 
 For a Windows cross-build, install MinGW-w64 and a static Windows build of
-`gg`, then use the `windows-x64` and `windows-x64-release` presets with that
+`gg`, then use the `mingw-x64` and `mingw-x64-release` presets with that
 `gg` install in `CMAKE_PREFIX_PATH`.
+
+For a native Visual Studio 2022 x64 build, configure with `msvc-x64`, then
+build with either `msvc-x64-debug` or `msvc-x64-release`.
 
 The application operates on one repository at a time. Repository mutations
 are serialized on a worker thread and use libgg's public C API.

@@ -15,6 +15,12 @@ option(GGUI_BUILD_TESTS "Build ggui tests" ON)
 option(GGUI_ENABLE_IMGUI_TEST_ENGINE "Build the real application with Dear ImGui Test Engine" OFF)
 option(GGUI_ENABLE_COVERAGE "Instrument ggui sources for coverage" OFF)
 
+if(MSVC)
+  set(GGUI_WARNING_OPTIONS /W4)
+else()
+  set(GGUI_WARNING_OPTIONS -Wall -Wextra -Wpedantic -Werror)
+endif()
+
 if(GGUI_ENABLE_COVERAGE)
   if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     message(FATAL_ERROR "GGUI_ENABLE_COVERAGE requires GCC or Clang coverage support")
@@ -168,7 +174,7 @@ if(NOT imgui_color_text_edit_patched)
   endforeach()
   foreach(patch_file IN LISTS imgui_color_text_edit_patches)
     execute_process(
-      COMMAND "${GIT_EXECUTABLE}" apply --unidiff-zero
+      COMMAND "${GIT_EXECUTABLE}" apply --unidiff-zero --ignore-space-change
         "${CMAKE_CURRENT_SOURCE_DIR}/cmake/${patch_file}"
       WORKING_DIRECTORY "${ImGuiColorTextEdit_SOURCE_DIR}"
       RESULT_VARIABLE patch_result)
@@ -218,7 +224,7 @@ add_library(ggui_core STATIC
   Source/Graph/Layout.hpp)
 target_include_directories(ggui_core PUBLIC Source)
 target_link_libraries(ggui_core PUBLIC gg::gg PRIVATE efsw-static spdlog::spdlog)
-target_compile_options(ggui_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(ggui_core PRIVATE ${GGUI_WARNING_OPTIONS})
 if(GGUI_ENABLE_COVERAGE)
   target_link_libraries(ggui_core PUBLIC ggui_coverage)
 endif()
@@ -302,7 +308,7 @@ endif()
 if(GGUI_ENABLE_COVERAGE)
   target_link_libraries(ggui PRIVATE ggui_coverage)
 endif()
-target_compile_options(ggui PRIVATE -Wall -Wextra -Wpedantic -Werror)
+target_compile_options(ggui PRIVATE ${GGUI_WARNING_OPTIONS})
 
 if(GGUI_BUILD_TESTS)
   enable_testing()
@@ -313,7 +319,7 @@ if(GGUI_BUILD_TESTS)
     OPTIONS "INSTALL_GTEST OFF")
   add_executable(ggui_tests Tests/Tests.cpp)
   target_link_libraries(ggui_tests PRIVATE ggui_core GTest::gtest_main)
-  target_compile_options(ggui_tests PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_compile_options(ggui_tests PRIVATE ${GGUI_WARNING_OPTIONS})
   if(GGUI_ENABLE_COVERAGE)
     target_link_libraries(ggui_tests PRIVATE ggui_coverage)
   endif()
