@@ -111,6 +111,9 @@ public:
     const std::string& ActiveOperationForTest() const;
     const std::string& ErrorMessageForTest() const;
     void CreateChangeForTest(const std::string& parent);
+    bool UsesSdrSwapchainForTest() const;
+    bool CaptureFramebufferForTest(
+        int x, int y, int width, int height, unsigned int* pixels);
 #endif
 
 private:
@@ -366,7 +369,12 @@ private:
     bool _change_info_dirty = false;
 
     SDL_Window* _window = nullptr;
-    SDL_GLContext _gl_context = nullptr;
+    SDL_GPUDevice* _gpu_device = nullptr;
+#ifdef IMGUI_BUILD_TESTING
+    SDL_GPUTexture* _capture_texture = nullptr;
+    unsigned int _capture_width = 0;
+    unsigned int _capture_height = 0;
+#endif
     int _window_x = 0;
     int _window_y = 0;
     int _window_width = 1440;

@@ -4,7 +4,6 @@
 #include "Application/ApplicationInternal.hpp"
 
 #include <IconsMaterialSymbols.h>
-#include <SDL3/SDL_opengl.h>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_te_context.h>
@@ -257,10 +256,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("Open repository..."));
         IM_CHECK(context->ItemExists("Initialize repository..."));
         IM_CHECK(context->ItemExists("Clone repository..."));
-        int srgb_capable = -1;
-        IM_CHECK(SDL_GL_GetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, &srgb_capable));
-        IM_CHECK_EQ(srgb_capable, 0);
-        IM_CHECK(!glIsEnabled(GL_FRAMEBUFFER_SRGB));
+        IM_CHECK(Application::Instance().UsesSdrSwapchainForTest());
+        std::array<unsigned int, 4> pixels{};
+        IM_CHECK(Application::Instance().CaptureFramebufferForTest(
+            0, 0, 2, 2, pixels.data()));
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "RestoresWindowOnScreen");

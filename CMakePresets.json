@@ -9,7 +9,8 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "GGUI_BUILD_TESTS": "ON"
+        "GGUI_BUILD_TESTS": "ON",
+        "GGUI_ENABLE_IMGUI_TEST_ENGINE": "OFF"
       }
     },
     {

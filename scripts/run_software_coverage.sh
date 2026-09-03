@@ -17,14 +17,22 @@ find "$build" -type f -name '*.gcda' -delete
 test_root=$(mktemp -d /tmp/ggui-software-tests.XXXXXX)
 cleanup() { find "$test_root" -depth -delete; }
 trap cleanup EXIT
+runtime_dir="$test_root/runtime"
+mkdir -m 700 "$runtime_dir"
+lvp_icd=$(find /usr/share/vulkan/icd.d -maxdepth 1 -type f -name 'lvp_icd*.json' -print -quit)
+if [[ -z "$lvp_icd" ]]; then
+  echo "Mesa lavapipe Vulkan driver is required for software UI tests" >&2
+  exit 1
+fi
 
 software() {
-  env LIBGL_ALWAYS_SOFTWARE=1 GALLIUM_DRIVER=llvmpipe SDL_AUDIODRIVER=dummy XDG_RUNTIME_DIR=/tmp-run \
+  env VK_DRIVER_FILES="$lvp_icd" VK_ICD_FILENAMES="$lvp_icd" SDL_GPU_DRIVER=vulkan \
+    SDL_AUDIODRIVER=dummy XDG_RUNTIME_DIR="$runtime_dir" \
     xvfb-run -a "$@"
 }
 
-if command -v glxinfo >/dev/null 2>&1; then
-  software glxinfo -B | sed -n '/OpenGL renderer string/p'
+if command -v vulkaninfo >/dev/null 2>&1; then
+  software vulkaninfo --summary | sed -n '/deviceName/p'
 fi
 
 "$build/bin/ggui_tests"
@@ -67,7 +75,7 @@ env XDG_DATA_HOME="$test_root/xdg-invalid-video" SDL_VIDEODRIVER=does-not-exist 
   "$build/bin/ggui" --smoke || true
 env XDG_DATA_HOME="$test_root/xdg-dummy-video" SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
   "$build/bin/ggui" --smoke || true
-software env XDG_DATA_HOME="$test_root/xdg-old-gl" MESA_GL_VERSION_OVERRIDE=2.0 \
+software env XDG_DATA_HOME="$test_root/xdg-invalid-gpu" SDL_GPU_DRIVER=does-not-exist \
   "$build/bin/ggui" --smoke || true
 
 "$root/scripts/coverage_report.py" "$build"

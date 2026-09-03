@@ -44,8 +44,6 @@ endif()
 CPMAddPackage(
   NAME SDL3
   GITHUB_REPOSITORY libsdl-org/SDL
-  # 3.4.0 regressed OpenGL framebuffer color handling on Windows, causing
-  # display-encoded ImGui colors to be encoded a second time.
   GIT_TAG release-3.4.4
   OPTIONS "SDL_STATIC ON" "SDL_SHARED OFF" "SDL_TEST_LIBRARY OFF" "SDL_X11_XTEST OFF"
   EXCLUDE_FROM_ALL TRUE)
@@ -56,7 +54,6 @@ CPMAddPackage(
   GIT_TAG 84a9d53
   DOWNLOAD_ONLY YES)
 
-find_package(OpenGL REQUIRED)
 add_library(imgui STATIC EXCLUDE_FROM_ALL
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
@@ -64,13 +61,13 @@ add_library(imgui STATIC EXCLUDE_FROM_ALL
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp)
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp)
 target_compile_definitions(imgui PUBLIC IMGUI_USER_CONFIG="${CMAKE_CURRENT_SOURCE_DIR}/Source/imconfig.h")
 target_include_directories(imgui PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/misc/cpp
   ${imgui_SOURCE_DIR}/backends)
-target_link_libraries(imgui PUBLIC SDL3::SDL3-static OpenGL::GL)
+target_link_libraries(imgui PUBLIC SDL3::SDL3-static)
 
 if(GGUI_ENABLE_IMGUI_TEST_ENGINE)
   CPMAddPackage(

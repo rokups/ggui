@@ -2,7 +2,7 @@
 
 `ggui` is a graph-first desktop interface for the
 [`gg`](https://github.com/rokups/gg) change-oriented Git workflow. It uses
-Dear ImGui, SDL3, OpenGL, libgg, and libgit2.
+Dear ImGui, SDL3's GPU API, libgg, and libgit2.
 
 Repository opening publishes refs before the working-tree scan completes and
 builds History on a separate latest-wins worker. History first displays a
@@ -59,13 +59,13 @@ are serialized on a worker thread and use libgg's public C API.
 
 The coverage build embeds Dear ImGui Test Engine in the real executable. On
 Linux, run the complete GoogleTest and UI workflow suite through Mesa
-`llvmpipe` and Xvfb with:
+`lavapipe` and Xvfb with:
 
 ```sh
 GGUI_GG_PREFIX=/path/to/gg/prefix ./scripts/run_software_coverage.sh
 ```
 
-The harness also exercises settings recovery and SDL/OpenGL startup failures,
+The harness also exercises settings recovery and SDL/SDL_GPU startup failures,
 then enforces 100% line coverage across the production `.cpp` files under
 `Source/Application`, `Source/Core`, `Source/Graph`, and `Source/Main.cpp`.
 Exclusions are limited to marked native-dialog,

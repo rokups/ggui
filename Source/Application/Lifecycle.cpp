@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "ApplicationInternal.hpp"
 
-#include <SDL3/SDL_opengl.h>
-#include <backends/imgui_impl_opengl3.h>
+#include <backends/imgui_impl_sdlgpu3.h>
 #include <backends/imgui_impl_sdl3.h>
 #ifdef IMGUI_BUILD_TESTING
 #include <imgui_te_engine.h>
@@ -102,27 +101,101 @@ int Application::Run(int argc, char** argv)
         }
 
         PollEngine();
-        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDLGPU3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
         RenderFrame();
         ImGui::Render();
 
-        int width = 0;
-        int height = 0;
-        SDL_GetWindowSizeInPixels(_window, &width, &height);
-        glViewport(0, 0, width, height);
-        // ImGui colors are already authored as display-encoded sRGB values.
-        // Encoding them again through an sRGB framebuffer visibly washes out
-        // the interface, notably with some Windows OpenGL pixel formats.
-        glDisable(GL_FRAMEBUFFER_SRGB);
-        if (_dark_theme)
-            glClearColor(0.047f, 0.067f, 0.094f, 1.0f);
-        else
-            glClearColor(0.94f, 0.95f, 0.97f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        SDL_GL_SwapWindow(_window);
+        ImDrawData* draw_data = ImGui::GetDrawData();
+        SDL_GPUCommandBuffer* command_buffer =
+            SDL_AcquireGPUCommandBuffer(_gpu_device);
+        if (command_buffer == nullptr)
+        {
+            spdlog::error("SDL_AcquireGPUCommandBuffer failed: {}", SDL_GetError());
+            _running = false;
+            continue;
+        }
+        SDL_GPUTexture* swapchain_texture = nullptr;
+        Uint32 width = 0;
+        Uint32 height = 0;
+        if (!SDL_WaitAndAcquireGPUSwapchainTexture(
+                command_buffer, _window, &swapchain_texture, &width, &height))
+        {
+            spdlog::error("SDL_WaitAndAcquireGPUSwapchainTexture failed: {}", SDL_GetError());
+            SDL_CancelGPUCommandBuffer(command_buffer);
+            _running = false;
+            continue;
+        }
+        if (swapchain_texture != nullptr && width > 0 && height > 0)
+        {
+            SDL_GPUTexture* render_texture = swapchain_texture;
+#ifdef IMGUI_BUILD_TESTING
+            if (_capture_texture == nullptr || _capture_width != width || _capture_height != height)
+            {
+                if (_capture_texture != nullptr)
+                    SDL_ReleaseGPUTexture(_gpu_device, _capture_texture);
+                const SDL_GPUTextureCreateInfo texture_info{
+                    .type = SDL_GPU_TEXTURETYPE_2D,
+                    .format = SDL_GetGPUSwapchainTextureFormat(_gpu_device, _window),
+                    .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                    .width = width,
+                    .height = height,
+                    .layer_count_or_depth = 1,
+                    .num_levels = 1,
+                    .sample_count = SDL_GPU_SAMPLECOUNT_1,
+                };
+                _capture_texture = SDL_CreateGPUTexture(_gpu_device, &texture_info);
+                _capture_width = _capture_texture == nullptr ? 0 : width;
+                _capture_height = _capture_texture == nullptr ? 0 : height;
+                if (_capture_texture == nullptr)
+                    spdlog::error("SDL_CreateGPUTexture failed: {}", SDL_GetError());
+            }
+            if (_capture_texture != nullptr)
+                render_texture = _capture_texture;
+#endif
+            ImGui_ImplSDLGPU3_PrepareDrawData(draw_data, command_buffer);
+            SDL_GPUColorTargetInfo target_info{
+                .texture = render_texture,
+                .clear_color = _dark_theme
+                    ? SDL_FColor{0.047f, 0.067f, 0.094f, 1.0f}
+                    : SDL_FColor{0.94f, 0.95f, 0.97f, 1.0f},
+                .load_op = SDL_GPU_LOADOP_CLEAR,
+                .store_op = SDL_GPU_STOREOP_STORE,
+            };
+            SDL_GPURenderPass* render_pass =
+                SDL_BeginGPURenderPass(command_buffer, &target_info, 1, nullptr);
+            if (render_pass == nullptr)
+            {
+                spdlog::error("SDL_BeginGPURenderPass failed: {}", SDL_GetError());
+                SDL_CancelGPUCommandBuffer(command_buffer);
+                _running = false;
+                continue;
+            }
+            ImGui_ImplSDLGPU3_RenderDrawData(
+                draw_data, command_buffer, render_pass);
+            SDL_EndGPURenderPass(render_pass);
+#ifdef IMGUI_BUILD_TESTING
+            if (render_texture != swapchain_texture)
+            {
+                SDL_GPUBlitInfo blit_info{};
+                blit_info.source.texture = render_texture;
+                blit_info.source.w = width;
+                blit_info.source.h = height;
+                blit_info.destination.texture = swapchain_texture;
+                blit_info.destination.w = width;
+                blit_info.destination.h = height;
+                blit_info.load_op = SDL_GPU_LOADOP_DONT_CARE;
+                blit_info.filter = SDL_GPU_FILTER_NEAREST;
+                SDL_BlitGPUTexture(command_buffer, &blit_info);
+            }
+#endif
+        }
+        if (!SDL_SubmitGPUCommandBuffer(command_buffer))
+        {
+            spdlog::error("SDL_SubmitGPUCommandBuffer failed: {}", SDL_GetError());
+            _running = false;
+        }
 #ifdef IMGUI_BUILD_TESTING
         if (_smoke_mode)
             _running = false;
@@ -184,23 +257,14 @@ void Application::ProcessEvent(SDL_Event& event)
 
 bool Application::Initialize()
 {
-    // SDL 3.4.2+ can force the non-sRGB WGL pixel format instead of merely
-    // requesting one. This keeps Windows presentation consistent with Linux.
-    SDL_SetHint(SDL_HINT_OPENGL_FORCE_SRGB_FRAMEBUFFER, "0");
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         spdlog::error("SDL_Init failed: {}", SDL_GetError());
         return false;
     }
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
-    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    // Request a conventional untagged framebuffer. Dear ImGui emits packed
-    // display colors rather than linear-light values.
-    SDL_GL_SetAttribute(SDL_GL_FRAMEBUFFER_SRGB_CAPABLE, 0);
     _window = SDL_CreateWindow(
-        "ggui", 1440, 900, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        "ggui", 1440, 900,
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (_window == nullptr)
     {
         spdlog::error("SDL_CreateWindow failed: {}", SDL_GetError());
@@ -209,17 +273,31 @@ bool Application::Initialize()
     }
     _window_has_position = SDL_GetWindowPosition(_window, &_window_x, &_window_y);
     _window_has_size = SDL_GetWindowSize(_window, &_window_width, &_window_height);
-    _gl_context = SDL_GL_CreateContext(_window);
-    if (_gl_context == nullptr)
+    _gpu_device = SDL_CreateGPUDevice(
+        SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL |
+            SDL_GPU_SHADERFORMAT_MSL | SDL_GPU_SHADERFORMAT_METALLIB,
+        false, nullptr);
+    if (_gpu_device == nullptr)
     {
-        spdlog::error("SDL_GL_CreateContext failed: {}", SDL_GetError());
+        spdlog::error("SDL_CreateGPUDevice failed: {}", SDL_GetError());
         SDL_DestroyWindow(_window);
         _window = nullptr;
         SDL_Quit();
         return false;
     }
-    glDisable(GL_FRAMEBUFFER_SRGB);
-    SDL_GL_SetSwapInterval(1);
+    if (!SDL_ClaimWindowForGPUDevice(_gpu_device, _window) ||
+        !SDL_SetGPUSwapchainParameters(
+            _gpu_device, _window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR,
+            SDL_GPU_PRESENTMODE_VSYNC))
+    {
+        spdlog::error("SDL GPU window setup failed: {}", SDL_GetError());
+        SDL_DestroyGPUDevice(_gpu_device);
+        _gpu_device = nullptr;
+        SDL_DestroyWindow(_window);
+        _window = nullptr;
+        SDL_Quit();
+        return false;
+    }
 
     char* preferences = SettingsPersistenceEnabled() ? SDL_GetPrefPath("gg", "ggui") : nullptr;
     if (preferences != nullptr)
@@ -241,8 +319,20 @@ bool Application::Initialize()
         ImGui::LoadIniSettingsFromDisk(io.IniFilename);
     LoadUiFont();
     ApplyTheme();
-    ImGui_ImplSDL3_InitForOpenGL(_window, _gl_context);
-    ImGui_ImplOpenGL3_Init("#version 330 core");
+    ImGui_ImplSDL3_InitForSDLGPU(_window);
+    ImGui_ImplSDLGPU3_InitInfo init_info{};
+    init_info.Device = _gpu_device;
+    init_info.ColorTargetFormat =
+        SDL_GetGPUSwapchainTextureFormat(_gpu_device, _window);
+    init_info.MSAASamples = SDL_GPU_SAMPLECOUNT_1;
+    init_info.SwapchainComposition = SDL_GPU_SWAPCHAINCOMPOSITION_SDR;
+    init_info.PresentMode = SDL_GPU_PRESENTMODE_VSYNC;
+    if (!ImGui_ImplSDLGPU3_Init(&init_info))
+    {
+        spdlog::error("ImGui SDL_GPU initialization failed");
+        Shutdown();
+        return false;
+    }
     return true;
 }
 
@@ -374,7 +464,9 @@ void Application::Shutdown()
     if (_test_engine != nullptr)
         ImGuiTestEngine_Stop(_test_engine);
 #endif
-    ImGui_ImplOpenGL3_Shutdown();
+    if (_gpu_device != nullptr)
+        SDL_WaitForGPUIdle(_gpu_device);
+    ImGui_ImplSDLGPU3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 #ifdef IMGUI_BUILD_TESTING
@@ -384,11 +476,20 @@ void Application::Shutdown()
         _test_engine = nullptr;
     }
 #endif
-    if (_gl_context != nullptr)
-        SDL_GL_DestroyContext(_gl_context);
+#ifdef IMGUI_BUILD_TESTING
+    if (_capture_texture != nullptr)
+        SDL_ReleaseGPUTexture(_gpu_device, _capture_texture);
+    _capture_texture = nullptr;
+    _capture_width = 0;
+    _capture_height = 0;
+#endif
+    if (_gpu_device != nullptr && _window != nullptr)
+        SDL_ReleaseWindowFromGPUDevice(_gpu_device, _window);
+    if (_gpu_device != nullptr)
+        SDL_DestroyGPUDevice(_gpu_device);
+    _gpu_device = nullptr;
     if (_window != nullptr)
         SDL_DestroyWindow(_window);
-    _gl_context = nullptr;
     _window = nullptr;
     SDL_Quit();
 }
