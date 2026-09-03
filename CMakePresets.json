@@ -47,6 +47,7 @@
       "architecture": "x64",
       "cacheVariables": {
         "BUILD_SHARED_LIBS": "OFF",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
         "GGUI_BUILD_TESTS": "OFF"
       }
     }
@@ -80,6 +81,12 @@
       "name": "msvc-x64-release",
       "configurePreset": "msvc-x64",
       "configuration": "Release"
+    },
+    {
+      "name": "msvc-x64-package",
+      "configurePreset": "msvc-x64",
+      "configuration": "Release",
+      "targets": ["PACKAGE"]
     }
   ],
   "testPresets": [
