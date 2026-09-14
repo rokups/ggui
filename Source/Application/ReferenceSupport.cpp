@@ -142,15 +142,42 @@ const std::string& CurrentCommit(const RepoSnapshot& snapshot)
     return snapshot.working_copy.empty() ? snapshot.head : snapshot.working_copy;
 }
 
-const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier)
+const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier,
+    std::span<const Revision> revisions)
 {
-    if (identifier.empty())
+    if (revisions.empty()) revisions = snapshot.revisions;
+    const auto first = identifier.find_first_not_of(" \t\r\n");
+    if (first == std::string_view::npos)
         return nullptr;
+    identifier = identifier.substr(first, identifier.find_last_not_of(" \t\r\n") - first + 1);
+    if (identifier.starts_with("@-")
+        && identifier.find_first_not_of('-', 1) == std::string_view::npos)
+    {
+        const Revision* revision = ResolveSnapshotRevision(snapshot, "@", revisions);
+        for (std::size_t index = 1; revision != nullptr && index < identifier.size(); ++index)
+            revision = revision->parents.empty() ? nullptr
+                : ResolveSnapshotRevision(snapshot, revision->parents.front(), revisions);
+        return revision;
+    }
+    const auto open = identifier.find('(');
+    if (open != std::string_view::npos && identifier.ends_with(')'))
+    {
+        auto function = identifier.substr(0, open);
+        const auto end = function.find_last_not_of(" \t\r\n");
+        function = end == std::string_view::npos ? std::string_view{} : function.substr(0, end + 1);
+        if (function == "parents")
+        {
+            const Revision* revision = ResolveSnapshotRevision(snapshot,
+                identifier.substr(open + 1, identifier.size() - open - 2), revisions);
+            return revision != nullptr && revision->parents.size() == 1
+                ? ResolveSnapshotRevision(snapshot, revision->parents.front(), revisions) : nullptr;
+        }
+    }
     if (identifier == "@")
         identifier = CurrentCommit(snapshot);
     bool ambiguous = false;
     const Revision* result = nullptr;
-    for (const Revision& revision : snapshot.revisions)
+    for (const Revision& revision : revisions)
     {
         const bool matches = revision.oid.starts_with(identifier)
             || std::ranges::any_of(revision.aliases,
@@ -170,21 +197,23 @@ const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::strin
     for (const NamedRef& ref : snapshot.refs)
         if ((ref.remote.empty() && ref.name == identifier)
             || (!ref.remote.empty() && ref.remote + "/" + ref.name == identifier))
-            if (const auto revision = std::ranges::find(snapshot.revisions, ref.target, &Revision::oid);
-                revision != snapshot.revisions.end())
+            if (const auto revision = std::ranges::find(revisions, ref.target, &Revision::oid);
+                revision != revisions.end())
                 return &*revision;
     return nullptr;
 }
 
 const Revision* RebaseBranchRoot(
-    const RepoSnapshot& snapshot, std::string_view source, std::string_view destination)
+    const RepoSnapshot& snapshot, std::string_view source, std::string_view destination,
+    std::span<const Revision> revisions)
 {
-    const Revision* source_revision = ResolveSnapshotRevision(snapshot, source);
-    const Revision* destination_revision = ResolveSnapshotRevision(snapshot, destination);
+    if (revisions.empty()) revisions = snapshot.revisions;
+    const Revision* source_revision = ResolveSnapshotRevision(snapshot, source, revisions);
+    const Revision* destination_revision = ResolveSnapshotRevision(snapshot, destination, revisions);
     if (source_revision == nullptr || destination_revision == nullptr)
         return nullptr;
     std::unordered_map<std::string_view, const Revision*> by_oid;
-    for (const Revision& revision : snapshot.revisions)
+    for (const Revision& revision : revisions)
         by_oid.emplace(revision.oid, &revision);
     const auto ancestors = [&](const Revision* start) {
         std::unordered_set<std::string_view> result;

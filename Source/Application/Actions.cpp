@@ -92,26 +92,28 @@ SDL_Process* StartBackgroundProcess(const char* const* arguments)
 std::vector<std::string> FindAbandonRevisions(
     const std::string& root, const std::string& selected)
 {
-    std::vector<std::string> result{selected};
     git_repository* raw = nullptr;
     if (git_repository_open_ext(&raw, root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
         return {};
     std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw, git_repository_free);
-    git_oid selected_oid{};
-    if (git_oid_fromstr(&selected_oid, selected.c_str(), git_repository_oid_type(repository.get())) != GIT_OK)
+    gg_repository* raw_gg = nullptr;
+    if (gg_repository_attach(&raw_gg, repository.get()) != GIT_OK)
         return {};
-    git_revwalk* raw_walk = nullptr;
-    if (git_revwalk_new(&raw_walk, repository.get()) != GIT_OK) return {};
-    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
-    if (git_revwalk_push_glob(walk.get(), "refs/*") != GIT_OK) return {};
-    git_oid candidate{};
-    while (git_revwalk_next(&candidate, walk.get()) == GIT_OK)
+    std::unique_ptr<gg_repository, decltype(&gg_repository_free)> gg(raw_gg, gg_repository_free);
+    // Match the core's live rewrite graph. Walking refs/* also traverses
+    // operation keepalive commits and superseded user commits retained for undo.
+    const std::string expression = "descendants(" + selected + ")";
+    gg_oid_array descendants{};
+    if (gg_repository_resolve_set(&descendants, gg.get(), expression.c_str()) != GIT_OK)
     {
-        if (git_oid_equal(&candidate, &selected_oid) != 0) continue;
-        const int descendant = git_graph_descendant_of(repository.get(), &candidate, &selected_oid);
-        if (descendant < 0) return {};
-        if (descendant != 0) result.emplace_back(git_oid_tostr_s(&candidate));
+        gg_oid_array_dispose(&descendants);
+        return {};
     }
+    std::vector<std::string> result;
+    result.reserve(descendants.count);
+    for (std::size_t index = 0; index < descendants.count; ++index)
+        result.emplace_back(git_oid_tostr_s(&descendants.ids[index]));
+    gg_oid_array_dispose(&descendants);
     return result;
 }
 
@@ -266,13 +268,12 @@ std::vector<std::string> Application::SelectedParentRevisions() const
 
 void Application::CreateChange(const std::string& parent)
 {
-    if (!_active_operation.empty())
+    if (!_active_operation.empty() || _snapshot == nullptr)
         return;
     const std::string selected_revision = parent == "@" ? CurrentCommit(*_snapshot)
         : !parent.empty()                              ? parent
         : _selected_revisions.size() == 1              ? _selected_revisions.front()
                                                         : "";
-    const auto selected = std::ranges::find(_history_revisions, selected_revision, &Revision::oid);
     // Preserve the working-copy shorthand once a gg workspace exists.
     // Resolving that shorthand to its object ID needlessly sends the core
     // through alias resolution (and touches alias reflogs). Before the first
@@ -281,75 +282,163 @@ void Application::CreateChange(const std::string& parent)
     const std::vector<std::string> create_parents = parent.empty() ? SelectedParentRevisions()
         : parent == "@" && !_snapshot->working_copy.empty()        ? std::vector<std::string>{"@"}
                                                                    : std::vector{selected_revision};
-    NewChange create{{}, create_parents, {}, {}, false};
-    std::vector<std::string> bookmarks;
-    for (const NamedRef& ref : _snapshot->refs)
-        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == selected_revision)
-            bookmarks.push_back(ref.name);
-    std::vector<Command> commands;
-    commands.emplace_back(std::move(create));
-    // Another empty, undescribed change would carry no useful boundary. Keep
-    // the newly-created child and splice its empty parent out of history.
-    if (selected != _history_revisions.end() && selected->empty && selected->description.empty()
-        && !selected->pushed)
-        commands.emplace_back(Abandon{{selected_revision}, true, false, {}});
-    if (!bookmarks.empty())
-        commands.emplace_back(Bookmark{GG_BOOKMARK_ADVANCE, std::move(bookmarks), "@", {}});
-    QueueCommands(std::move(commands), {}, {});
+    EnqueueAction(NewChange{{}, create_parents, {}, {}, false});
 }
 
 bool Application::IsLocked(const std::string& identifier) const
 {
-    if (_snapshot == nullptr || identifier.empty())
+    if (_snapshot == nullptr)
         return false;
-    std::string oid = identifier == "@" ? CurrentCommit(*_snapshot) : identifier;
-    const auto ref = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& candidate) {
-        return candidate.name == oid;
-    });
-    if (ref != _snapshot->refs.end())
-        oid = ref->target;
-    const auto revision = std::ranges::find_if(_history_revisions, [&](const Revision& candidate) {
-        return candidate.oid == oid || std::ranges::find(candidate.aliases, oid) != candidate.aliases.end();
-    });
-    return revision != _history_revisions.end() && revision->pushed;
+    const Revision* revision = ResolveSnapshotRevision(*_snapshot, identifier, _history_revisions);
+    return revision != nullptr && revision->pushed;
+}
+
+bool Application::RewritesLockedCommit(const std::string& identifier) const
+{
+    if (_snapshot == nullptr)
+        return false;
+    const Revision* source = ResolveSnapshotRevision(*_snapshot, identifier, _history_revisions);
+    if (source == nullptr)
+        return false;
+    std::unordered_set<std::string> affected{source->oid};
+    bool changed = true;
+    while (changed)
+    {
+        changed = false;
+        for (const Revision& revision : _history_revisions)
+        {
+            if (affected.contains(revision.oid))
+            {
+                if (revision.pushed) return true;
+                continue;
+            }
+            if (std::ranges::any_of(revision.parents,
+                    [&](const std::string& parent) { return affected.contains(parent); }))
+            {
+                if (revision.pushed) return true;
+                affected.insert(revision.oid);
+                changed = true;
+            }
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> Application::DropRewriteRoots() const
+{
+    if (_snapshot == nullptr)
+        return {};
+    const Revision* source = ResolveSnapshotRevision(*_snapshot, _pending_drop.source, _history_revisions);
+    const Revision* target = ResolveSnapshotRevision(*_snapshot, _pending_drop.target, _history_revisions);
+    if (source == nullptr || target == nullptr || source == target)
+        return {};
+    if (_pending_drop.action == DropAction::Rebase)
+    {
+        if (_pending_drop.entire_branch)
+            source = RebaseBranchRoot(*_snapshot, source->oid, target->oid, _history_revisions);
+        if (source == nullptr || (source->parents.size() == 1 && source->parents.front() == target->oid))
+            return {};
+        return {source->oid};
+    }
+    if (_pending_drop.action == DropAction::Squash)
+    {
+        if (_pending_drop.entire_branch)
+        {
+            const Revision* root = RebaseBranchRoot(*_snapshot, source->oid, target->oid, _history_revisions);
+            if (root != nullptr)
+                source = root;
+        }
+        return {source->oid, target->oid};
+    }
+
+    // Compare the original and requested stack order. The unchanged prefix,
+    // including a destination that remains the base, is only read by reorder.
+    const auto path = [this](const Revision* tip, const Revision* base) {
+        std::vector<std::string> segment;
+        while (tip != nullptr)
+        {
+            segment.push_back(tip->oid);
+            if (tip == base)
+            {
+                std::ranges::reverse(segment);
+                return segment;
+            }
+            tip = tip->parents.size() == 1
+                ? ResolveSnapshotRevision(*_snapshot, tip->parents.front(), _history_revisions) : nullptr;
+        }
+        return std::vector<std::string>{};
+    };
+    auto segment = path(source, target);
+    if (segment.empty())
+        segment = path(target, source);
+    if (segment.empty())
+        return {};
+    auto reordered = segment;
+    reordered.erase(std::ranges::find(reordered, source->oid));
+    auto position = std::ranges::find(reordered, target->oid);
+    if (DropPlacement(_pending_drop.action) == GG_REORDER_AFTER)
+        ++position;
+    reordered.insert(position, source->oid);
+    for (std::size_t index = 0; index < segment.size(); ++index)
+        if (segment[index] != reordered[index])
+            return {segment[index]};
+    return {};
 }
 
 bool Application::DialogModifiesLockedCommit() const
 {
+    if (_snapshot == nullptr)
+        return false;
     switch (_dialog)
     {
-    case Dialog::Commit: return IsLocked(_snapshot->working_copy);
+    case Dialog::Commit: return RewritesLockedCommit(_snapshot->working_copy);
     case Dialog::Metaedit:
-    case Dialog::Split: return IsLocked(_selected_revision);
-    case Dialog::Abandon:
-        return _abandon_modifies_locked;
+    {
+        const Revision* revision = ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions);
+        if (revision == nullptr)
+            return false;
+        const std::string author = revision->author + (revision->author_email.empty()
+            ? "" : " <" + revision->author_email + ">");
+        return (_input_primary != revision->description || _input_secondary != author)
+            && RewritesLockedCommit(_dialog_revision);
+    }
+    case Dialog::Split: return RewritesLockedCommit(_dialog_revision);
+    case Dialog::Abandon: return RewritesLockedCommit(_dialog_revision) || _abandon_modifies_locked;
     case Dialog::Rebase:
     {
         const Revision* source = RebaseSource();
-        return IsLocked(source == nullptr ? _input_secondary : source->oid);
+        const Revision* destination = ResolveSnapshotRevision(*_snapshot, _input_primary, _history_revisions);
+        if (source != nullptr && destination != nullptr && source->parents.size() == 1
+            && source->parents.front() == destination->oid)
+            return false;
+        return RewritesLockedCommit(source == nullptr ? _input_secondary : source->oid);
     }
     case Dialog::Squash:
     {
         std::string destination = _input_secondary;
         if (destination.empty())
         {
-            const auto source = std::ranges::find(_history_revisions, _selected_revision, &Revision::oid);
+            const auto source = std::ranges::find(_history_revisions, _dialog_revision, &Revision::oid);
             if (source != _history_revisions.end() && !source->parents.empty())
                 destination = source->parents.front();
         }
-        return IsLocked(_selected_revision) || IsLocked(destination);
+        return RewritesLockedCommit(_dialog_revision) || RewritesLockedCommit(destination);
     }
-    case Dialog::Restore: return IsLocked(_selected_revision) || IsLocked(_input_primary);
+    case Dialog::Restore:
+        if (!_input_primary.empty()
+            && ResolveSnapshotRevision(*_snapshot, _input_primary, _history_revisions)
+                == ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions))
+            return false;
+        return RewritesLockedCommit(_dialog_revision);
     case Dialog::Reconcile:
     {
-        const Revision* source = RebaseBranchRoot(*_snapshot, _input_tertiary, _input_filesets);
-        return IsLocked(source == nullptr ? _input_tertiary : source->oid);
+        const Revision* source = RebaseBranchRoot(*_snapshot, _input_tertiary, _input_filesets, _history_revisions);
+        return RewritesLockedCommit(source == nullptr ? _input_tertiary : source->oid);
     }
     case Dialog::ConfirmDrop:
     {
-        const Revision* source = _pending_drop.entire_branch
-            ? RebaseBranchRoot(*_snapshot, _pending_drop.source, _pending_drop.target) : nullptr;
-        return IsLocked(source == nullptr ? _pending_drop.source : source->oid) || IsLocked(_pending_drop.target);
+        return std::ranges::any_of(DropRewriteRoots(),
+            [this](const std::string& oid) { return RewritesLockedCommit(oid); });
     }
     case Dialog::ConfirmLocked: return true;
     default: return false;
@@ -370,7 +459,22 @@ void Application::QueueCommands(
 {
     if (!_active_operation.empty())
         return;
-    if (std::ranges::none_of(revisions, [this](const std::string& revision) { return IsLocked(revision); }))
+    std::erase_if(commands, [this](const Command& command) {
+        const auto same_revision = [this](const auto& move) {
+            if (_snapshot == nullptr)
+                return false;
+            const Revision* source = ResolveSnapshotRevision(*_snapshot, move.source, _history_revisions);
+            return source != nullptr && source == ResolveSnapshotRevision(*_snapshot, move.destination, _history_revisions);
+        };
+        if (const auto* move = std::get_if<MoveFiles>(&command))
+            return same_revision(*move);
+        if (const auto* move = std::get_if<MoveDiffLines>(&command))
+            return same_revision(*move);
+        return false;
+    });
+    if (commands.empty())
+        return;
+    if (std::ranges::none_of(revisions, [this](const std::string& revision) { return RewritesLockedCommit(revision); }))
     {
         if (!commands.empty() && EnqueueAction(std::move(commands.front())))
             for (Command& command : commands | std::views::drop(1))
@@ -435,8 +539,8 @@ void Application::PollAbandonRevisions()
         {
             _error_message = "Could not determine the changes in this branch.";
             _input_flag_tertiary = false;
-            _abandon_revisions = {_selected_revision};
-            _abandon_revisions_revision = _selected_revision;
+            _abandon_revisions = {_dialog_revision};
+            _abandon_revisions_revision = _dialog_revision;
             _abandon_revisions_requested.clear();
             _abandon_revisions_complete = false;
             return;
@@ -493,19 +597,11 @@ void Application::RequestAbandon(const std::string& revision, bool include_desce
     if (_selected_revision != revision)
         SelectRevision(revision);
     const auto selected = std::ranges::find(_history_revisions, revision, &Revision::oid);
-    if (!include_descendants && selected != _history_revisions.end() && selected->empty
-        && selected->description.empty() && !selected->pushed)
-    {
-        std::vector<Command> commands;
-        commands.emplace_back(Abandon{{revision}, true, false, {}});
-        // gg temporarily supplies a writable replacement when the current
-        // change is abandoned. Move to the old parent afterwards so that
-        // replacement becomes unreachable instead of appearing in history.
-        if (revision == _snapshot->working_copy && !selected->parents.empty())
-            commands.emplace_back(Edit{selected->parents.front()});
-        QueueCommands(std::move(commands), {revision},
-            "Abandoning this empty change will modify locked history.");
-    }
+    const bool has_refs = std::ranges::any_of(
+        _snapshot->refs, [&](const NamedRef& ref) { return ref.target == revision; });
+    if (!include_descendants && selected != _history_revisions.end() && selected->empty && !has_refs
+        && !RewritesLockedCommit(revision))
+        EnqueueAction(Abandon{{revision}, false, false, {}});
     else
     {
         OpenDialog(Dialog::Abandon);
@@ -541,16 +637,38 @@ bool Application::CanSubmitDialog() const
 {
     switch (_dialog)
     {
+    case Dialog::Commit:
+    case Dialog::Metaedit:
+    case Dialog::Squash:
+    case Dialog::Split:
+    case Dialog::Abandon:
+    case Dialog::Restore:
+    case Dialog::Bookmark:
+    case Dialog::Tag:
+    case Dialog::ConfirmLocked:
+        if (_snapshot == nullptr || _snapshot->generation != _dialog_snapshot_generation)
+            return false;
+        if (_dialog != Dialog::ConfirmLocked
+            && ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions) == nullptr)
+            return false;
+        break;
+    default: break;
+    }
+    switch (_dialog)
+    {
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::Rebase:
         return HasText(_input_primary) && _snapshot != nullptr
             && _snapshot->generation == _dialog_snapshot_generation
             && CurrentCommit(*_snapshot) == _input_secondary;
+    case Dialog::Squash:
+        return (!_input_flag_tertiary || !_input_secondary.empty())
+            && (_input_secondary.empty()
+                || ResolveSnapshotRevision(*_snapshot, _input_secondary, _history_revisions) != nullptr);
     case Dialog::Split: return HasText(_input_filesets);
-    case Dialog::Squash: return !_input_flag_tertiary || !_input_secondary.empty();
     case Dialog::Abandon:
         return !_input_flag_tertiary
-            || (_abandon_revisions_complete && _abandon_revisions_revision == _selected_revision);
+            || (_abandon_revisions_complete && _abandon_revisions_revision == _dialog_revision);
     case Dialog::Bookmark:
         return HasText(_input_primary);
     case Dialog::BookmarkRename:
@@ -585,8 +703,8 @@ bool Application::CanSubmitDialog() const
                });
     case Dialog::ConfirmDrop:
         return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
-            && ResolveSnapshotRevision(*_snapshot, _pending_drop.source) != nullptr
-            && ResolveSnapshotRevision(*_snapshot, _pending_drop.target) != nullptr;
+            && ResolveSnapshotRevision(*_snapshot, _pending_drop.source, _history_revisions) != nullptr
+            && ResolveSnapshotRevision(*_snapshot, _pending_drop.target, _history_revisions) != nullptr;
     case Dialog::Credentials:
         return HasText(_input_primary) && (_input_mode == 1
             || (_input_mode == 2 ? HasText(_input_secondary) : HasText(_input_filesets)));

@@ -176,9 +176,11 @@ bool ContainsInsensitive(std::string_view haystack, std::string_view needle);
 std::string FileUrl(const std::string& path);
 std::string RepositoryName(const std::string& root);
 const std::string& CurrentCommit(const RepoSnapshot& snapshot);
-const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier);
+const Revision* ResolveSnapshotRevision(const RepoSnapshot& snapshot, std::string_view identifier,
+    std::span<const Revision> revisions = {});
 const Revision* RebaseBranchRoot(
-    const RepoSnapshot& snapshot, std::string_view source, std::string_view destination);
+    const RepoSnapshot& snapshot, std::string_view source, std::string_view destination,
+    std::span<const Revision> revisions = {});
 std::string LimitedFragment(std::string_view text, std::size_t maximum);
 
 } // namespace ApplicationInternal

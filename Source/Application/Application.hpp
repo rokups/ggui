@@ -250,6 +250,8 @@ private:
     void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
         std::string warning);
     bool IsLocked(const std::string& revision) const;
+    bool RewritesLockedCommit(const std::string& revision) const;
+    std::vector<std::string> DropRewriteRoots() const;
     bool DialogModifiesLockedCommit() const;
     const Revision* RebaseSource() const;
     static gg_reorder_placement DropPlacement(DropAction action);
@@ -356,6 +358,7 @@ private:
     std::uint64_t _dialog_snapshot_generation = 0;
 
     Dialog _dialog = Dialog::None;
+    std::string _dialog_revision;
     std::string _input_primary;
     std::string _input_secondary;
     std::string _input_tertiary;

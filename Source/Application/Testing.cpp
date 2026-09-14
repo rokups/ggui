@@ -13,9 +13,11 @@
 #include <fstream>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -50,6 +52,8 @@ Application& Application::Instance()
 
 void Application::OpenTestRepository(const std::string& path)
 {
+    if (_test_snapshot_mode)
+        ResetRepositoryState();
     _test_snapshot_mode = false;
 #ifdef GGUI_TESTING
     _engine.SetCommandsSuppressedForTest(false);
@@ -98,7 +102,8 @@ std::vector<std::string> Application::VisibleHistoryRevisionsForTest() const
     if (_snapshot == nullptr) return result;
     result.reserve(_visible_revisions.size());
     for (const int index : _visible_revisions)
-        result.push_back(_history_revisions[static_cast<std::size_t>(index)].oid);
+        if (index >= 0 && static_cast<std::size_t>(index) < _history_revisions.size())
+            result.push_back(_history_revisions[static_cast<std::size_t>(index)].oid);
     return result;
 }
 
@@ -246,6 +251,34 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _engine.SetCommandsSuppressedForTest(true);
 #endif
     std::vector<Revision> revisions = std::move(snapshot.revisions);
+    // Synthetic fixtures may list parents first; history views require children
+    // first. Preserve fixture order wherever the graph does not constrain it.
+    std::vector<Revision> ordered_revisions;
+    ordered_revisions.reserve(revisions.size());
+    std::unordered_map<std::string, std::size_t> revision_indices;
+    for (std::size_t index = 0; index < revisions.size(); ++index)
+        if (!revision_indices.emplace(revisions[index].oid, index).second)
+            throw std::invalid_argument("test history contains a duplicate revision");
+    std::vector<std::size_t> child_counts(revisions.size());
+    for (const Revision& revision : revisions)
+        for (const std::string& parent : revision.parents)
+            if (const auto found = revision_indices.find(parent); found != revision_indices.end())
+                ++child_counts[found->second];
+    std::set<std::size_t> ready;
+    for (std::size_t index = 0; index < revisions.size(); ++index)
+        if (child_counts[index] == 0) ready.insert(index);
+    while (!ready.empty())
+    {
+        const std::size_t index = *ready.begin();
+        ready.erase(ready.begin());
+        for (const std::string& parent : revisions[index].parents)
+            if (const auto found = revision_indices.find(parent); found != revision_indices.end())
+                if (--child_counts[found->second] == 0) ready.insert(found->second);
+        ordered_revisions.push_back(std::move(revisions[index]));
+    }
+    if (ordered_revisions.size() != revisions.size())
+        throw std::invalid_argument("test history contains a cycle");
+    revisions = std::move(ordered_revisions);
     if (snapshot.repository_generation == 0)
         snapshot.repository_generation = snapshot.generation == 0 ? 1 : snapshot.generation;
     _snapshot = std::make_shared<RepoSnapshot>(std::move(snapshot));

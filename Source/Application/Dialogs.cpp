@@ -22,6 +22,9 @@ void Application::OpenDialog(Dialog dialog)
     if (!_active_operation.empty() && dialog != Dialog::Credentials)
         return;
     _dialog = dialog;
+    _dialog_revision = dialog == Dialog::Commit && _snapshot != nullptr
+        ? CurrentCommit(*_snapshot) : _selected_revision;
+    _dialog_snapshot_generation = _snapshot == nullptr ? 0 : _snapshot->generation;
     _input_primary.clear();
     _input_secondary.clear();
     _input_tertiary.clear();
@@ -32,17 +35,17 @@ void Application::OpenDialog(Dialog dialog)
     _input_mode = 0;
     if (dialog == Dialog::Abandon)
     {
-        _abandon_revisions = {_selected_revision};
-        _abandon_revisions_revision = _selected_revision;
+        _abandon_revisions = {_dialog_revision};
+        _abandon_revisions_revision = _dialog_revision;
         _abandon_revisions_requested.clear();
         _abandon_revisions_complete = false;
         _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
-        _abandon_modifies_locked = IsLocked(_selected_revision);
+        _abandon_modifies_locked = RewritesLockedCommit(_dialog_revision);
     }
     if (dialog == Dialog::Metaedit)
     {
         const auto selected = std::ranges::find_if(
-            _history_revisions, [this](const Revision& revision) { return revision.oid == _selected_revision; });
+            _history_revisions, [this](const Revision& revision) { return revision.oid == _dialog_revision; });
         if (selected != _history_revisions.end())
         {
             _input_primary = selected->description;
@@ -207,8 +210,8 @@ void Application::RenderDialogs()
         ImGui::TextDisabled("Leave empty to commit all changed files.");
         break;
     case Dialog::Metaedit:
-        TextLabelledId("Edit metadata for ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Edit metadata for ", _dialog_revision, RevisionPrefix(_dialog_revision),
+            CommitIdColor(_dialog_revision == _snapshot->working_copy));
         DialogMultiline("Description", &_input_primary, 100.0f, focus_first && !_input_flag);
         DialogInput("Author", "Name <email>", &_input_secondary, focus_first && _input_flag);
         break;
@@ -234,8 +237,8 @@ void Application::RenderDialogs()
         break;
     }
     case Dialog::Squash:
-        TextLabelledId("Squash ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Squash ", _dialog_revision, RevisionPrefix(_dialog_revision),
+            CommitIdColor(_dialog_revision == _snapshot->working_copy));
         if (_input_flag_tertiary)
         {
             ImGui::TextWrapped("Squash this change and all descendants into its parent.");
@@ -248,17 +251,19 @@ void Application::RenderDialogs()
         }
         else
             DialogInput("Into", "defaults to parent", &_input_secondary, focus_first);
+        if (!_input_secondary.empty() && ResolveSnapshotRevision(*_snapshot, _input_secondary, _history_revisions) == nullptr)
+            ImGui::TextDisabled("Enter an unambiguous commit ID, bookmark, @ ancestor, or parents(revision).");
         DialogMultiline("Combined description", &_input_primary, 90.0f);
         break;
     case Dialog::Split:
-        TextLabelledId("Split ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Split ", _dialog_revision, RevisionPrefix(_dialog_revision),
+            CommitIdColor(_dialog_revision == _snapshot->working_copy));
         DialogMultiline("Selected filesets", &_input_filesets, 90.0f, focus_first);
         DialogInput("Selected description", "optional", &_input_primary);
         break;
     case Dialog::Restore:
-        TextLabelledId("Restore into ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Restore into ", _dialog_revision, RevisionPrefix(_dialog_revision),
+            CommitIdColor(_dialog_revision == _snapshot->working_copy));
         DialogInput("From", "defaults to parent", &_input_primary, focus_first);
         DialogMultiline("Filesets", &_input_filesets, 90.0f);
         ImGui::TextDisabled("Leave empty to restore all files.");
@@ -266,31 +271,31 @@ void Application::RenderDialogs()
     case Dialog::Abandon:
     {
         PollAbandonRevisions();
-        TextLabelledId("Abandon ", _selected_revision, RevisionPrefix(_selected_revision),
-            CommitIdColor(_selected_revision == _snapshot->working_copy));
+        TextLabelledId("Abandon ", _dialog_revision, RevisionPrefix(_dialog_revision),
+            CommitIdColor(_dialog_revision == _snapshot->working_copy));
         ImGui::SameLine();
-        ImGui::TextWrapped("and restack its descendants. This remains undoable.");
-        if (_selected_revision == _snapshot->working_copy)
+        ImGui::TextWrapped("and restack its descendants. Local history changes remain undoable.");
+        if (_dialog_revision == _snapshot->working_copy)
             ImGui::TextDisabled("A new empty working-copy change will be created at its parents.");
         if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary))
         {
             if (_input_flag_tertiary)
-                RequestAbandonRevisions(_selected_revision);
+                RequestAbandonRevisions(_dialog_revision);
             else
             {
-                _abandon_revisions = {_selected_revision};
-                _abandon_revisions_revision = _selected_revision;
+                _abandon_revisions = {_dialog_revision};
+                _abandon_revisions_revision = _dialog_revision;
                 _abandon_revisions_requested.clear();
                 _abandon_revisions_complete = false;
                 _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
-                _abandon_modifies_locked = IsLocked(_selected_revision);
+                _abandon_modifies_locked = RewritesLockedCommit(_dialog_revision);
             }
         }
         if (_input_flag_tertiary)
         {
             if (_abandon_revisions_requested.empty())
-                RequestAbandonRevisions(_selected_revision);
-            if (_abandon_revisions_complete && _abandon_revisions_revision == _selected_revision)
+                RequestAbandonRevisions(_dialog_revision);
+            if (_abandon_revisions_complete && _abandon_revisions_revision == _dialog_revision)
                 ImGui::TextDisabled("%zu changes will be abandoned.", _abandon_revisions.size());
             else
                 ImGui::TextDisabled("Calculating affected changes...");
@@ -300,8 +305,11 @@ void Application::RenderDialogs()
         {
             ImGui::Checkbox("Also delete bookmark from remote", &_input_flag_secondary);
             if (_input_flag_secondary)
+            {
+                ImGui::TextWrapped("Deleting a remote bookmark cannot be undone here.");
                 for (const RemoteBookmarkDelete& bookmark : _abandon_remote_bookmarks)
                     ImGui::TextDisabled("%s/%s", bookmark.remote.c_str(), bookmark.bookmark.c_str());
+            }
         }
         break;
     }
@@ -450,6 +458,13 @@ void Application::RenderDialogs()
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
+    if (_snapshot != nullptr && _snapshot->generation != _dialog_snapshot_generation
+        && (_dialog == Dialog::Commit || _dialog == Dialog::Metaedit || _dialog == Dialog::Squash
+            || _dialog == Dialog::Split || _dialog == Dialog::Abandon || _dialog == Dialog::Restore
+            || _dialog == Dialog::ConfirmLocked))
+        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
+            "Repository changed. Close this dialog and inspect the change again.");
+
     // Locked commit warning
     const bool modifies_locked = DialogModifiesLockedCommit();
     if (modifies_locked && _dialog != Dialog::ConfirmLocked)
@@ -506,43 +521,45 @@ void Application::RenderDialogs()
 
 void Application::SubmitDialog()
 {
+    if (!CanSubmitDialog() || (!_active_operation.empty() && _dialog != Dialog::Credentials))
+        return;
     switch (_dialog)
     {
     case Dialog::Clone: EnqueueAction(CloneRepository{_input_primary, _input_secondary}); break;
     case Dialog::Commit: EnqueueAction(Commit{_input_primary, SplitLines(_input_filesets)}); break;
-    case Dialog::Metaedit: EnqueueAction(Metaedit{_selected_revision, _input_primary, _input_secondary}); break;
+    case Dialog::Metaedit: EnqueueAction(Metaedit{_dialog_revision, _input_primary, _input_secondary}); break;
     case Dialog::Rebase: EnqueueAction(Rebase{_input_secondary, _input_primary}); break;
     case Dialog::Squash:
         EnqueueAction(Squash{
-            _selected_revision, _input_secondary, _input_primary, false, _input_flag_tertiary, true});
+            _dialog_revision, _input_secondary, _input_primary, false, _input_flag_tertiary, true});
         break;
-    case Dialog::Split: EnqueueAction(Split{_selected_revision, _input_primary, SplitLines(_input_filesets)}); break;
+    case Dialog::Split: EnqueueAction(Split{_dialog_revision, _input_primary, SplitLines(_input_filesets)}); break;
     case Dialog::Abandon:
     {
         // The cached list is only authoritative for the optional full-branch
         // calculation. A normal abandon must always submit the commit that is
         // named in the dialog, regardless of stale or cancelled calculations.
         const std::vector<std::string> revisions = _input_flag_tertiary
-            ? _abandon_revisions : std::vector<std::string>{_selected_revision};
+            ? _abandon_revisions : std::vector<std::string>{_dialog_revision};
         EnqueueAction(Abandon{revisions, _input_flag, false,
             _input_flag_secondary ? RemoteBookmarksAt(revisions)
                                   : std::vector<RemoteBookmarkDelete>{}});
         break;
     }
     case Dialog::Restore:
-        EnqueueAction(Restore{_input_primary, _selected_revision, SplitLines(_input_filesets)});
+        EnqueueAction(Restore{_input_primary, _dialog_revision, SplitLines(_input_filesets)});
         break;
     case Dialog::Bookmark:
         _pending_created_bookmark = _input_primary;
         EnqueueAction(Bookmark{GG_BOOKMARK_CREATE, {_input_primary},
-            _input_secondary.empty() ? _selected_revision : _input_secondary, {}});
+            _input_secondary.empty() ? _dialog_revision : _input_secondary, {}});
         break;
     case Dialog::BookmarkRename:
         EnqueueAction(Bookmark{GG_BOOKMARK_RENAME, {_input_secondary}, {}, _input_primary});
         break;
     case Dialog::Tag:
         EnqueueAction(Tag{GG_TAG_SET, {_input_primary},
-            _input_secondary.empty() ? _selected_revision : _input_secondary, _input_flag});
+            _input_secondary.empty() ? _dialog_revision : _input_secondary, _input_flag});
         break;
     case Dialog::RemoteAdd: EnqueueAction(AddRemote{_input_primary, _input_secondary}); break;
     case Dialog::WorkspaceAdd:

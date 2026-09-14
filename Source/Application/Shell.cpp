@@ -445,8 +445,19 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     if (ActionMenuItem(ICON_MS_FORMAT_LIST_BULLETED, "Simplify parents", nullptr, enabled))
     {
         select();
-        QueueCommands({SimplifyParents{{revision}}}, {revision},
-            "Simplifying the parents will rewrite a locked commit.");
+        const Revision* selected = ResolveSnapshotRevision(*_snapshot, revision, _history_revisions);
+        bool redundant = false;
+        if (selected != nullptr)
+            for (const std::string& parent : selected->parents)
+            {
+                const auto descendants = AbandonRevisions(parent, true);
+                redundant |= std::ranges::any_of(selected->parents, [&](const std::string& other) {
+                    return other != parent && std::ranges::find(descendants, other) != descendants.end();
+                }) || std::ranges::count(selected->parents, parent) > 1;
+            }
+        if (redundant)
+            QueueCommands({SimplifyParents{{revision}}}, {revision},
+                "Simplifying the parents will rewrite a locked commit.");
     }
 }
 

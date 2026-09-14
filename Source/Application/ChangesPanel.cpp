@@ -347,14 +347,16 @@ void Application::RenderChangeInformation()
     const float message_height = std::max(46.0f, ImGui::GetContentRegionAvail().y - button_height - 12.0f);
     if (ImGui::InputTextMultiline("##commit message", &_change_info_message, ImVec2(-1.0f, message_height)))
         _change_info_dirty = true;
-    ImGui::BeginDisabled(!_change_info_dirty || !_active_operation.empty());
-    const bool save = revision->pushed ? DangerButton("Save message") : ImGui::Button("Save message");
+    const bool message_changed = _change_info_dirty && _change_info_message != revision->description;
+    const bool modifies_locked = RewritesLockedCommit(revision->oid);
+    ImGui::BeginDisabled(!message_changed || !_active_operation.empty());
+    const bool save = modifies_locked ? DangerButton("Save message") : ImGui::Button("Save message");
     ImGui::EndDisabled();
 
     // Save message action
     if (save)
     {
-        if (revision->pushed)
+        if (modifies_locked)
         {
             _pending_change_info_save = true;
             QueueCommands({Describe{revision->oid, _change_info_message}}, {revision->oid},

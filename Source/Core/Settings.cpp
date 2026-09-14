@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "Settings.hpp"
 
-#include <git2.h>
+#include <gg/gg.h>
+#if __has_include(<git2-experimental/sys/errors.h>)
+#include <git2-experimental/sys/errors.h>
+#else
 #include <git2/sys/errors.h>
+#endif
 
 #include <algorithm>
 #include <charconv>

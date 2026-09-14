@@ -145,6 +145,38 @@ void Application::ApplyEvent(Event event)
                     }
                     _graph_generation = _snapshot->repository_generation;
                     RebuildIdPrefixes();
+                    // A bounded history view cannot prove that a missing
+                    // selection was removed. It can identify a rewritten
+                    // selection when a loaded commit carries its old ID.
+                    std::unordered_map<std::string, std::string> current_ids;
+                    for (const Revision& revision : _history_revisions)
+                        current_ids.emplace(revision.oid, revision.oid);
+                    for (const Revision& revision : _history_revisions)
+                        for (const std::string& alias : revision.aliases)
+                            current_ids.try_emplace(alias, revision.oid);
+                    const auto current_id = [&](const std::string& id) {
+                        const auto found = current_ids.find(id);
+                        return found == current_ids.end() ? id : found->second;
+                    };
+                    const std::string old_selection = _selected_revision;
+                    const std::string old_compare_to = _compare_to;
+                    _selected_revision = current_id(_selected_revision);
+                    std::vector<std::string> selections;
+                    for (const std::string& selected : _selected_revisions)
+                    {
+                        std::string id = current_id(selected);
+                        if (std::ranges::find(selections, id) == selections.end())
+                            selections.push_back(std::move(id));
+                    }
+                    _selected_revisions = std::move(selections);
+                    _compare_to = current_id(_compare_to);
+                    if (!_compare_to.empty()
+                        && (_selected_revision == _snapshot->working_copy || _selected_revision == _compare_to))
+                    {
+                        _compare_to.clear();
+                        _file_comparison = false;
+                    }
+                    _history_anchor = current_id(_history_anchor);
                     if (!_history_view->skeleton && !_history_anchor.empty())
                     {
                         const auto found = std::ranges::find_if(_history_view->items, [this](const HistoryItem& item) {
@@ -176,8 +208,9 @@ void Application::ApplyEvent(Event event)
                     {
                         _selected_revision = _history_revisions.front().oid;
                         _selected_revisions = {_selected_revision};
-                        RequestDiff(true);
                     }
+                    if (old_selection != _selected_revision || old_compare_to != _compare_to)
+                        RequestDiff(true);
                 }
                 else if constexpr (std::is_same_v<T, ChangedFilesReady>)
                 {

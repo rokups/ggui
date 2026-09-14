@@ -5,6 +5,7 @@
 #include "Model.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -87,7 +88,7 @@ struct NewChange
     bool no_edit = false;
 };
 struct Describe { std::string revision; std::string message; };
-struct Metaedit { std::string revision; std::string message; std::string author; };
+struct Metaedit { std::string revision; std::optional<std::string> message; std::string author; };
 struct Edit { std::string revision; };
 struct MoveChange
 {

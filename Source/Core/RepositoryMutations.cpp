@@ -49,9 +49,9 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 const std::vector<std::string> revisions{value.revision};
                 const StringArray array(revisions);
                 options.revisions = array.Get();
-                options.message = value.message.c_str();
+                options.message = value.message ? value.message->c_str() : nullptr;
                 options.author = value.author.c_str();
-                options.message_provided = !value.message.empty();
+                options.message_provided = value.message.has_value();
                 options.author_provided = !value.author.empty();
                 Mutate("edit metadata", [&](auto* out, auto* operation) {
                     return gg_repository_metaedit(out, gg, &options, operation);
@@ -233,8 +233,6 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const Abandon& value) {
-                for (const RemoteBookmarkDelete& bookmark : value.remote_bookmarks)
-                    RemoveRemoteBookmark(bookmark, false);
                 gg_abandon_options options = GG_ABANDON_OPTIONS_INIT;
                 const StringArray revisions(value.revisions);
                 options.revisions = revisions.Get();
@@ -243,6 +241,19 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 Mutate("abandon change", [&](auto* out, auto* operation) {
                     return gg_repository_abandon(out, gg, &options, operation);
                 });
+                try
+                {
+                    for (const RemoteBookmarkDelete& bookmark : value.remote_bookmarks)
+                        RemoveRemoteBookmark(bookmark, false);
+                }
+                catch (const std::exception& error)
+                {
+                    PublishSnapshot();
+                    throw std::runtime_error(std::string("Changes abandoned locally; remote bookmark deletion failed: ")
+                        + error.what() + ". Local history can be undone; remote deletions cannot.");
+                }
+                if (!value.remote_bookmarks.empty())
+                    PublishSnapshot();
             },
             [&](const RemoteBookmarkDelete& value) { RemoveRemoteBookmark(value, true); },
             [&](const AddRemote& value) {
@@ -259,8 +270,13 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 gg_restore_options options = GG_RESTORE_OPTIONS_INIT;
                 const StringArray filesets(value.filesets);
                 options.filesets = filesets.Get();
-                options.from = value.from.c_str();
-                options.into = value.into.c_str();
+                if (value.from.empty())
+                    options.changes_in = value.into.empty() ? "@" : value.into.c_str();
+                else
+                {
+                    options.from = value.from.c_str();
+                    options.into = value.into.empty() ? "@" : value.into.c_str();
+                }
                 Mutate("restore files", [&](auto* out, auto* operation) {
                     return gg_repository_restore(out, gg, &options, operation);
                 });
@@ -313,16 +329,14 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const Undo&) {
-                Mutation mutation;
-                gg_operation_options operation = OperationOptions();
-                Check(gg_repository_undo(&mutation.value, gg, &operation), "undo");
-                PublishSnapshot();
+                Mutate("undo", [&](auto* out, auto* operation) {
+                    return gg_repository_undo(out, gg, operation);
+                });
             },
             [&](const Redo&) {
-                Mutation mutation;
-                gg_operation_options operation = OperationOptions();
-                Check(gg_repository_redo(&mutation.value, gg, &operation), "redo");
-                PublishSnapshot();
+                Mutate("redo", [&](auto* out, auto* operation) {
+                    return gg_repository_redo(out, gg, operation);
+                });
             },
             [&](const RestoreOperation& value) {
                 Mutate("restore operation", [&](auto* out, auto* operation) {
