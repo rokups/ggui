@@ -90,6 +90,11 @@ selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
 the current working-copy change while preserving later edits where the patch
 applies. Working-copy file menus can also delete the file from disk.
+Changed-file and diff context menus can open the line-level **Blame** panel;
+each line links back to its introducing commit and can be filtered by author,
+commit, or content. The optional **Reflog** panel shows the HEAD move history,
+including commits retained only by the reflog; hashes can be revealed, copied,
+or preserved as a bookmark.
 Conflicted files stay in the normal Changes list with a red **C**. Their diff
 shows the stored conflict markers. Double-click a conflict, or use its context
 menu, to open the configured Git merge tool with base, local, and remote

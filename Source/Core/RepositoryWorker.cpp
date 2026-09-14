@@ -213,7 +213,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
     const bool quiet = (refresh != nullptr && !refresh->foreground) || std::holds_alternative<RebuildHistory>(command)
         || std::holds_alternative<ExpandHistoryRegion>(command)
         || std::holds_alternative<LoadDiff>(command)
-        || std::holds_alternative<LoadFileContent>(command);
+        || std::holds_alternative<LoadFileContent>(command)
+        || std::holds_alternative<LoadBlame>(command);
     if (!quiet)
         Post(OperationStarted{name});
     std::optional<BackgroundActivityGuard> background_activity;
@@ -225,6 +226,7 @@ void RepositoryEngine::Impl::Execute(const Command& command)
         background_scheduling.emplace();
     }
     if (!std::holds_alternative<LoadDiff>(command) && !std::holds_alternative<LoadFileContent>(command)
+        && !std::holds_alternative<LoadBlame>(command)
         && !std::holds_alternative<RebuildHistory>(command)
         && !std::holds_alternative<ExpandHistoryRegion>(command) && !std::holds_alternative<Refresh>(command))
     {
@@ -247,6 +249,7 @@ void RepositoryEngine::Impl::Execute(const Command& command)
                 std::lock_guard lock(queue_mutex);
                 std::erase_if(commands, [](const Command& queued) {
                     return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<LoadFileContent>(queued)
+                        || std::holds_alternative<LoadBlame>(queued)
                         || std::holds_alternative<Refresh>(queued)
                         || std::holds_alternative<RebuildHistory>(queued)
                         || std::holds_alternative<ExpandHistoryRegion>(queued);
@@ -256,7 +259,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
                 std::lock_guard lock(event_mutex);
                 std::erase_if(events, [](const Event& queued) {
                     return std::holds_alternative<SnapshotReady>(queued) || std::holds_alternative<DiffReady>(queued)
-                        || std::holds_alternative<FileContentReady>(queued);
+                        || std::holds_alternative<FileContentReady>(queued)
+                        || std::holds_alternative<BlameReady>(queued);
                 });
             }
         }
@@ -292,7 +296,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
         else if (const auto* value = std::get_if<Push>(&command))
             PushBookmark(*value);
         else if (std::holds_alternative<LoadDiff>(command)
-            || std::holds_alternative<LoadFileContent>(command))
+            || std::holds_alternative<LoadFileContent>(command)
+            || std::holds_alternative<LoadBlame>(command))
             return; // Interactive reads are dispatched by Enqueue().
         else if (const auto* value = std::get_if<ApplyPatch>(&command))
             ApplyPatchText(*value);
@@ -919,14 +924,17 @@ void RepositoryEngine::Impl::RunInspector()
             if (const auto* diff = std::get_if<LoadDiff>(&request.command))
                 LoadPatch(*diff, context.repository.get(), context.gg.get(), request.snapshot_generation,
                     request.request, request.session);
+            else if (const auto* file = std::get_if<LoadFileContent>(&request.command))
+                LoadFile(*file, context.repository.get(), context.gg.get(), request.request, request.session);
             else
-                LoadFile(std::get<LoadFileContent>(request.command), context.repository.get(), context.gg.get(),
-                    request.request, request.session);
+                LoadBlameFile(std::get<LoadBlame>(request.command), context.repository.get(), context.gg.get(),
+                    request.snapshot_generation, request.request, request.session);
         }
         catch (const std::exception& error)
         {
             if (request.session == session.load() && request.request == inspector_request.load())
-                Post(ErrorEvent{std::holds_alternative<LoadDiff>(request.command) ? "diff" : "file", error.what()});
+                Post(ErrorEvent{std::holds_alternative<LoadDiff>(request.command) ? "diff"
+                    : std::holds_alternative<LoadFileContent>(request.command) ? "file" : "blame", error.what()});
         }
     }
 }

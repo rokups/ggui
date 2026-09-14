@@ -185,7 +185,7 @@ struct RepositoryEngine::Impl
     std::thread worker;
     struct InspectorRequest
     {
-        std::variant<LoadDiff, LoadFileContent> command;
+        std::variant<LoadDiff, LoadFileContent, LoadBlame> command;
         std::string path;
         std::uint64_t repository_generation = 0;
         std::uint64_t snapshot_generation = 0;
@@ -266,6 +266,8 @@ struct RepositoryEngine::Impl
         std::uint64_t snapshot_generation, std::uint64_t request_generation, std::uint64_t request_session);
     void LoadFile(const LoadFileContent& command, git_repository* repository, gg_repository* gg_repository,
         std::uint64_t request_generation, std::uint64_t request_session);
+    void LoadBlameFile(const Ggui::LoadBlame& command, git_repository* repository, gg_repository* gg_repository,
+        std::uint64_t snapshot_generation, std::uint64_t request_generation, std::uint64_t request_session);
     void ApplyPatchText(const ApplyPatch& command);
     void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);

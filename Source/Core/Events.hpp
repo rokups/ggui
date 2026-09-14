@@ -25,6 +25,7 @@ struct ChangedFilesReady
 };
 struct DiffReady { DiffResult diff; };
 struct FileContentReady { std::string revision; std::string path; std::string contents; };
+struct BlameReady { BlameResult blame; };
 struct BackgroundActivityStarted { std::uint64_t id = 0; std::string name; };
 struct BackgroundActivityFinished { std::uint64_t id = 0; };
 struct OperationStarted { std::string name; };
@@ -45,7 +46,7 @@ struct CredentialRequest
 };
 
 using Event = std::variant<SnapshotReady, HistoryReady, ChangedFilesReady, DiffReady,
-    FileContentReady, BackgroundActivityStarted, BackgroundActivityFinished, OperationStarted,
+    FileContentReady, BlameReady, BackgroundActivityStarted, BackgroundActivityFinished, OperationStarted,
     OperationProgress, OperationFinished, ErrorEvent, WorkspaceRemoved, CredentialRequest>;
 
 struct CredentialResponse

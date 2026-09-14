@@ -165,7 +165,8 @@ void Application::RenderDialogs()
         "Add workspace###ggui action", "Rename workspace###ggui action", "Remove workspace###ggui action",
         "Push bookmark###ggui action",
         "Reconcile bookmark###ggui action", "Credentials###ggui action",
-        "Confirm operation###ggui action", "Locked commit warning###ggui action",
+        "Confirm operation###ggui action",
+        "Locked commit warning###ggui action",
         "Force bookmark move###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");

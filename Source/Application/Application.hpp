@@ -189,6 +189,8 @@ private:
     void RenderWorkspaces();
     void RenderRemotes();
     void RenderHistory();
+    void RenderReflog();
+    void RenderBlame();
     void RenderChanges();
     void RenderChangeInformation();
     void RenderDiff();
@@ -216,6 +218,7 @@ private:
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     void RequestDiff(bool fallback_to_first);
+    void RequestBlame(const std::string& revision, const std::string& path);
     void ToggleComparison(bool file_comparison);
     void ResetRepositoryState();
     std::pair<std::string, std::string> AdjacentRevisions(const std::string& revision) const;
@@ -272,6 +275,7 @@ private:
     std::shared_ptr<const HistoryView> _history_view;
     std::vector<Revision> _history_revisions;
     DiffResult _diff;
+    BlameResult _blame;
     std::vector<int> _visible_revisions;
     std::vector<GraphRow> _graph_rows;
     std::size_t _rendered_history_rows = 0;
@@ -299,6 +303,7 @@ private:
     std::unordered_map<std::string, std::vector<std::string>> _repository_selected_tags;
     std::unordered_map<std::string, std::vector<std::string>> _repository_selected_remotes;
     std::string _tag_filter;
+    std::string _reflog_filter;
     std::string _changes_filter;
     std::string _graph_filter;
     std::string _recent_filter;
@@ -393,6 +398,8 @@ private:
     bool _show_workspaces = true;
     bool _show_remotes = true;
     bool _show_history = true;
+    bool _show_reflog = false;
+    bool _show_blame = false;
     bool _show_changes = true;
     bool _show_change_info = true;
     bool _show_diff = true;
@@ -410,6 +417,10 @@ private:
     DiffWhitespaceMode _diff_whitespace_mode = DiffWhitespaceMode::Normal;
     int _diff_context_lines = 3;
     bool _diff_loading = false;
+    bool _blame_loading = false;
+    std::string _blame_revision;
+    std::string _blame_path;
+    std::string _blame_filter;
 #ifdef IMGUI_BUILD_TESTING
     ImGuiTestEngine* _test_engine = nullptr;
     bool _test_mode = false;

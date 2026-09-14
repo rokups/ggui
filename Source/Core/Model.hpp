@@ -88,6 +88,23 @@ struct Operation
     std::int64_t timestamp = 0;
 };
 
+// A single entry in the Git HEAD reflog. Reflog entries are intentionally
+// kept separate from gg operations: the former records every physical HEAD
+// move (including external Git commands), while the latter is the undoable gg
+// operation journal.
+struct ReflogEntry
+{
+    std::size_t index = 0;
+    std::string old_hash;
+    std::string new_hash;
+    bool old_commit_available = false;
+    bool new_commit_available = false;
+    std::string author;
+    std::string author_email;
+    std::int64_t timestamp = 0;
+    std::string message;
+};
+
 struct Workspace
 {
     std::string name;
@@ -113,6 +130,27 @@ struct Conflict
     std::size_t adds = 0;
 };
 
+struct BlameLine
+{
+    std::size_t line = 0;
+    std::size_t original_line = 0;
+    std::string revision;
+    std::string author;
+    std::string author_email;
+    std::int64_t timestamp = 0;
+    std::string summary;
+    std::string contents;
+    bool boundary = false;
+};
+
+struct BlameResult
+{
+    std::uint64_t generation = 0;
+    std::string revision;
+    std::string path;
+    std::vector<BlameLine> lines;
+};
+
 struct RepoSnapshot
 {
     enum class WorktreeState { Unscanned, Scanning, Ready, Stale };
@@ -133,6 +171,7 @@ struct RepoSnapshot
     WorktreeState worktree_state = WorktreeState::Unscanned;
     bool can_undo = false;
     bool can_redo = false;
+    std::vector<ReflogEntry> reflog;
 };
 
 enum class DiffWhitespaceMode

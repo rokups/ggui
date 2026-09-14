@@ -509,6 +509,11 @@ void Application::RenderDiff()
             || IsSymlinkMode(_diff.old_mode)
             || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
             || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
+        ImGui::BeginDisabled(stale || _diff.revision.empty() || _diff.path.empty());
+        if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))
+            RequestBlame(_diff.revision, _diff.path);
+        ImGui::EndDisabled();
+        ImGui::Separator();
         const bool move_unsupported = unsupported || !linear_source;
         if (!move_unsupported && !context_line.empty() && (linear_child || !parent.empty()))
         {

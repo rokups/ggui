@@ -180,6 +180,11 @@ void Application::RenderChanges()
             if (ActionMenuItem(ICON_MS_SAVE, "Save patch..."))
                 _open_save_patch = true;
             ImGui::EndDisabled();
+            const bool blame_available = !_diff.revision.empty() && !file.path.empty();
+            ImGui::BeginDisabled(!blame_available);
+            if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))
+                RequestBlame(_diff.revision, file.path);
+            ImGui::EndDisabled();
             const std::string external_diff_label = IconLabel(ICON_MS_OPEN_IN_NEW, "External diff");
             if (ImGui::BeginMenu(external_diff_label.c_str()))
             {

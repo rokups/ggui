@@ -208,6 +208,19 @@ void Application::RequestDiff(bool fallback_to_first)
     }
 }
 
+void Application::RequestBlame(const std::string& revision, const std::string& path)
+{
+    if (_snapshot == nullptr || revision.empty() || path.empty())
+        return;
+    _blame_revision = revision;
+    _blame_path = path;
+    _blame = {};
+    _blame_loading = true;
+    _show_blame = true;
+    if (!_engine.Enqueue(LoadBlame{revision, path}))
+        _blame_loading = false;
+}
+
 void Application::ToggleComparison(bool file_comparison)
 {
     if (!_compare_to.empty() && _file_comparison == file_comparison)
@@ -771,6 +784,10 @@ void Application::ResetRepositoryState()
     _history_view.reset();
     _history_revisions.clear();
     _diff = {};
+    _blame = {};
+    _blame_revision.clear();
+    _blame_path.clear();
+    _blame_filter.clear();
     _visible_revisions.clear();
     _graph_rows.clear();
     _history_hovered_track = -1;
@@ -807,11 +824,13 @@ void Application::ResetRepositoryState()
     _open_apply_patch = false;
     _bookmark_filter.clear();
     _tag_filter.clear();
+    _reflog_filter.clear();
     _changes_filter.clear();
     _graph_filter.clear();
     _built_filter.clear();
     _built_bookmarks.clear();
     _diff_loading = false;
+    _blame_loading = false;
     _background_activities.clear();
     _default_layout = true;
     _status_message.clear();

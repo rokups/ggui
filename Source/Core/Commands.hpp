@@ -62,6 +62,7 @@ struct LoadDiff
     bool file_comparison = false;
 };
 struct LoadFileContent { std::string revision; std::string path; };
+struct LoadBlame { std::string revision; std::string path; };
 
 struct ApplyPatch { std::string text; std::string path; };
 struct ResolveConflict
@@ -183,7 +184,7 @@ struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; 
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, RebuildHistory,
     ExpandHistoryRegion, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
+    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, LoadBlame, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
     Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, WorkspaceRemove, TrackPaths, UntrackPaths, ChmodPaths>;

@@ -102,6 +102,16 @@ void Application::ApplyEvent(Event event)
                     }
                     if (repository_changed || old_selection != _selected_revision || old_compare_to != _compare_to)
                         RequestDiff(true);
+                    if (repository_changed)
+                    {
+                        _blame = {};
+                        _blame_revision.clear();
+                        _blame_path.clear();
+                        _blame_filter.clear();
+                        _blame_loading = false;
+                    }
+                    else if (_show_blame && !_blame_revision.empty() && !_blame_path.empty())
+                        RequestBlame(_blame_revision, _blame_path);
                 }
                 else if constexpr (std::is_same_v<T, HistoryReady>)
                 {
@@ -251,6 +261,14 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, FileContentReady>)
                     OpenTemporaryFileInEditor(value);
+                else if constexpr (std::is_same_v<T, BlameReady>)
+                {
+                    if (_snapshot == nullptr || value.blame.generation != _snapshot->generation
+                        || value.blame.revision != _blame_revision || value.blame.path != _blame_path)
+                        return;
+                    _blame = std::move(value.blame);
+                    _blame_loading = false;
+                }
                 else if constexpr (std::is_same_v<T, BackgroundActivityStarted>)
                     _background_activities.insert_or_assign(value.id, std::move(value.name));
                 else if constexpr (std::is_same_v<T, BackgroundActivityFinished>)
@@ -294,6 +312,8 @@ void Application::ApplyEvent(Event event)
                     }
                     if (value.operation == "diff")
                         _diff_loading = false;
+                    if (value.operation == "blame")
+                        _blame_loading = false;
                     if (value.operation == "history")
                         _history_expansion_pending.clear();
                     if (value.operation == "bookmark")

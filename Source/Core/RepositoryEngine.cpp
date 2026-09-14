@@ -44,7 +44,8 @@ bool RepositoryEngine::Enqueue(Command command)
         _impl->RequestHistory(std::move(query), std::move(expand->id), expand->merge_history);
         return true;
     }
-    if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command))
+    if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command)
+        || std::holds_alternative<LoadBlame>(command))
     {
         std::string path;
         std::uint64_t repository_generation = 0;
@@ -71,8 +72,10 @@ bool RepositoryEngine::Enqueue(Command command)
             queued.request = request;
             if (auto* diff = std::get_if<LoadDiff>(&command))
                 queued.command = std::move(*diff);
+            else if (auto* file = std::get_if<LoadFileContent>(&command))
+                queued.command = std::move(*file);
             else
-                queued.command = std::move(std::get<LoadFileContent>(command));
+                queued.command = std::move(std::get<LoadBlame>(command));
             _impl->inspector_requests.push_back(std::move(queued));
         }
         _impl->inspector_cv.notify_one();
@@ -80,12 +83,18 @@ bool RepositoryEngine::Enqueue(Command command)
     }
     {
         std::lock_guard lock(_impl->queue_mutex);
-        if (std::holds_alternative<LoadDiff>(command))
+        if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command)
+            || std::holds_alternative<LoadBlame>(command))
             std::erase_if(_impl->commands,
-                [](const Command& queued) { return std::holds_alternative<LoadDiff>(queued); });
+                [](const Command& queued) {
+                    return std::holds_alternative<LoadDiff>(queued)
+                        || std::holds_alternative<LoadFileContent>(queued)
+                        || std::holds_alternative<LoadBlame>(queued);
+                });
         else if (std::holds_alternative<CloseRepository>(command))
             std::erase_if(_impl->commands, [](const Command& queued) {
-                return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<Refresh>(queued)
+                return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<LoadFileContent>(queued)
+                    || std::holds_alternative<LoadBlame>(queued) || std::holds_alternative<Refresh>(queued)
                     || std::holds_alternative<RebuildHistory>(queued)
                     || std::holds_alternative<ExpandHistoryRegion>(queued);
             });

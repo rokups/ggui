@@ -2,6 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <git2/reflog.h>
+#if __has_include(<git2-experimental/sys/errors.h>)
+#include <git2-experimental/sys/errors.h>
+#else
+#include <git2/sys/errors.h>
+#endif
+
 #include <algorithm>
 #include <memory>
 #include <tuple>
@@ -10,6 +17,83 @@
 namespace Ggui
 {
 using namespace RepositoryInternal;
+
+namespace
+{
+
+struct ReflogDeleter
+{
+    void operator()(git_reflog* value) const { git_reflog_free(value); }
+};
+using ReflogPtr = std::unique_ptr<git_reflog, ReflogDeleter>;
+
+std::string ReflogOid(const git_oid* oid)
+{
+    return oid == nullptr || git_oid_is_zero(oid) != 0 ? std::string{} : OidString(*oid);
+}
+
+bool CommitAvailable(git_repository* repository, const git_oid* oid)
+{
+    if (oid == nullptr || git_oid_is_zero(oid) != 0)
+        return false;
+    git_commit* raw = nullptr;
+    const int result = git_commit_lookup(&raw, repository, oid);
+    if (result == GIT_OK)
+    {
+        git_commit_free(raw);
+        return true;
+    }
+    // Reflogs can retain entries after their objects have been pruned. A
+    // missing object is expected and should not make an otherwise usable
+    // snapshot fail.
+    if (result == GIT_ENOTFOUND)
+    {
+        git_error_clear();
+        return false;
+    }
+    Check(result, "check reflog commit");
+    return false; // Check throws for every non-success result.
+}
+
+void ReadHeadReflog(RepoSnapshot& destination, git_repository* repository)
+{
+    git_reflog* raw = nullptr;
+    const int result = git_reflog_read(&raw, repository, "HEAD");
+    if (result == GIT_ENOTFOUND || result == GIT_EUNBORNBRANCH)
+    {
+        git_error_clear();
+        return;
+    }
+    Check(result, "load HEAD reflog");
+    ReflogPtr reflog(raw);
+    const std::size_t count = git_reflog_entrycount(reflog.get());
+    destination.reflog.reserve(count);
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        const git_reflog_entry* source = git_reflog_entry_byindex(reflog.get(), index);
+        if (source == nullptr)
+            continue;
+        const git_oid* old_oid = git_reflog_entry_id_old(source);
+        const git_oid* new_oid = git_reflog_entry_id_new(source);
+        ReflogEntry entry;
+        entry.index = index;
+        entry.old_hash = ReflogOid(old_oid);
+        entry.new_hash = ReflogOid(new_oid);
+        entry.old_commit_available = CommitAvailable(repository, old_oid);
+        entry.new_commit_available = CommitAvailable(repository, new_oid);
+        if (const git_signature* committer = git_reflog_entry_committer(source); committer != nullptr)
+        {
+            entry.author = committer->name == nullptr ? "" : committer->name;
+            entry.author_email = committer->email == nullptr ? "" : committer->email;
+            entry.timestamp = committer->when.time;
+        }
+        const char* message = git_reflog_entry_message(source);
+        entry.message = message == nullptr ? "" : message;
+        destination.reflog.push_back(std::move(entry));
+    }
+}
+
+} // namespace
 
 bool RepositoryEngine::Impl::Sync(bool report_progress, const std::vector<std::string>& paths)
 {
@@ -105,6 +189,11 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
         result->operations.push_back(
             {OidString(source.oid), source.description == nullptr ? "" : source.description, source.time});
     }
+
+    // The HEAD reflog is deliberately loaded independently of gg's operation
+    // journal. It includes moves made by external Git clients and therefore is
+    // the reliable recovery trail shown by the Reflog panel.
+    ReadHeadReflog(*result, git.get());
 
     gg_operation_capabilities capabilities{};
     Check(gg_repository_operation_capabilities(&capabilities, gg), "load operation capabilities");

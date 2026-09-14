@@ -151,6 +151,8 @@ void Application::RenderFrame()
         if (_show_workspaces) RenderWorkspaces();
         if (_show_remotes) RenderRemotes();
         if (_show_history) RenderHistory();
+        if (_show_reflog) RenderReflog();
+        if (_show_blame) RenderBlame();
         if (_show_changes) RenderChanges();
         if (_show_change_info) RenderChangeInformation();
         if (_show_diff) RenderDiff();
@@ -209,6 +211,8 @@ void Application::SetupDockspace()
         ImGui::DockBuilderDockWindow("Workspaces", reference_bottom);
         ImGui::DockBuilderDockWindow("Remotes", reference_bottom);
         ImGui::DockBuilderDockWindow("History", history);
+        ImGui::DockBuilderDockWindow("Reflog", diff);
+        ImGui::DockBuilderDockWindow("Blame", diff);
         ImGui::DockBuilderDockWindow("Changes", change_list);
         ImGui::DockBuilderDockWindow("Change information", change_information);
         ImGui::DockBuilderDockWindow("Diff", diff);
@@ -301,6 +305,8 @@ void Application::RenderMenuBar()
             ImGui::MenuItem("Remotes", nullptr, &_show_remotes);
             ImGui::Separator();
             ImGui::MenuItem("History", nullptr, &_show_history);
+            ImGui::MenuItem("Reflog", nullptr, &_show_reflog);
+            ImGui::MenuItem("Blame", nullptr, &_show_blame);
             ImGui::MenuItem("Changes", nullptr, &_show_changes);
             ImGui::MenuItem("Change information", nullptr, &_show_change_info);
             ImGui::MenuItem("Diff", nullptr, &_show_diff);
@@ -319,6 +325,7 @@ void Application::RenderMenuBar()
             _default_layout = true;
             _show_bookmarks = _show_tags = _show_workspaces = _show_remotes = true;
             _show_history = _show_changes = _show_change_info = _show_diff = true;
+            _show_reflog = _show_blame = false;
             _show_operations = false;
         }
         ImGui::EndMenu();

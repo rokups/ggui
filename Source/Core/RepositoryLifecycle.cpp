@@ -94,6 +94,10 @@ void RepositoryEngine::Impl::Close()
         inspector_requests.clear();
         ++inspector_request;
     }
+    {
+        std::lock_guard lock(event_mutex);
+        std::erase_if(events, [](const Event& queued) { return std::holds_alternative<BlameReady>(queued); });
+    }
     inspector_cv.notify_all();
     history_cv.notify_all();
 }

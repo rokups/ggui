@@ -331,8 +331,14 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _file_comparison = false;
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
     _diff_loading = false;
+    _blame = {};
+    _blame_revision.clear();
+    _blame_path.clear();
+    _blame_filter.clear();
+    _blame_loading = false;
     _graph_generation = 0;
     _graph_filter.clear();
+    _reflog_filter.clear();
     _history_observed_filter.clear();
     _history_requested_filter.clear();
     _history_anchor.clear();

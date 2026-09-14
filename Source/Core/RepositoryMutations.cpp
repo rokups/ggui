@@ -396,7 +396,8 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                                 || std::holds_alternative<RebuildHistory>(queued)
                                 || std::holds_alternative<ExpandHistoryRegion>(queued)
                                 || std::holds_alternative<LoadDiff>(queued)
-                                || std::holds_alternative<LoadFileContent>(queued);
+                                || std::holds_alternative<LoadFileContent>(queued)
+                                || std::holds_alternative<LoadBlame>(queued);
                         });
                     }
                     Post(WorkspaceRemoved{value.root, true});
@@ -443,6 +444,7 @@ std::string CommandName(const Command& command)
             [](const AddRemote&) { return "add remote"; },
             [](const DeleteRemote&) { return "delete remote"; },
             [](const LoadDiff&) { return "diff"; }, [](const LoadFileContent&) { return "load file"; },
+            [](const LoadBlame&) { return "blame"; },
             [](const ApplyPatch&) { return "apply patch"; },
             [](const ResolveConflict&) { return "resolve conflict"; },
             [](const RevertFile&) { return "revert file"; },

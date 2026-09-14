@@ -212,6 +212,7 @@ add_library(ggui_core STATIC
   Source/Core/RepositoryRemote.cpp
   Source/Core/RepositorySnapshot.cpp
   Source/Core/RepositoryDiff.cpp
+  Source/Core/RepositoryBlame.cpp
   Source/Core/RepositoryWorkingCopy.cpp
   Source/Core/RepositoryMutations.cpp
   Source/Core/RepositoryWorker.cpp
@@ -266,6 +267,8 @@ add_executable(ggui
   Source/Application/SettingsWindow.cpp
   Source/Application/RepositoryPanels.cpp
   Source/Application/HistoryPanel.cpp
+  Source/Application/ReflogPanel.cpp
+  Source/Application/BlamePanel.cpp
   Source/Application/ChangesPanel.cpp
   Source/Application/DiffPanel.cpp
   Source/Application/OperationsPanel.cpp

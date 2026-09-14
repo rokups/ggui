@@ -20,6 +20,48 @@ namespace Ggui
 {
 using namespace ApplicationInternal;
 
+namespace
+{
+
+struct FileDropPayload
+{
+    std::string source;
+    std::string path;
+};
+
+std::optional<std::string> ParseChangeDropPayload(const ImGuiPayload& payload)
+{
+    if (payload.Data == nullptr || payload.DataSize < 2)
+        return std::nullopt;
+    const char* begin = static_cast<const char*>(payload.Data);
+    const char* end = begin + payload.DataSize;
+    const char* terminator = std::find(begin, end, '\0');
+    if (terminator == end || terminator == begin)
+        return std::nullopt;
+    return std::string(begin, terminator);
+}
+
+// ChangesPanel emits two NUL-terminated strings. Validate both boundaries
+// before constructing strings so malformed external payloads cannot turn into
+// an arbitrary fileset or an out-of-bounds read.
+std::optional<FileDropPayload> ParseFileDropPayload(const ImGuiPayload& payload)
+{
+    if (payload.Data == nullptr || payload.DataSize < 2)
+        return std::nullopt;
+    const char* begin = static_cast<const char*>(payload.Data);
+    const char* end = begin + payload.DataSize;
+    const char* source_end = std::find(begin, end, '\0');
+    if (source_end == end || source_end == begin)
+        return std::nullopt;
+    const char* path_begin = source_end + 1;
+    const char* path_end = std::find(path_begin, end, '\0');
+    if (path_end == end || path_end == path_begin)
+        return std::nullopt;
+    return FileDropPayload{std::string(begin, source_end), std::string(path_begin, path_end)};
+}
+
+} // namespace
+
 void Application::UpdateGraphBuild()
 {
     if (_snapshot == nullptr) return;
@@ -120,6 +162,7 @@ void Application::RenderHistory()
 {
     if (!_reveal_revision.empty()) ImGui::SetNextWindowFocus();
     if (!ImGui::Begin("History", &_show_history)) { ImGui::End(); return; }
+    const bool actions_locked = !_active_operation.empty();
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##graph filter", "Search changes, IDs, bookmarks, tags", &_graph_filter);
     UpdateGraphBuild();
@@ -540,7 +583,6 @@ void Application::RenderHistory()
 #endif
             }
 
-            const bool actions_locked = !_active_operation.empty();
             if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
             {
                 // Ctrl is the copy modifier during a drag, not a request to
@@ -548,17 +590,34 @@ void Application::RenderHistory()
                 if (io.KeyCtrl
                     && std::ranges::find(_selected_revisions, revision.oid) == _selected_revisions.end())
                     SelectRevision(revision.oid, true);
-                ImGui::SetDragDropPayload("GGUI_CHANGE", revision.oid.c_str(), revision.oid.size() + 1);
+                // A right-button drag is an explicit request to choose the
+                // operation after the drop. Keep the ordinary left-button
+                // drag's modifier-driven behaviour intact.
+                const bool choose_action = ImGui::GetCurrentContext()->ActiveIdMouseButton
+                    == ImGuiMouseButton_Right;
+                ImGui::SetDragDropPayload(choose_action ? "GGUI_CHANGE_ACTION" : "GGUI_CHANGE",
+                    revision.oid.c_str(), revision.oid.size() + 1);
                 ImGui::EndDragDropSource();
             }
             std::optional<DropAction> hovered_drop;
             bool hovered_entire_branch = false;
             bool hovered_copy = false;
+            bool hovered_file_drop = false;
+            bool hovered_action_drop = false;
             if (!actions_locked && ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
                 const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
-                if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
+                if (dragging != nullptr && dragging->IsDataType("GGUI_FILE"))
+                {
+                    const std::optional<FileDropPayload> file = ParseFileDropPayload(*dragging);
+                    if (_compare_to.empty() && file.has_value() && file->source != revision.oid)
+                    {
+                        hovered_file_drop = true;
+                        RenderRevisionTooltip("Move file to change", revision.oid);
+                    }
+                }
+                else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
                 {
                     hovered_drop = ratio < 0.2f ? DropAction::ReorderBefore
                         : ratio >= 0.8f                 ? DropAction::ReorderAfter
@@ -582,19 +641,48 @@ void Application::RenderHistory()
                             DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
                     }
                 }
+                hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
+                if (hovered_action_drop)
+                    RenderRevisionTooltip("Choose an action for", revision.oid);
+                if (_compare_to.empty())
+                {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_FILE"))
+                    {
+                        const std::optional<FileDropPayload> file = ParseFileDropPayload(*payload);
+                        if (file.has_value() && file->source != revision.oid)
+                            QueueCommands({MoveFiles{file->source, revision.oid, {file->path}}},
+                                {file->source, revision.oid},
+                                "Moving this file will rewrite a locked source or destination commit.");
+                    }
+                }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
                 {
-                    const std::string source = static_cast<const char*>(payload->Data);
-                    if (source != revision.oid && hovered_drop.has_value())
+                    const std::optional<std::string> source = ParseChangeDropPayload(*payload);
+                    if (source.has_value() && *source != revision.oid && hovered_drop.has_value())
                     {
                         _pending_drop = {
-                            source, revision.oid, *hovered_drop, hovered_entire_branch, hovered_copy};
+                            *source, revision.oid, *hovered_drop, hovered_entire_branch, hovered_copy};
                         OpenDialog(Dialog::ConfirmDrop);
+                    }
+                }
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
+                {
+                    const std::optional<std::string> source = ParseChangeDropPayload(*payload);
+                    if (source.has_value() && *source != revision.oid)
+                    {
+                        _pending_drop = {*source, revision.oid, DropAction::ReorderBefore, false, false};
+                        _open_drop_actions = true;
                     }
                 }
                 ImGui::EndDragDropTarget();
             }
-            if (hovered_drop == DropAction::ReorderBefore || hovered_drop == DropAction::ReorderAfter)
+            if (hovered_file_drop)
+            {
+                const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
+                draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
+                    IM_COL32(90, 150, 255, 230), 4.0f, ImDrawFlags_None, 2.0f);
+            }
+            else if (hovered_drop == DropAction::ReorderBefore || hovered_drop == DropAction::ReorderAfter)
             {
                 const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
                 constexpr float rounding = 4.0f;
@@ -615,18 +703,87 @@ void Application::RenderHistory()
                 draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
                     marker_color, 4.0f, ImDrawFlags_None, 2.0f);
             }
+            else if (hovered_action_drop)
+            {
+                const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
+                draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
+                    IM_COL32(90, 150, 255, 230), 4.0f, ImDrawFlags_None, 2.0f);
+            }
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
-            if (ImGui::BeginPopupContextItem("change context"))
+            if (!hovered_action_drop && ImGui::BeginPopupContextItem("change context"))
             {
                 ImGui::BeginDisabled(actions_locked);
                 if (ActionMenuItem(ICON_MS_ADD, "New", "N")) { SelectRevision(revision.oid); CreateChange(revision.oid); }
                 RenderSelectedChangeActions(revision.oid, true);
                 ImGui::Separator();
+                const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
                 if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark..."))
                 { SelectRevision(revision.oid); OpenDialog(Dialog::Bookmark); }
+                const bool can_move_bookmark = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid;
+                });
+                const std::string move_bookmark = IconLabel(ICON_MS_MOVE_ITEM, "Move bookmark here");
+                if (ImGui::BeginMenu(move_bookmark.c_str(), can_move_bookmark))
+                {
+                    for (const NamedRef& ref : _snapshot->refs)
+                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
+                            && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
+                        {
+                            const BookmarkRelation relation =
+                                ClassifyBookmarkRelation(*_snapshot, ref.target, revision.oid);
+                            if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
+                            {
+                                OpenDialog(Dialog::ConfirmBookmarkMove);
+                                _input_primary = ref.name;
+                                _input_secondary = ref.target;
+                                _input_tertiary = revision.oid;
+                                _dialog_snapshot_generation = _snapshot->generation;
+                            }
+                            else
+                                _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
+                        }
+                    ImGui::EndMenu();
+                }
+                const std::string delete_bookmark = IconLabel(ICON_MS_DELETE, "Delete bookmark");
+                if (ImGui::BeginMenu(delete_bookmark.c_str(), bookmark != nullptr))
+                {
+                    for (const NamedRef& ref : _snapshot->refs)
+                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid
+                            && ActionMenuItem(ICON_MS_DELETE, ref.name))
+                            _engine.Enqueue(Bookmark{GG_BOOKMARK_DELETE, {ref.name}, {}, {}});
+                    ImGui::EndMenu();
+                }
+
+                ImGui::Separator();
+                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+                if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
+                        bookmark != nullptr && !remote.empty()))
+                    _engine.Enqueue(Push{bookmark->name, remote});
+                if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
+                        bookmark != nullptr && !_snapshot->remotes.empty()))
+                {
+                    OpenDialog(Dialog::PushTo);
+                    _input_primary = remote;
+                    _input_secondary = bookmark->name;
+                }
                 ImGui::EndDisabled();
                 ImGui::Separator();
+                // Keep the common commit-ID actions directly reachable (and
+                // compatible with the other reference panels). Additional
+                // aliases and the potentially long full description live in
+                // the compact Copy submenu below.
                 IdCopyMenuItems("commit ID", revision.oid, RevisionPrefix(revision.oid));
+                const std::string copy_label = IconLabel(ICON_MS_CONTENT_COPY, "Copy");
+                if (ImGui::BeginMenu(copy_label.c_str()))
+                {
+                    for (std::size_t alias_index = 0; alias_index < revision.aliases.size(); ++alias_index)
+                        IdCopyMenuItems("alias " + std::to_string(alias_index + 1), revision.aliases[alias_index],
+                            RevisionPrefix(revision.aliases[alias_index]));
+                    if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Full description", nullptr,
+                            !revision.description.empty()))
+                        ImGui::SetClipboardText(revision.description.c_str());
+                    ImGui::EndMenu();
+                }
                 ImGui::EndPopup();
             }
             ImGui::PopStyleVar();
@@ -660,12 +817,90 @@ void Application::RenderHistory()
     ImGui::PopStyleColor(2);
     ImGui::PopStyleVar();
 
+    // Keep a small, explicit insertion target after the visible graph. This
+    // remains useful when the last item is a collapsed region: resolve the
+    // final actual commit rather than treating the region marker as a target.
+    ImGui::InvisibleButton("move to end", ImVec2(-1.0f, FontPx(22.0f)));
+    const ImVec2 end_minimum = ImGui::GetItemRectMin();
+    const ImVec2 end_maximum = ImGui::GetItemRectMax();
+    std::string final_revision;
+    if (usable)
+        for (auto item = _history_view->items.rbegin(); item != _history_view->items.rend(); ++item)
+            if (item->kind == HistoryItemKind::Commit)
+            {
+                final_revision = item->revision.oid;
+                break;
+            }
+    bool hovered_end_drop = false;
+    bool hovered_end_action = false;
+    if (!actions_locked && !final_revision.empty() && ImGui::BeginDragDropTarget())
+    {
+        const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+        hovered_end_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE");
+        hovered_end_action = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
+        if (hovered_end_drop)
+            RenderRevisionTooltip(DropTooltip(DropAction::ReorderAfter), final_revision);
+        else if (hovered_end_action)
+            RenderRevisionTooltip("Choose an action after", final_revision);
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))
+        {
+            const std::optional<std::string> source = ParseChangeDropPayload(*payload);
+            if (source.has_value() && *source != final_revision)
+            {
+                _pending_drop = {*source, final_revision, DropAction::ReorderAfter, false, false};
+                OpenDialog(Dialog::ConfirmDrop);
+            }
+        }
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE_ACTION"))
+        {
+            const std::optional<std::string> source = ParseChangeDropPayload(*payload);
+            if (source.has_value() && *source != final_revision)
+            {
+                _pending_drop = { *source, final_revision, DropAction::ReorderAfter, false, false};
+                _open_drop_actions = true;
+            }
+        }
+        ImGui::EndDragDropTarget();
+    }
+    if (hovered_end_drop || hovered_end_action)
+        draw->AddRect({end_minimum.x + 1.0f, end_minimum.y + 1.0f},
+            {end_maximum.x - 1.0f, end_maximum.y - 1.0f}, IM_COL32(90, 150, 255, 230),
+            5.0f, ImDrawFlags_None, 2.0f);
+
     if (_history_scroll_frames > 0 && usable)
     {
         ImGui::SetScrollY(std::max(0.0f, _history_scroll_target - _history_anchor_offset));
         if (--_history_scroll_frames == 0) { _history_scroll_target = -1.0f; _history_anchor_offset = 0.0f; }
     }
     ImGui::EndChild();
+
+    // Right-button drags deliberately defer the operation choice until the
+    // pointer is released. Opening this popup outside the row loop prevents
+    // clipped rows from stealing its position and keeps context menus closed
+    // while the action payload is hovering.
+    if (_open_drop_actions)
+    {
+        ImGui::OpenPopup("Drop action");
+        _open_drop_actions = false;
+    }
+    if (ImGui::BeginPopup("Drop action"))
+    {
+        ImGui::BeginDisabled(actions_locked);
+        std::optional<DropAction> action;
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move before")) action = DropAction::ReorderBefore;
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move after")) action = DropAction::ReorderAfter;
+        if (ActionMenuItem(ICON_MS_MERGE, "Squash")) action = DropAction::Squash;
+        if (ActionMenuItem(ICON_MS_REBASE, "Rebase")) action = DropAction::Rebase;
+        if (action.has_value())
+        {
+            _pending_drop.action = *action;
+            _pending_drop.entire_branch = false;
+            if (_pending_drop.source != _pending_drop.target)
+                OpenDialog(Dialog::ConfirmDrop);
+        }
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+    }
     ImGui::End();
 }
 
