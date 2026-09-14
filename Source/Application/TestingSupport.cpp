@@ -35,10 +35,9 @@ bool Application::CaptureFramebufferForTest(
     if (byte_count > std::numeric_limits<Uint32>::max())
         return false;
 
-    const SDL_GPUTransferBufferCreateInfo transfer_info{
-        .usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
-        .size = static_cast<Uint32>(byte_count),
-    };
+    SDL_GPUTransferBufferCreateInfo transfer_info{};
+    transfer_info.usage = SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD;
+    transfer_info.size = static_cast<Uint32>(byte_count);
     SDL_GPUTransferBuffer* transfer_buffer =
         SDL_CreateGPUTransferBuffer(_gpu_device, &transfer_info);
     SDL_GPUCommandBuffer* command_buffer =
@@ -59,19 +58,17 @@ bool Application::CaptureFramebufferForTest(
         SDL_ReleaseGPUTransferBuffer(_gpu_device, transfer_buffer);
         return false;
     }
-    const SDL_GPUTextureRegion source{
-        .texture = _capture_texture,
-        .x = static_cast<Uint32>(x),
-        .y = static_cast<Uint32>(y),
-        .w = static_cast<Uint32>(width),
-        .h = static_cast<Uint32>(height),
-        .d = 1,
-    };
-    const SDL_GPUTextureTransferInfo destination{
-        .transfer_buffer = transfer_buffer,
-        .pixels_per_row = static_cast<Uint32>(width),
-        .rows_per_layer = static_cast<Uint32>(height),
-    };
+    SDL_GPUTextureRegion source{};
+    source.texture = _capture_texture;
+    source.x = static_cast<Uint32>(x);
+    source.y = static_cast<Uint32>(y);
+    source.w = static_cast<Uint32>(width);
+    source.h = static_cast<Uint32>(height);
+    source.d = 1;
+    SDL_GPUTextureTransferInfo destination{};
+    destination.transfer_buffer = transfer_buffer;
+    destination.pixels_per_row = static_cast<Uint32>(width);
+    destination.rows_per_layer = static_cast<Uint32>(height);
     SDL_DownloadFromGPUTexture(copy_pass, &source, &destination);
     SDL_EndGPUCopyPass(copy_pass);
     SDL_GPUFence* fence =

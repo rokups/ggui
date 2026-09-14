@@ -135,16 +135,15 @@ int Application::Run(int argc, char** argv)
             {
                 if (_capture_texture != nullptr)
                     SDL_ReleaseGPUTexture(_gpu_device, _capture_texture);
-                const SDL_GPUTextureCreateInfo texture_info{
-                    .type = SDL_GPU_TEXTURETYPE_2D,
-                    .format = SDL_GetGPUSwapchainTextureFormat(_gpu_device, _window),
-                    .usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-                    .width = width,
-                    .height = height,
-                    .layer_count_or_depth = 1,
-                    .num_levels = 1,
-                    .sample_count = SDL_GPU_SAMPLECOUNT_1,
-                };
+                SDL_GPUTextureCreateInfo texture_info{};
+                texture_info.type = SDL_GPU_TEXTURETYPE_2D;
+                texture_info.format = SDL_GetGPUSwapchainTextureFormat(_gpu_device, _window);
+                texture_info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+                texture_info.width = width;
+                texture_info.height = height;
+                texture_info.layer_count_or_depth = 1;
+                texture_info.num_levels = 1;
+                texture_info.sample_count = SDL_GPU_SAMPLECOUNT_1;
                 _capture_texture = SDL_CreateGPUTexture(_gpu_device, &texture_info);
                 _capture_width = _capture_texture == nullptr ? 0 : width;
                 _capture_height = _capture_texture == nullptr ? 0 : height;
@@ -155,14 +154,13 @@ int Application::Run(int argc, char** argv)
                 render_texture = _capture_texture;
 #endif
             ImGui_ImplSDLGPU3_PrepareDrawData(draw_data, command_buffer);
-            SDL_GPUColorTargetInfo target_info{
-                .texture = render_texture,
-                .clear_color = _dark_theme
-                    ? SDL_FColor{0.047f, 0.067f, 0.094f, 1.0f}
-                    : SDL_FColor{0.94f, 0.95f, 0.97f, 1.0f},
-                .load_op = SDL_GPU_LOADOP_CLEAR,
-                .store_op = SDL_GPU_STOREOP_STORE,
-            };
+            SDL_GPUColorTargetInfo target_info{};
+            target_info.texture = render_texture;
+            target_info.clear_color = _dark_theme
+                ? SDL_FColor{0.047f, 0.067f, 0.094f, 1.0f}
+                : SDL_FColor{0.94f, 0.95f, 0.97f, 1.0f};
+            target_info.load_op = SDL_GPU_LOADOP_CLEAR;
+            target_info.store_op = SDL_GPU_STOREOP_STORE;
             SDL_GPURenderPass* render_pass =
                 SDL_BeginGPURenderPass(command_buffer, &target_info, 1, nullptr);
             if (render_pass == nullptr)
