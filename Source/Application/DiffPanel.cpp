@@ -509,7 +509,11 @@ void Application::RenderDiff()
             || IsSymlinkMode(_diff.old_mode)
             || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
             || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
-        ImGui::BeginDisabled(stale || _diff.revision.empty() || _diff.path.empty());
+        const bool blame_available = !stale && !unsupported && _diff.selected_status != GIT_DELTA_ADDED
+            && _diff.selected_status != GIT_DELTA_DELETED
+            && _diff.selected_status != GIT_DELTA_UNTRACKED
+            && !_diff.revision.empty() && !_diff.path.empty();
+        ImGui::BeginDisabled(!blame_available);
         if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))
             RequestBlame(_diff.revision, _diff.path);
         ImGui::EndDisabled();

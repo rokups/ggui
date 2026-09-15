@@ -141,6 +141,25 @@ struct BlameLine
     std::string summary;
     std::string contents;
     bool boundary = false;
+
+    // The source hunk from which libgit2 traced this line. These values are
+    // normally the same as the final commit, but differ when copy tracking
+    // follows a line across a file or commit boundary.
+    std::size_t previous_line = 0;
+    std::string previous_revision;
+    std::string previous_path;
+    std::string previous_author;
+    std::string previous_author_email;
+    std::int64_t previous_timestamp = 0;
+    std::string previous_summary;
+
+    // The first-parent snapshot to use for the per-hunk "blame before this
+    // change" action. This is deliberately separate from the origin fields
+    // above: orig_commit_id describes where libgit2 found a copied/moved line,
+    // whereas this points at the commit immediately before the change that
+    // owns the line.
+    std::string blame_before_revision;
+    std::string blame_before_path;
 };
 
 struct BlameResult
@@ -149,6 +168,11 @@ struct BlameResult
     std::string revision;
     std::string path;
     std::vector<BlameLine> lines;
+    // Metadata for the file snapshot itself. History is intentionally
+    // bounded/collapsed in the UI, so blame keeps enough commit information
+    // to continue walking parents even when the viewed revision is not
+    // currently materialized in the history panel.
+    Revision viewed_revision;
 };
 
 struct RepoSnapshot

@@ -423,6 +423,27 @@ std::optional<FileContentReady> WaitForFileContent(RepositoryEngine& engine)
     return std::nullopt;
 }
 
+std::optional<BlameResult> WaitForBlame(RepositoryEngine& engine)
+{
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        for (const Event& event : engine.PollEvents())
+        {
+            if (const auto* blame = std::get_if<BlameReady>(&event))
+                return blame->blame;
+            if (const auto* error = std::get_if<ErrorEvent>(&event))
+            {
+                ADD_FAILURE() << error->operation << ": " << error->message;
+                return std::nullopt;
+            }
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    ADD_FAILURE() << "timed out waiting for blame";
+    return std::nullopt;
+}
+
 void ExerciseCommand(RepositoryEngine& engine, Command command, const std::string& operation)
 {
     engine.Enqueue(std::move(command));
@@ -2000,6 +2021,29 @@ TEST(RepositoryEngine, LoadsRootRevisionDiffs)
     ASSERT_TRUE(binary.has_value());
     EXPECT_TRUE(binary->after.empty());
     EXPECT_TRUE(binary->binary);
+}
+
+TEST(RepositoryEngine, LoadsBlameWithoutSyntheticTerminalLine)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return !value.revisions.empty();
+    });
+    ASSERT_NE(snapshot, nullptr);
+    const Revision& root = snapshot->revisions.back();
+
+    engine.Enqueue(LoadBlame{root.oid, "tracked.txt"});
+    const auto blame = WaitForBlame(engine);
+    ASSERT_TRUE(blame.has_value());
+    EXPECT_EQ(blame->revision, root.oid);
+    EXPECT_EQ(blame->path, "tracked.txt");
+    EXPECT_EQ(blame->viewed_revision.oid, root.oid);
+    ASSERT_EQ(blame->lines.size(), 1U);
+    EXPECT_EQ(blame->lines.front().line, 1U);
+    EXPECT_EQ(blame->lines.front().contents, "base");
+    EXPECT_EQ(blame->lines.front().revision, root.oid);
 }
 
 TEST(RepositoryEngine, LoadsFileContentFromARevision)
