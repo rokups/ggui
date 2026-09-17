@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <iterator>
 #include <ranges>
 #include <string>
@@ -414,12 +415,85 @@ void Application::RenderDiff()
 
     // Diff context-menu state
     static int context_row = -1;
+    static int context_display_row = -1;
     static bool context_has_selection = false;
     static std::vector<DiffLine> context_line;
     static std::vector<DiffLine> context_region;
     static std::vector<DiffLine> context_hunk;
     static std::string context_revision;
     static std::string context_path;
+
+    const auto [parent, child] = AdjacentRevisions(_diff.revision);
+    const auto source_revision = std::ranges::find(_history_revisions, _diff.revision, &Revision::oid);
+    const auto child_revision = std::ranges::find(_history_revisions, child, &Revision::oid);
+    const bool linear_source = source_revision != _history_revisions.end()
+        && source_revision->parents.size() == 1;
+    const bool linear_child = child_revision != _history_revisions.end()
+        && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision;
+    const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
+        return file.path == _diff.path && file.conflicted;
+    });
+    const bool unsupported_diff = _diff_loading || !_compare_to.empty() || !_active_operation.empty()
+        || conflicted || _diff.selected_status == GIT_DELTA_RENAMED
+        || _diff.selected_status == GIT_DELTA_COPIED || _diff.selected_status == GIT_DELTA_TYPECHANGE
+        || IsSymlinkMode(_diff.old_mode) || IsSymlinkMode(_diff.new_mode)
+        || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
+        || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode)
+        || (!plain && !diff.HasMappedLineNumbers());
+
+    diff.SetChangeControlsCallback(
+        [this, parent, child, linear_source, linear_child, unsupported_diff](int first, int end,
+            const ImVec2& control_size, float right_control_x) {
+        const bool mapped = diff.HasMappedLineNumbers() && first >= 0 && first < end
+            && end <= static_cast<int>(viewer_lines.size())
+            && std::all_of(viewer_lines.begin() + first, viewer_lines.begin() + end,
+                [&](const DiffLine& line) {
+                    return line.kind != DiffLineKind::Context && line.hunk >= 0
+                        && line.hunk == viewer_lines[static_cast<std::size_t>(first)].hunk;
+                });
+        const auto move_change = [&](const char* label, ImGuiDir direction, const std::string& destination,
+                                     bool target_valid, const char* tooltip) {
+            ImGui::BeginDisabled(unsupported_diff || !linear_source || !mapped || !target_valid);
+            const bool pressed = ImGui::InvisibleButton(label, control_size, ImGuiButtonFlags_EnableNav);
+            const ImVec2 minimum = ImGui::GetItemRectMin();
+            const ImVec2 maximum = ImGui::GetItemRectMax();
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                draw_list->AddRectFilled(minimum, maximum,
+                    ImGui::GetColorU32(ImGui::IsItemActive() ? ImGuiCol_ButtonActive : ImGuiCol_ButtonHovered));
+            const float center_y = (minimum.y + maximum.y) * 0.5f;
+            const float sign = direction == ImGuiDir_Left ? -1.0f : 1.0f;
+            const float tip_x = direction == ImGuiDir_Left ? minimum.x : maximum.x;
+            const float base_x = direction == ImGuiDir_Left ? maximum.x : minimum.x;
+            const float half_height = control_size.y * 0.4f;
+            const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+            // Keep each filled triangle inside the gutter, with its flat edge on the gutter edge.
+            // Disable the fill fringe so neither triangle bleeds into the text panes.
+            const ImDrawListFlags draw_flags = draw_list->Flags;
+            draw_list->Flags &= ~ImDrawListFlags_AntiAliasedFill;
+            draw_list->AddTriangleFilled(ImVec2(tip_x, center_y),
+                ImVec2(base_x, center_y + sign * half_height),
+                ImVec2(base_x, center_y - sign * half_height), color);
+            draw_list->Flags = draw_flags;
+            if (pressed)
+            {
+                const std::vector<DiffLine> lines(viewer_lines.begin() + first, viewer_lines.begin() + end);
+                QueueCommands({MoveDiffLines{_diff.revision, destination, _diff.path, lines}},
+                    {_diff.revision, destination},
+                    "Moving this change will rewrite a locked source or destination commit.");
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", tooltip);
+        };
+        // Narrow overlays sit inside the middle gutter without changing either pane's width.
+        const ImVec2 position = ImGui::GetCursorScreenPos();
+        move_change("Move change to parent", ImGuiDir_Right, parent, !parent.empty(),
+            "Move this change to the parent revision.");
+        ImGui::SetCursorScreenPos(ImVec2(right_control_x, position.y));
+        move_change("Move change to child", ImGuiDir_Left, child, linear_child,
+            "Move this change to the child revision.");
+    });
 
     // Diff line and hunk context menu
     const auto render_move_context = [&](auto& view, bool side_by_side) {
@@ -431,15 +505,26 @@ void Application::RenderDiff()
             && io.KeyCtrl && !io.KeyShift && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_C))
             view.Copy();
         const float line_height = std::max(view.GetLineHeight(), 1.0f);
-        const float content_y = ImGui::GetItemRectMin().y + ImGui::GetStyle().WindowPadding.y;
         const auto mouse_row = [&] {
-            return std::clamp(view.GetFirstVisibleLine()
-                    + static_cast<int>(std::max(ImGui::GetMousePos().y - content_y, 0.0f) / line_height),
-                0, std::max(0, static_cast<int>(viewer_lines.size()) - 1));
+            const int row_count = side_by_side ? static_cast<int>(diff.GetSideBySideRows().size())
+                : static_cast<int>(viewer_lines.size());
+            return std::clamp(static_cast<int>(std::floor(
+                    (ImGui::GetMousePos().y - view_window->DC.CursorStartPos.y) / line_height)),
+                0, std::max(0, row_count - 1));
         };
         if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
         {
-            context_row = mouse_row();
+            context_display_row = mouse_row();
+            context_row = context_display_row;
+            if (side_by_side && context_display_row < static_cast<int>(diff.GetSideBySideRows().size()))
+            {
+                const auto& row = diff.GetSideBySideRows()[static_cast<std::size_t>(context_display_row)];
+                const bool right_side = ImGui::GetMousePos().x >= diff.GetSideBySideSplitX();
+                context_row = right_side
+                    ? row.rightUnifiedLine : row.leftUnifiedLine;
+                if (context_row < 0)
+                    context_row = right_side ? row.leftUnifiedLine : row.rightUnifiedLine;
+            }
             context_revision = _diff.revision;
             context_path = _diff.path;
             context_line.clear();
@@ -452,8 +537,8 @@ void Application::RenderDiff()
                 if (clicked.kind != DiffLineKind::Context)
                     context_line.push_back(clicked);
 
-                int first = context_row;
-                int last = context_row;
+                int first = context_display_row;
+                int last = context_display_row;
                 if (view.AnyCursorHasSelection())
                 {
                     const TextEditor::CursorSelection selection = view.GetMainCursorSelection();
@@ -461,7 +546,7 @@ void Application::RenderDiff()
                     last = selection.end.line;
                     if (last > first && selection.end.column == 0)
                         --last;
-                    context_has_selection = context_row >= first && context_row <= last;
+                    context_has_selection = context_display_row >= first && context_display_row <= last;
                 }
                 if (!context_has_selection)
                 {
@@ -469,9 +554,11 @@ void Application::RenderDiff()
                     last = static_cast<int>(viewer_lines.size()) - 1;
                 }
                 const int hunk = clicked.hunk;
-                for (int row = std::max(first, 0);
-                     row <= last && row < static_cast<int>(viewer_lines.size()); ++row)
+                for (int row = 0; row < static_cast<int>(viewer_lines.size()); ++row)
                 {
+                    const int display_row = side_by_side ? diff.GetSideBySideRow(row) : row;
+                    if (context_has_selection && (display_row < first || display_row > last))
+                        continue;
                     const DiffLine& line = viewer_lines[static_cast<std::size_t>(row)];
                     if (line.kind != DiffLineKind::Context
                         && (context_has_selection || (hunk >= 0 && line.hunk == hunk)))
@@ -492,23 +579,8 @@ void Application::RenderDiff()
             view.Copy();
         ImGui::EndDisabled();
         ImGui::Separator();
-        const auto [parent, child] = AdjacentRevisions(_diff.revision);
-        const auto source_revision = std::ranges::find(_history_revisions, _diff.revision, &Revision::oid);
-        const auto child_revision = std::ranges::find(_history_revisions, child, &Revision::oid);
-        const bool linear_source = source_revision != _history_revisions.end()
-            && source_revision->parents.size() == 1;
-        const bool linear_child = child_revision != _history_revisions.end()
-            && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision;
-        const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
-            return file.path == _diff.path && file.conflicted;
-        });
         const bool stale = context_revision != _diff.revision || context_path != _diff.path;
-        const bool unsupported = stale || !_compare_to.empty() || !_active_operation.empty()
-            || conflicted || _diff.selected_status == GIT_DELTA_RENAMED
-            || _diff.selected_status == GIT_DELTA_COPIED || _diff.selected_status == GIT_DELTA_TYPECHANGE
-            || IsSymlinkMode(_diff.old_mode)
-            || IsSymlinkMode(_diff.new_mode) || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
-            || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode);
+        const bool unsupported = stale || unsupported_diff;
         const bool blame_available = !stale && !unsupported && _diff.selected_status != GIT_DELTA_ADDED
             && _diff.selected_status != GIT_DELTA_DELETED
             && _diff.selected_status != GIT_DELTA_UNTRACKED
@@ -523,12 +595,13 @@ void Application::RenderDiff()
         {
             const float line_height = std::max(view.GetLineHeight(), 1.0f);
             const float line_spacing = std::max(line_height - ImGui::GetTextLineHeight(), 0.0f);
-            const float line_y = view_window->DC.CursorStartPos.y + context_row * line_height - line_spacing * 0.5f;
+            const float line_y = view_window->DC.CursorStartPos.y + context_display_row * line_height
+                - line_spacing * 0.5f;
             ImVec2 highlight_minimum(view_window->InnerClipRect.Min.x, line_y);
             ImVec2 highlight_maximum(view_window->InnerClipRect.Max.x, line_y + line_height);
             if (side_by_side)
             {
-                const float split_x = view_window->DC.CursorStartPos.x + view_window->Size.x * 0.5f;
+                const float split_x = diff.GetSideBySideSplitX();
                 if (context_line.front().kind == DiffLineKind::Deletion)
                     highlight_maximum.x = split_x;
                 else
@@ -603,7 +676,10 @@ void Application::RenderDiff()
         for (int index = 0; index < static_cast<int>(viewer_gaps.size()); ++index)
         {
             const DiffGap& gap = viewer_gaps[static_cast<std::size_t>(index)];
-            const float y = view_window->DC.CursorStartPos.y + gap.row * line_height;
+            const int display_row = _diff_side_by_side ? diff.GetSideBySideRow(gap.row) : gap.row;
+            if (display_row < 0)
+                continue;
+            const float y = view_window->DC.CursorStartPos.y + display_row * line_height;
             if (y + line_height < view_window->InnerClipRect.Min.y || y > view_window->InnerClipRect.Max.y)
                 continue;
 

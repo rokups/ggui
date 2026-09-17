@@ -3732,6 +3732,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(DiffReady{make_diff()});
         context->Yield(3);
         FocusWindow(context, "Diff");
+        if (application.DiffSideBySideForTest())
+        {
+            context->ComboClick("View/Unified");
+            context->Yield();
+        }
         const auto diff_view = [&]() -> ImGuiWindow* {
             const ImGuiTestItemInfo view = context->ItemInfo("##diff view");
             ImGuiWindow* window = ImGui::FindWindowByName("Diff");
@@ -3837,6 +3842,23 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         };
         const auto open_line = [&](int line) {
             context->MouseMoveToPos(line_position(line));
+            context->MouseClick(ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+        };
+        const auto open_right_line = [&](int line) {
+            context->MouseMoveToPos(ImVec2(view.RectFull.Max.x - 150.0f,
+                view.RectFull.Min.y + ImGui::GetStyle().WindowPadding.y + (line + 0.5f) * line_height));
+            context->MouseClick(ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+        };
+        const auto side_line_position = [&](int line) {
+            return ImVec2(view.RectFull.Min.x + view.RectFull.GetWidth() * 0.3f,
+                view.RectFull.Min.y + ImGui::GetStyle().WindowPadding.y + (line + 0.5f) * line_height);
+        };
+        const auto open_side_left_line = [&](int line) {
+            context->MouseMoveToPos(side_line_position(line));
             context->MouseClick(ImGuiMouseButton_Right);
             context->Yield();
             context->SetRef("//$FOCUSED");
@@ -3981,35 +4003,107 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ComboClick("View/Side by Side");
         context->Yield();
         check_diff_highlight(false, 1);
-        check_diff_highlight(true, 2);
-        open_line(1);
+        check_diff_highlight(true, 1);
+        IM_CHECK(context->ItemExists("**/Move change to parent"));
+        IM_CHECK(context->ItemExists("**/Move change to child"));
+        const ImRect parent_arrow = context->ItemInfo("**/Move change to parent").RectFull;
+        const ImRect child_arrow = context->ItemInfo("**/Move change to child").RectFull;
+        const ImRect left_change = diff_highlight(false);
+        const ImRect right_change = diff_highlight(true);
+        // The overlays sit inside the middle line-number gutter; both panes retain their widths.
+        IM_CHECK_LE(std::fabs(parent_arrow.Min.x - left_change.Max.x), 0.01f);
+        IM_CHECK_LE(std::fabs(child_arrow.Max.x - right_change.Min.x), 0.01f);
+        IM_CHECK_LE(std::fabs(child_arrow.Max.x - parent_arrow.Min.x - glyph_width * 6.0f), 0.01f);
+        IM_CHECK_LT(parent_arrow.Max.x, child_arrow.Min.x);
+        IM_CHECK_LE(std::fabs(right_change.Min.x - left_change.Max.x - glyph_width * 6.0f), 0.01f);
+        IM_CHECK_LE(std::fabs(parent_arrow.GetWidth() - glyph_width * 0.75f), 0.01f);
+        IM_CHECK_LE(std::fabs(child_arrow.GetWidth() - parent_arrow.GetWidth()), 0.01f);
+        IM_CHECK_LE(std::fabs(parent_arrow.GetHeight() - line_height), 0.01f);
+        IM_CHECK_LE(std::fabs(child_arrow.GetHeight() - line_height), 0.01f);
+        IM_CHECK_LE(std::fabs(parent_arrow.GetCenter().y - right_change.GetCenter().y), 0.01f);
+        // Inspect the actual draw geometry: each arrow is a single solid triangle, with
+        // its base on the outer gutter edge and its tip pointing inward.
+        const auto check_triangle = [&](const ImRect& rect, bool left) {
+            const float base_x = left ? rect.Min.x : rect.Max.x;
+            const float tip_x = left ? rect.Max.x : rect.Min.x;
+            const ImVec2 white = ImGui::GetFontTexUvWhitePixel();
+            const ImU32 color = ImGui::GetColorU32(ImGuiCol_Text);
+            std::vector<ImVec2> vertices;
+            for (const ImDrawVert& vertex : diff_view()->DrawList->VtxBuffer)
+                if (vertex.col == color && vertex.uv.x == white.x && vertex.uv.y == white.y
+                    && vertex.pos.x >= rect.Min.x && vertex.pos.x <= rect.Max.x
+                    && vertex.pos.y > rect.Min.y && vertex.pos.y < rect.Max.y)
+                    vertices.push_back(vertex.pos);
+            IM_CHECK_EQ(vertices.size(), 3U);
+            IM_CHECK_EQ(std::ranges::count_if(vertices,
+                [&](const ImVec2& point) { return std::fabs(point.x - base_x) < 0.01f; }), 2);
+            IM_CHECK_EQ(std::ranges::count_if(vertices, [&](const ImVec2& point) {
+                return std::fabs(point.x - tip_x) < 0.01f
+                    && std::fabs(point.y - rect.GetCenter().y) < 0.01f;
+            }), 1);
+            IM_CHECK_EQ(std::ranges::count_if(vertices, [&](const ImVec2& point) {
+                return point.x == base_x
+                    && std::fabs(point.y - (rect.GetCenter().y - line_height * 0.4f)) < 0.01f;
+            }), 1);
+            IM_CHECK_EQ(std::ranges::count_if(vertices, [&](const ImVec2& point) {
+                return point.x == base_x
+                    && std::fabs(point.y - (rect.GetCenter().y + line_height * 0.4f)) < 0.01f;
+            }), 1);
+        };
+        check_triangle(parent_arrow, true);
+        check_triangle(child_arrow, false);
+        for (const auto& [label, destination] : {std::pair{"Move change to parent", "base"},
+                 std::pair{"Move change to child", "child"}})
+        {
+            context->ItemClick((std::string("**/") + label).c_str());
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            const MoveDiffLines& block_move = application.PendingMoveDiffLinesForTest();
+            IM_CHECK_EQ(block_move.source, "source");
+            IM_CHECK_EQ(block_move.destination, destination);
+            IM_CHECK_EQ(block_move.lines.size(), 2U);
+            IM_CHECK_EQ(block_move.lines[0].old_line, 40);
+            IM_CHECK_EQ(block_move.lines[1].new_line, 50);
+            context->SetRef("ggui action");
+            context->ItemClick("Cancel");
+            context->SetRef("Diff");
+        }
+        open_side_left_line(1);
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK(context->ItemExists("**/Move hunk to child"));
         IM_CHECK(!context->ItemExists("**/Move lines to child"));
         IM_CHECK(!context->ItemExists("**/Move selection to child"));
         highlight = line_highlight();
-        const float split_x = diff_view()->DC.CursorStartPos.x + diff_view()->Size.x * 0.5f;
-        IM_CHECK_LE(std::fabs(highlight.Max.x - split_x), 0.01f);
+        const float split_x = highlight.Max.x;
         IM_CHECK_LT(highlight.Min.x, split_x);
+        IM_CHECK_LE(std::fabs(split_x - left_change.Max.x), 0.01f);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
 
-        open_line(2);
+        // Right-clicking the second line number belongs to the right pane too.
+        context->MouseMoveToPos(ImVec2(split_x + glyph_width * 2.0f, right_change.GetCenter().y));
+        context->MouseClick(ImGuiMouseButton_Right);
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        IM_CHECK_LE(std::fabs(line_highlight().Min.x - split_x), 0.01f);
+        ImGui::ClosePopupToLevel(0, true);
+        context->Yield();
+
+        open_right_line(1);
         highlight = line_highlight();
         IM_CHECK_LE(std::fabs(highlight.Min.x - split_x), 0.01f);
         IM_CHECK_GT(highlight.Max.x, split_x);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
 
-        context->MouseMoveToPos(line_position(1));
+        context->MouseMoveToPos(side_line_position(1));
         context->MouseDown();
         context->Yield();
-        context->MouseMoveToPos(line_position(3));
+        context->MouseMoveToPos(side_line_position(3));
         context->Yield();
         context->MouseUp();
         context->Yield();
         check_selection_highlight();
-        open_line(2);
+        open_right_line(1);
         IM_CHECK(context->ItemExists("**/Move lines to child"));
         IM_CHECK(context->ItemExists("**/Move lines to parent"));
         IM_CHECK(!context->ItemExists("**/Move line to child"));
@@ -4036,6 +4130,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             {DiffLineKind::Deletion, 40, -1, 0},
             {DiffLineKind::Addition, -1, 50, 0},
             {DiffLineKind::Context, 41, 51, 0},
+            {},
         };
         application.ApplyEventForTest(DiffReady{std::move(working_result)});
         context->Yield(3);

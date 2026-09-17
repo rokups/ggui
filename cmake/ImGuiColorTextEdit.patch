@@ -1,29 +1,71 @@
 diff --git a/TextDiff.cpp b/TextDiff.cpp
-index d308483..51ce589 100644
+index d308483..1a2bc24 100644
 --- a/TextDiff.cpp
 +++ b/TextDiff.cpp
-@@ -11,0 +12 @@
+@@ -9,6 +9,7 @@
+ //	Include files
+ //
+ 
 +#include <algorithm>
-@@ -35,0 +37,3 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
+ #include <cmath>
+ 
+ #include "imgui_internal.h"
+@@ -33,6 +34,9 @@ TextDiff::TextDiff() {
+ //
+ 
+ void TextDiff::SetText(const std::string_view& left, const std::string_view& right) {
 +	selectionSide = Side::none;
 +	selecting = false;
 +
-@@ -49,5 +52,0 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
+ 	// split text into lines
+ 	std::vector<std::string_view> leftLines;
+ 	std::vector<std::string_view> rightLines;
+@@ -46,11 +50,6 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
+ 	colorizer.updateEntireDocument(leftDocument, language);
+ 	colorizer.updateEntireDocument(rightDocument, language);
+ 
 -	// setup line number decoration
 -	leftLineNumberDigits = static_cast<int>(std::log10(leftDocument.lineCount() + 1) + 1.0f);
 -	rightLineNumberDigits = static_cast<int>(std::log10(leftDocument.lineCount() + 1) + 1.0f);
 -	decoratorWidth = -(leftLineNumberDigits + rightLineNumberDigits + 4.0f);
 -
-@@ -83,0 +83,2 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
-+	SetLineNumbers({});
+ 	decoratorCallback = [this](TextEditor::Decorator& decorator) {
+ 		this->decorateLine(decorator);
+ 	};
+@@ -81,11 +80,93 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
+ 		}
+ 	}
+ 
++	if (lineInfo.empty()) {
++		lineInfo.emplace_back(0, 0, LineStatus::common);
++	}
 +
-@@ -88,0 +90,21 @@ void TextDiff::SetText(const std::string_view& left, const std::string_view& rig
++	SetLineNumbers({});
++	createSideBySideRows();
++
+ 	// set flag
+ 	updated = true;
+ }
+ 
+ 
 +//
 +//	TextDiff::SetLineNumbers
 +//
 +
 +void TextDiff::SetLineNumbers(const std::vector<std::pair<int, int>>& numbers) {
 +	lineNumbers = numbers.size() == lineInfo.size() ? numbers : std::vector<std::pair<int, int>>{};
++	for (size_t i = 0; i < lineNumbers.size(); i++) {
++		const auto [left, right] = lineNumbers[i];
++		const auto status = lineInfo[i].status;
++		const bool matches = status == LineStatus::common
++			? ((left > 0 && right > 0) || (left == 0 && right == 0))
++			: status == LineStatus::deleted ? left > 0 && right == 0
++				: left == 0 && right > 0;
++		if (!matches) {
++			lineNumbers.clear();
++			break;
++		}
++	}
 +	int maximumLeft = leftDocument.lineCount();
 +	int maximumRight = rightDocument.lineCount();
 +	if (!lineNumbers.empty()) {
@@ -39,7 +81,55 @@ index d308483..51ce589 100644
 +}
 +
 +
-@@ -122,0 +145,37 @@ void TextDiff::Render(const char* title, const ImVec2& size, bool border) {
++int TextDiff::GetSideBySideRow(int unifiedLine) const {
++	return unifiedLine >= 0 && unifiedLine < static_cast<int>(unifiedToSideRow.size())
++		? unifiedToSideRow[unifiedLine] : -1;
++}
++
++
++void TextDiff::createSideBySideRows() {
++	sideRows.clear();
++	unifiedToSideRow.resize(lineInfo.size());
++	for (int i = 0; i < static_cast<int>(lineInfo.size());) {
++		if (lineInfo[i].status == LineStatus::common) {
++			unifiedToSideRow[i] = static_cast<int>(sideRows.size());
++			sideRows.push_back({static_cast<int>(lineInfo[i].leftLine), static_cast<int>(lineInfo[i].rightLine), i, i});
++			i++;
++			continue;
++		}
++		auto begin = i;
++		std::vector<int> deleted;
++		std::vector<int> added;
++		while (i < static_cast<int>(lineInfo.size()) && lineInfo[i].status != LineStatus::common) {
++			(lineInfo[i].status == LineStatus::deleted ? deleted : added).push_back(i++);
++		}
++		for (size_t pair = 0; pair < std::max(deleted.size(), added.size()); pair++) {
++			SideBySideRow row;
++			row.changeBegin = begin;
++			row.changeEnd = i;
++			if (pair < deleted.size()) {
++				row.leftUnifiedLine = deleted[pair];
++				row.leftLine = static_cast<int>(lineInfo[deleted[pair]].leftLine);
++				unifiedToSideRow[deleted[pair]] = static_cast<int>(sideRows.size());
++			}
++			if (pair < added.size()) {
++				row.rightUnifiedLine = added[pair];
++				row.rightLine = static_cast<int>(lineInfo[added[pair]].rightLine);
++				unifiedToSideRow[added[pair]] = static_cast<int>(sideRows.size());
++			}
++			sideRows.push_back(row);
++		}
++	}
++}
++
++
+ //
+ //	TextDiff::SetLanguage
+ //
+@@ -120,11 +201,52 @@ void TextDiff::Render(const char* title, const ImVec2& size, bool border) {
+ }
+ 
+ 
 +//
 +//	TextDiff::Copy
 +//
@@ -77,15 +167,30 @@ index d308483..51ce589 100644
 +}
 +
 +
-@@ -179,2 +238 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ //
+ //	TextDiff::splitLines
+ //
+ 
+ void TextDiff::splitLines(std::vector<std::string_view>& result, const std::string_view& text) {
++	if (text.empty()) {
++		return;
++	}
++
+ 	size_t prev = CodePoint::skipBOM(text.begin(), text.end()) - text.begin();
+ 	size_t pos;
+ 
+@@ -176,23 +298,31 @@ void TextDiff::createCombinedView() {
+ 
+ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 	auto& line = lineInfo[decorator.line];
 -	auto lineLeft = static_cast<int>(line.leftLine + 1);
 -	auto lineRight = static_cast<int>(line.rightLine + 1);
 +	auto [lineLeft, lineRight] = getLineNumbers(static_cast<size_t>(decorator.line));
-@@ -181,0 +240,3 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 	auto color = ImGui::ColorConvertU32ToFloat4(palette.get(Color::lineNumber));
 +	auto left = lineLeft > 0 ? std::to_string(lineLeft) : "";
 +	auto right = lineRight > 0 ? std::to_string(lineRight) : "";
 +	auto marker = line.status == LineStatus::added ? '+' : line.status == LineStatus::deleted ? '-' : ' ';
-@@ -183,4 +244,3 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 
 -	switch(line.status) {
 -		case LineStatus::common:
 -			ImGui::TextColored(color, " %*d %*d  ", leftLineNumberDigits, lineLeft, rightLineNumberDigits, lineRight);
@@ -93,11 +198,11 @@ index d308483..51ce589 100644
 +	ImGui::TextColored(
 +		color, " %*s %*s %c", leftLineNumberDigits, left.c_str(), rightLineNumberDigits, right.c_str(), marker);
 +}
-@@ -188,3 +247,0 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 
 -		case LineStatus::added:
 -			ImGui::TextColored(color, " %*s %*d +", leftLineNumberDigits, "", rightLineNumberDigits, lineRight);
 -			break;
-@@ -192,3 +249,7 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 
 -		case LineStatus::deleted:
 -			ImGui::TextColored(color, " %*d %*s -", leftLineNumberDigits, lineLeft, rightLineNumberDigits, "");
 -			break;
@@ -108,22 +213,70 @@ index d308483..51ce589 100644
 +std::pair<int, int> TextDiff::getLineNumbers(size_t index) const {
 +	if (lineNumbers.size() == lineInfo.size()) {
 +		return lineNumbers[index];
-@@ -195,0 +257,6 @@ void TextDiff::decorateLine(TextEditor::Decorator& decorator) {
+ 	}
 +
 +	const auto& line = lineInfo[index];
 +	return {
 +		line.status == LineStatus::added ? 0 : static_cast<int>(line.leftLine + 1),
 +		line.status == LineStatus::deleted ? 0 : static_cast<int>(line.rightLine + 1)
 +	};
-@@ -271,0 +339 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ }
+ 
+ 
+@@ -215,7 +345,7 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 
+ 	// scroll to specified line (if required)
+ 	if (scrollToLineNumber >= 0) {
+-		scrollToLineNumber = std::min(scrollToLineNumber, static_cast<int>(lineInfo.size()));
++		scrollToLineNumber = std::min(scrollToLineNumber, static_cast<int>(sideRows.size()));
+ 
+ 		switch (scrollToAlignment) {
+ 			case Scroll::alignTop:
+@@ -241,7 +371,7 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 	}
+ 
+ 	// start rendering the widget
+-	ImGui::SetNextWindowContentSize(ImVec2(0.0f, glyphSize.y * lineInfo.size()));
++	ImGui::SetNextWindowContentSize(ImVec2(0.0f, glyphSize.y * sideRows.size()));
+ 	ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+ 	ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::ColorConvertU32ToFloat4(palette.get(Color::background)));
+ 	ImGui::BeginChild(title, size, border, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoNavInputs);
+@@ -252,7 +382,7 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 	// determine view parameters
+ 	leftLineNumberWidth = glyphSize.x * (leftLineNumberDigits + 4);
+ 	rightLineNumberWidth = glyphSize.x * (rightLineNumberDigits + 4);
+-	textColumnWidth = static_cast<float>(visibleSize.x - leftLineNumberWidth - rightLineNumberWidth) / 2.0f;
++	textColumnWidth = static_cast<float>(std::max(2.0f, visibleSize.x - leftLineNumberWidth - rightLineNumberWidth - style.ScrollbarSize - style.WindowPadding.x * 2.0f)) / 2.0f;
+ 
+ 	leftLineNumberPos = cursorScreenPos.x;
+ 	leftTextPos = leftLineNumberPos + leftLineNumberWidth;
+@@ -266,12 +396,15 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 	firstVisibleColumn = std::max(static_cast<int>(std::floor(textScroll / glyphSize.x)), 0);
+ 	lastVisibleColumn = static_cast<int>(std::floor((textScroll + textColumnWidth) / glyphSize.x));
+ 	firstVisibleLine = std::max(static_cast<int>(std::floor(ImGui::GetScrollY() / glyphSize.y)), 0);
+-	lastVisibleLine = std::min(static_cast<int>(std::floor((ImGui::GetScrollY() + visibleSize.y) / glyphSize.y)), static_cast<int>(lineInfo.size() - 1));
++	lastVisibleLine = sideRows.empty() ? -1 : std::min(static_cast<int>(std::floor((ImGui::GetScrollY() + visibleSize.y) / glyphSize.y)), static_cast<int>(sideRows.size()) - 1);
+ 
+ 	renderSideBySideBackground();
 +	renderSideBySideSelection();
-@@ -274,0 +343 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 	renderSideBySideText();
+ 	renderSideBySideTextScrollbars();
+ 	renderSideBySideMiniMap();
++	renderSideBySideControls();
 +	handleSideBySideSelection();
-@@ -281,0 +351,182 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
-+//
+ 
+ 	ImGui::EndChild();
+ 	ImGui::PopStyleColor();
+@@ -280,106 +413,242 @@ void TextDiff::renderSideBySide(const char* title, const ImVec2& size, bool bord
+ 
+ 
+ //
+-//	TextDiff::renderSideBySideBackground
 +//	TextDiff::renderSideBySideSelection
-+//
-+
+ //
+ 
+-void TextDiff::renderSideBySideBackground() {
+-	// render line numbers and text backgrounds
 +void TextDiff::renderSideBySideSelection() {
 +	if (!hasSideSelection()) {
 +		return;
@@ -133,7 +286,9 @@ index d308483..51ce589 100644
 +	auto& source = selectionSide == Side::left ? leftDocument : rightDocument;
 +	auto textPosition = selectionSide == Side::left ? leftTextPos : rightTextPos;
 +	auto textEnd = selectionSide == Side::left ? rightLineNumberPos : rightTextEnd;
-+	auto drawList = ImGui::GetWindowDrawList();
+ 	auto drawList = ImGui::GetWindowDrawList();
+-	auto y = ImGui::GetCursorScreenPos().y + firstVisibleLine * glyphSize.y;
+-	char buffer[32];
 +	auto cursorScreenPos = ImGui::GetCursorScreenPos();
 +	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
 +	drawList->PushClipRect(
@@ -145,8 +300,12 @@ index d308483..51ce589 100644
 +		if (!hasSideLine(row, selectionSide)) {
 +			continue;
 +		}
-+
-+		auto sourceLine = selectionSide == Side::left ? lineInfo[row].leftLine : lineInfo[row].rightLine;
+ 
+-	for (auto i = firstVisibleLine; i <= lastVisibleLine; i++) {
+-		auto& line = lineInfo[i];
+-		auto lineLeft = static_cast<int>(line.leftLine + 1);
+-		auto lineRight = static_cast<int>(line.rightLine + 1);
++		auto sourceLine = selectionSide == Side::left ? sideRows[row].leftLine : sideRows[row].rightLine;
 +		auto left = row == start.row ? start.column : 0;
 +		auto right = row == end.row ? end.column : source[sourceLine].maxColumn;
 +		auto y = cursorScreenPos.y + row * glyphSize.y - backgroundOffset;
@@ -155,31 +314,54 @@ index d308483..51ce589 100644
 +			ImVec2(textPosition + right * glyphSize.x - textScroll, y + glyphSize.y),
 +			palette.get(Color::selection));
 +	}
-+
+ 
+-		switch(line.status) {
+-			case LineStatus::common:
+-				snprintf(buffer, sizeof(buffer), " %*d", leftLineNumberDigits, lineLeft);
+-				drawList->AddText(ImVec2(leftLineNumberPos, y), palette.get(Color::lineNumber), buffer);
+-				snprintf(buffer, sizeof(buffer), " %*d", rightLineNumberDigits, lineRight);
+-				drawList->AddText(ImVec2(rightLineNumberPos, y), palette.get(Color::lineNumber), buffer);
+-				break;
 +	drawList->PopClipRect();
 +}
-+
-+
+ 
+-			case LineStatus::added:
+-				snprintf(buffer, sizeof(buffer), " %*d +", rightLineNumberDigits, lineRight);
+-				drawList->AddText(ImVec2(rightLineNumberPos, y), palette.get(Color::lineNumber), buffer);
+ 
+-				drawList->AddRectFilled(
+-					ImVec2(rightTextPos, y),
+-					ImVec2(rightTextEnd, y + glyphSize.y),
+-					addedColor);
 +//
 +//	TextDiff::handleSideBySideSelection
 +//
-+
+ 
+-				break;
 +void TextDiff::handleSideBySideSelection() {
 +	auto mouse = ImGui::GetMousePos();
 +	auto hoveredSide = mouse.x >= leftTextPos && mouse.x < rightLineNumberPos ? Side::left
 +		: mouse.x >= rightTextPos && mouse.x < rightTextEnd ? Side::right
 +		: Side::none;
-+
+ 
+-			case LineStatus::deleted:
+-				snprintf(buffer, sizeof(buffer), " %*d -", leftLineNumberDigits, lineLeft);
+-				drawList->AddText(ImVec2(leftLineNumberPos, y), palette.get(Color::lineNumber), buffer);
 +	if (selecting) {
 +		if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
 +			selectionHead = sidePositionAt(mouse, selectionSide);
-+
+ 
+-				drawList->AddRectFilled(
+-					ImVec2(leftTextPos, y),
+-					ImVec2(rightLineNumberPos, y + glyphSize.y),
+-					deletedColor);
 +		} else {
 +			selecting = false;
 +		}
 +	}
-+
-+	if (ImGui::IsWindowHovered() && hoveredSide != Side::none) {
+ 
+-				break;
++	if (ImGui::IsWindowHovered() && hoveredSide != Side::none && !hoveringChangeControls) {
 +		ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput);
 +
 +		if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
@@ -190,8 +372,8 @@ index d308483..51ce589 100644
 +			if (hasSideLine(position.row, hoveredSide)) {
 +				auto& source = hoveredSide == Side::left ? leftDocument : rightDocument;
 +				auto sourceLine = hoveredSide == Side::left
-+					? lineInfo[position.row].leftLine
-+					: lineInfo[position.row].rightLine;
++					? sideRows[position.row].leftLine
++					: sideRows[position.row].rightLine;
 +				auto start = source.findWordStart(Coordinate(static_cast<int>(sourceLine), position.column));
 +				auto end = source.findWordEnd(Coordinate(static_cast<int>(sourceLine), position.column));
 +				selectionAnchor = {position.row, start.column};
@@ -207,10 +389,11 @@ index d308483..51ce589 100644
 +			selectionHead = position;
 +			selecting = true;
 +			ImGui::SetWindowFocus();
-+		}
+ 		}
 +	}
 +}
-+
+ 
+-		y += glyphSize.y;
 +
 +//
 +//	TextDiff::hasSideSelection
@@ -227,8 +410,8 @@ index d308483..51ce589 100644
 +//
 +
 +bool TextDiff::hasSideLine(int row, Side side) const {
-+	return row >= 0 && row < static_cast<int>(lineInfo.size()) &&
-+		(side == Side::left ? lineInfo[row].status != LineStatus::added : lineInfo[row].status != LineStatus::deleted);
++	return row >= 0 && row < static_cast<int>(sideRows.size()) &&
++		(side == Side::left ? sideRows[row].leftLine >= 0 : sideRows[row].rightLine >= 0);
 +}
 +
 +
@@ -240,38 +423,57 @@ index d308483..51ce589 100644
 +	auto row = std::clamp(
 +		static_cast<int>(std::floor((position.y - ImGui::GetCursorScreenPos().y) / glyphSize.y)),
 +		0,
-+		static_cast<int>(lineInfo.size() - 1));
++		sideRows.empty() ? 0 : static_cast<int>(sideRows.size() - 1));
 +	if (!hasSideLine(row, side)) {
 +		return {row, 0};
-+	}
+ 	}
 +
 +	auto& source = side == Side::left ? leftDocument : rightDocument;
-+	auto sourceLine = side == Side::left ? lineInfo[row].leftLine : lineInfo[row].rightLine;
++	auto sourceLine = side == Side::left ? sideRows[row].leftLine : sideRows[row].rightLine;
 +	auto textPosition = side == Side::left ? leftTextPos : rightTextPos;
 +	auto column = static_cast<int>(std::floor((position.x - textPosition + textScroll) / glyphSize.x));
 +	auto coordinate = source.normalizeCoordinate(Coordinate(static_cast<int>(sourceLine), std::max(column, 0)));
 +	return {row, coordinate.column};
-+}
-+
-+
-+//
+ }
+ 
+ 
+ //
+-//	TextDiff::renderSideBySideText
 +//	TextDiff::sideSelectionBounds
-+//
-+
+ //
+ 
+-void TextDiff::renderSideBySideText() {
+-	// setup rendering
+-	auto drawList = ImGui::GetWindowDrawList();
+-	auto cursorScreenPos = ImGui::GetCursorScreenPos();
+-	auto yTop = drawList->GetClipRectMin().y;
+-	auto yBottom = drawList->GetClipRectMax().y;
 +std::pair<TextDiff::SidePosition, TextDiff::SidePosition> TextDiff::sideSelectionBounds() const {
 +	if (selectionHead.row < selectionAnchor.row ||
 +		(selectionHead.row == selectionAnchor.row && selectionHead.column < selectionAnchor.column)) {
 +		return {selectionHead, selectionAnchor};
 +	}
-+
+ 
+-	// render left text
+-	drawList->PushClipRect(ImVec2(leftTextPos, yTop), ImVec2(rightLineNumberPos, yBottom), false);
 +	return {selectionAnchor, selectionHead};
 +}
-+
-+
+ 
+-	for (auto i = firstVisibleLine; i <= lastVisibleLine; i++) {
+-		auto& line = lineInfo[i];
+-		auto y = cursorScreenPos.y + i * glyphSize.y;
+ 
+-		switch(line.status) {
+-			case LineStatus::common:
+-			case LineStatus::deleted:
+-				renderSideBySideLine(leftTextPos, y, leftDocument[lineInfo[i].leftLine]);
+-				break;
 +//
 +//	TextDiff::copySideSelection
 +//
-+
+ 
+-			case LineStatus::added:
+-				break;
 +void TextDiff::copySideSelection() const {
 +	if (!hasSideSelection()) {
 +		return;
@@ -284,9 +486,9 @@ index d308483..51ce589 100644
 +	for (auto row = start.row; row <= end.row; row++) {
 +		if (!hasSideLine(row, selectionSide)) {
 +			continue;
-+		}
+ 		}
 +
-+		auto sourceLine = selectionSide == Side::left ? lineInfo[row].leftLine : lineInfo[row].rightLine;
++		auto sourceLine = selectionSide == Side::left ? sideRows[row].leftLine : sideRows[row].rightLine;
 +		auto left = row == start.row ? start.column : 0;
 +		auto right = row == end.row ? end.column : source[sourceLine].maxColumn;
 +		if (!first) {
@@ -296,62 +498,236 @@ index d308483..51ce589 100644
 +			Coordinate(static_cast<int>(sourceLine), left),
 +			Coordinate(static_cast<int>(sourceLine), right));
 +		first = false;
-+	}
-+
+ 	}
+ 
+-	drawList->PopClipRect();
 +	ImGui::SetClipboardText(text.c_str());
 +}
 +
-+
-@@ -289,0 +541 @@ void TextDiff::renderSideBySideBackground() {
+ 
+-	// render right text
+-	drawList->PushClipRect(ImVec2(rightTextPos, yTop), ImVec2(rightTextEnd, yBottom), false);
++//
++//	TextDiff::renderSideBySideBackground
++//
+ 
++void TextDiff::renderSideBySideBackground() {
++	auto drawList = ImGui::GetWindowDrawList();
++	auto origin = ImGui::GetCursorScreenPos();
 +	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
-@@ -294,2 +546,3 @@ void TextDiff::renderSideBySideBackground() {
--		auto lineLeft = static_cast<int>(line.leftLine + 1);
--		auto lineRight = static_cast<int>(line.rightLine + 1);
-+		auto [lineLeft, lineRight] = getLineNumbers(static_cast<size_t>(i));
-+		auto left = lineLeft > 0 ? std::to_string(lineLeft) : "";
-+		auto right = lineRight > 0 ? std::to_string(lineRight) : "";
-@@ -299 +552 @@ void TextDiff::renderSideBySideBackground() {
--				snprintf(buffer, sizeof(buffer), " %*d", leftLineNumberDigits, lineLeft);
-+				snprintf(buffer, sizeof(buffer), " %*s", leftLineNumberDigits, left.c_str());
-@@ -301 +554 @@ void TextDiff::renderSideBySideBackground() {
--				snprintf(buffer, sizeof(buffer), " %*d", rightLineNumberDigits, lineRight);
-+				snprintf(buffer, sizeof(buffer), " %*s", rightLineNumberDigits, right.c_str());
-@@ -306 +559 @@ void TextDiff::renderSideBySideBackground() {
--				snprintf(buffer, sizeof(buffer), " %*d +", rightLineNumberDigits, lineRight);
-+				snprintf(buffer, sizeof(buffer), " %*s +", rightLineNumberDigits, right.c_str());
-@@ -310,2 +563,2 @@ void TextDiff::renderSideBySideBackground() {
--					ImVec2(rightTextPos, y),
--					ImVec2(rightTextEnd, y + glyphSize.y),
-+					ImVec2(rightTextPos, y - backgroundOffset),
-+					ImVec2(rightTextEnd, y + glyphSize.y - backgroundOffset),
-@@ -317 +570 @@ void TextDiff::renderSideBySideBackground() {
--				snprintf(buffer, sizeof(buffer), " %*d -", leftLineNumberDigits, lineLeft);
-+				snprintf(buffer, sizeof(buffer), " %*s -", leftLineNumberDigits, left.c_str());
-@@ -321,2 +574,2 @@ void TextDiff::renderSideBySideBackground() {
--					ImVec2(leftTextPos, y),
--					ImVec2(rightLineNumberPos, y + glyphSize.y),
-+					ImVec2(leftTextPos, y - backgroundOffset),
-+					ImVec2(rightLineNumberPos, y + glyphSize.y - backgroundOffset),
++	char buffer[32];
+ 	for (auto i = firstVisibleLine; i <= lastVisibleLine; i++) {
+-		auto& line = lineInfo[i];
+-		auto y = cursorScreenPos.y + i * glyphSize.y;
++		auto& row = sideRows[i];
++		auto y = origin.y + i * glyphSize.y;
++		for (int side = 0; side < 2; side++) {
++			auto unified = side == 0 ? row.leftUnifiedLine : row.rightUnifiedLine;
++			if (unified < 0) {
++				continue;
++			}
++			auto numbers = getLineNumbers(static_cast<size_t>(unified));
++			auto number = side == 0 ? numbers.first : numbers.second;
++			auto text = number > 0 ? std::to_string(number) : "";
++			auto marker = row.changeBegin < 0 ? ' ' : side == 0 ? '-' : '+';
++			snprintf(buffer, sizeof(buffer), " %*s %c", side == 0 ? leftLineNumberDigits : rightLineNumberDigits,
++				text.c_str(), marker);
++			drawList->AddText(ImVec2(side == 0 ? leftLineNumberPos : rightLineNumberPos, y),
++				palette.get(Color::lineNumber), buffer);
++			if (row.changeBegin >= 0) {
++				drawList->AddRectFilled(
++					ImVec2(side == 0 ? leftTextPos : rightTextPos, y - backgroundOffset),
++					ImVec2(side == 0 ? rightLineNumberPos : rightTextEnd, y + glyphSize.y - backgroundOffset),
++					side == 0 ? deletedColor : addedColor);
++			}
++		}
++	}
++}
+ 
+-		switch(line.status) {
+-			case LineStatus::common:
+-			case LineStatus::added:
+-				renderSideBySideLine(rightTextPos, y, rightDocument[lineInfo[i].rightLine]);
+-				break;
+ 
+-			case LineStatus::deleted:
+-				break;
++//
++//	TextDiff::renderSideBySideText
++//
++
++void TextDiff::renderSideBySideText() {
++	auto drawList = ImGui::GetWindowDrawList();
++	auto cursorScreenPos = ImGui::GetCursorScreenPos();
++	for (int side = 0; side < 2; side++) {
++		auto x = side == 0 ? leftTextPos : rightTextPos;
++		auto end = side == 0 ? rightLineNumberPos : rightTextEnd;
++		drawList->PushClipRect(ImVec2(x, drawList->GetClipRectMin().y), ImVec2(end, drawList->GetClipRectMax().y), true);
++		for (auto i = firstVisibleLine; i <= lastVisibleLine; i++) {
++			auto line = side == 0 ? sideRows[i].leftLine : sideRows[i].rightLine;
++			if (line >= 0) {
++				renderSideBySideLine(x, cursorScreenPos.y + i * glyphSize.y, side == 0 ? leftDocument[line] : rightDocument[line]);
++			}
+ 		}
++		drawList->PopClipRect();
+ 	}
+-
+-	drawList->PopClipRect();
+ }
+ 
+ 
+@@ -442,7 +711,7 @@ void TextDiff::renderSideBySideLine(float x, float y, TextEditor::Line& line) {
+ 
+ void TextDiff::renderSideBySideTextScrollbars() {
+ 	auto maxColumnsWidth = std::max(leftDocument.getMaxColumn(), rightDocument.getMaxColumn()) * glyphSize.x;
+-	auto visibleColumnsWidth = rightLineNumberPos - leftTextPos;
++	auto visibleColumnsWidth = textColumnWidth;
+ 
+ 	if (maxColumnsWidth > visibleColumnsWidth) {
+ 		auto window = ImGui::GetCurrentWindow();
+@@ -517,6 +786,30 @@ void TextDiff::renderSideBySideTextScrollbars() {
+ 	}
+ }
+ 
++void TextDiff::renderSideBySideControls() {
++	hoveringChangeControls = false;
++	if (!changeControlsCallback) {
++		return;
++	}
++	auto origin = ImGui::GetCursorScreenPos();
++	const ImVec2 controlSize(glyphSize.x * 0.75f, glyphSize.y);
++	const float backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
++	for (auto row = firstVisibleLine; row <= lastVisibleLine; row++) {
++		auto& info = sideRows[row];
++		if (info.changeBegin < 0 || (row > 0 && sideRows[row - 1].changeBegin == info.changeBegin)) {
++			continue;
++		}
++		// Overlay the inside edges of the middle line-number gutter without reserving any width.
++		const ImVec2 position(rightLineNumberPos, origin.y + row * glyphSize.y - backgroundOffset);
++		hoveringChangeControls |= ImGui::IsMouseHoveringRect(position, ImVec2(rightLineNumberPos + controlSize.x, position.y + controlSize.y)) || ImGui::IsMouseHoveringRect(ImVec2(rightTextPos - controlSize.x, position.y), ImVec2(rightTextPos, position.y + controlSize.y));
++		ImGui::SetCursorScreenPos(position);
++		ImGui::PushID(info.changeBegin);
++		changeControlsCallback(info.changeBegin, info.changeEnd, controlSize, rightTextPos - controlSize.x);
++		ImGui::PopID();
++	}
++	ImGui::SetCursorScreenPos(origin);
++}
++
+ 
+ //
+ //	TextDiff::renderSideBySideMiniMap
+@@ -527,10 +820,10 @@ void TextDiff::renderSideBySideMiniMap() {
+ 	if (showScrollbarMiniMap) {
+ 		auto window = ImGui::GetCurrentWindow();
+ 
+-		if (window->ScrollbarY) {
++		if (window->ScrollbarY && !sideRows.empty()) {
+ 			auto drawList = ImGui::GetWindowDrawList();
+ 			auto rect = ImGui::GetWindowScrollbarRect(window, ImGuiAxis_Y);
+-			auto lineHeight = rect.GetHeight() / static_cast<float>(document.size());
++			auto lineHeight = rect.GetHeight() / static_cast<float>(sideRows.size());
+ 			auto offset = (rect.Max.x - rect.Min.x) * 0.3f;
+ 			auto left = rect.Min.x + offset;
+ 			auto right = rect.Max.x - offset;
+@@ -538,11 +831,11 @@ void TextDiff::renderSideBySideMiniMap() {
+ 			drawList->PushClipRect(rect.Min, rect.Max, false);
+ 
+ 			// render diff locations
+-			for (size_t i = 0; i < lineInfo.size(); i++) {
+-				auto& line = lineInfo[i];
++			for (size_t i = 0; i < sideRows.size(); i++) {
++				auto& line = sideRows[i];
+ 
+-				if (line.status != LineStatus::common) {
+-					auto color = (line.status == LineStatus::added) ? addedColor : deletedColor;
++				if (line.changeBegin >= 0) {
++					auto color = (line.rightLine >= 0) ? addedColor : deletedColor;
+ 					auto ly = std::round(rect.Min.y + i * lineHeight);
+ 					drawList->AddRectFilled(ImVec2(left, ly), ImVec2(right, ly + lineHeight), color);
+ 				}
 diff --git a/TextDiff.h b/TextDiff.h
-index 454714e..01f6abb 100644
+index 454714e..dc443e1 100644
 --- a/TextDiff.h
 +++ b/TextDiff.h
-@@ -10 +9,0 @@
+@@ -7,11 +7,12 @@
+ 
+ #pragma once
+ 
 -
-@@ -14,0 +14,2 @@
+ //
+ //	Include files
+ //
+ 
 +#include <utility>
 +
-@@ -32,0 +34 @@ public:
+ #include "TextEditor.h"
+ 
+ 
+@@ -25,11 +26,18 @@ public:
+ 	TextDiff();
+ 
+ 	// specify visual mode (combined is default)
+-	inline void SetSideBySideMode(bool flag) { sideBySideMode = flag; }
++	inline void SetSideBySideMode(bool flag) {
++		if (sideBySideMode != flag) {
++			selectionSide = Side::none;
++			selecting = false;
++		}
++		sideBySideMode = flag;
++	}
+ 	inline bool GetSideBySideMode() const { return sideBySideMode; }
+ 
+ 	// specify the text to be compared (using UTF-8 encoded strings)
+ 	void SetText(const std::string_view& left, const std::string_view& right);
 +	void SetLineNumbers(const std::vector<std::pair<int, int>>& numbers);
-@@ -42,0 +45,5 @@ public:
+ 
+ 	// specify a new language
+ 	void SetLanguage(const Language* l);
+@@ -40,6 +48,25 @@ public:
+ 	// render the text editor in a Dear ImGui context
+ 	void Render(const char* title, const ImVec2& size=ImVec2(), bool border=false);
+ 
 +	// clipboard and selection support
 +	void Copy() const;
 +	bool AnyCursorHasSelection() const;
 +	CursorSelection GetMainCursorSelection() const;
 +
-@@ -89,0 +97 @@ private:
++	struct SideBySideRow {
++		int leftLine = -1;
++		int rightLine = -1;
++		int leftUnifiedLine = -1;
++		int rightUnifiedLine = -1;
++		int changeBegin = -1;
++		int changeEnd = -1;
++	};
++	const std::vector<SideBySideRow>& GetSideBySideRows() const { return sideRows; }
++	bool HasMappedLineNumbers() const { return lineNumbers.size() == lineInfo.size(); }
++	int GetSideBySideRow(int unifiedLine) const;
++	float GetSideBySideSplitX() const { return rightLineNumberPos; }
++	void SetChangeControlsCallback(std::function<void(int, int, const ImVec2&, float)> callback) { changeControlsCallback = callback; }
++
+ 	// block/hide certain API calls
+ 	inline void SetReadOnlyEnabled(bool /* value */) {}
+ 	inline void SetShowLineNumbersEnabled(bool /* value */) {}
+@@ -87,6 +114,10 @@ private:
+ 	};
+ 
+ 	std::vector<LineInfo> lineInfo;
++	std::vector<SideBySideRow> sideRows;
++	std::vector<int> unifiedToSideRow;
++	std::function<void(int, int, const ImVec2&, float)> changeControlsCallback;
 +	std::vector<std::pair<int, int>> lineNumbers;
-@@ -106,0 +115,17 @@ private:
+ 	bool updated = false;
+ 
+ 	// colors
+@@ -102,22 +133,50 @@ private:
+ 	float rightLineNumberPos;
+ 	float rightTextPos;
+ 	float rightTextEnd;
+-	float textScroll;
++	float textScroll = 0.0f;
++	bool hoveringChangeControls = false;
++
 +	// side-by-side text selection
 +	enum class Side {
 +		none,
@@ -368,37 +744,84 @@ index 454714e..01f6abb 100644
 +	SidePosition selectionAnchor;
 +	SidePosition selectionHead;
 +	bool selecting = false;
-+
-@@ -114,0 +140 @@ private:
+ 
+ 	// split string into lines
+ 	void splitLines(std::vector<std::string_view>& result, const std::string_view& text);
+ 
+ 	// create a combined view of the two documents and their differences
+ 	void createCombinedView();
++	void createSideBySideRows();
+ 
+ 	// line decorator
+ 	void decorateLine(TextEditor::Decorator& decorator);
 +	std::pair<int, int> getLineNumbers(size_t line) const;
-@@ -118,0 +145 @@ private:
+ 
+ 	// render the side-by-side mode and its parts
+ 	void renderSideBySide(const char* title, const ImVec2& size, bool border);
+ 	void renderSideBySideBackground();
 +	void renderSideBySideSelection();
-@@ -122,0 +150,6 @@ private:
+ 	void renderSideBySideText();
+ 	void renderSideBySideLine(float x, float y, TextEditor::Line& line);
+ 	void renderSideBySideTextScrollbars();
+ 	void renderSideBySideMiniMap();
++	void renderSideBySideControls();
 +	void handleSideBySideSelection();
 +	bool hasSideSelection() const;
 +	bool hasSideLine(int row, Side side) const;
 +	SidePosition sidePositionAt(const ImVec2& position, Side side) const;
 +	std::pair<SidePosition, SidePosition> sideSelectionBounds() const;
 +	void copySideSelection() const;
+ };
 diff --git a/TextEditor.cpp b/TextEditor.cpp
-index 2c4d059..8ffd58e 100644
+index 2c4d059..2cd1cba 100644
 --- a/TextEditor.cpp
 +++ b/TextEditor.cpp
-@@ -275,0 +276 @@ void TextEditor::renderSelections() {
+@@ -273,6 +273,7 @@ void TextEditor::render(const char* title, const ImVec2& size, bool border) {
+ void TextEditor::renderSelections() {
+ 	auto drawList = ImGui::GetWindowDrawList();
+ 	ImVec2 cursorScreenPos = ImGui::GetCursorScreenPos();
 +	auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
-@@ -291 +292 @@ void TextEditor::renderSelections() {
+ 
+ 	// draw background for selections
+ 	for (auto& cursor : cursors) {
+@@ -288,7 +289,7 @@ void TextEditor::renderSelections() {
+ 					auto x = cursorScreenPos.x + textOffset;
+ 					auto left = x + (line == first ? start.column : 0) * glyphSize.x;
+ 					auto right = x + (line == last ? end.column : document[line].maxColumn) * glyphSize.x;
 -					auto y = cursorScreenPos.y + line * glyphSize.y;
 +					auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;
-@@ -307,0 +309 @@ void TextEditor::renderMarkers() {
+ 					drawList->AddRectFilled(ImVec2(left, y), ImVec2(right, y + glyphSize.y), palette.get(Color::selection));
+ 				}
+ 			}
+@@ -305,11 +306,12 @@ void TextEditor::renderMarkers() {
+ 	if (markers.size()) {
+ 		auto drawList = ImGui::GetWindowDrawList();
+ 		ImVec2 cursorScreenPos = ImGui::GetCursorScreenPos();
 +		auto backgroundOffset = (glyphSize.y - ImGui::GetTextLineHeight()) * 0.5f;
-@@ -312 +314 @@ void TextEditor::renderMarkers() {
+ 
+ 		for (int line = firstVisibleLine; line <= lastVisibleLine; line++) {
+ 			if (document[line].marker) {
+ 				auto& marker = markers[document[line].marker - 1];
 -				auto y = cursorScreenPos.y + line * glyphSize.y;
 +				auto y = cursorScreenPos.y + line * glyphSize.y - backgroundOffset;
-@@ -408,0 +411,3 @@ void TextEditor::renderText() {
+ 
+ 				if (((marker.lineNumberColor >> IM_COL32_A_SHIFT) & 0xFF) != 0) {
+ 					auto left = cursorScreenPos.x + lineNumberLeftOffset;
+@@ -406,6 +408,9 @@ void TextEditor::renderText() {
+ 	ImVec2 lineScreenPos = cursorScreenPos + ImVec2(textOffset, firstVisibleLine * glyphSize.y);
+ 	auto tabSize = document.getTabSize();
+ 	auto firstRenderableColumn = (firstVisibleColumn / tabSize) * tabSize;
 +	drawList->PushClipRect(
 +		ImVec2(ImGui::GetWindowPos().x + textOffset, drawList->GetClipRectMin().y),
 +		drawList->GetClipRectMax(), true);
-@@ -457 +462,2 @@ void TextEditor::renderText() {
--}
+ 
+ 	for (int i = firstVisibleLine; i <= lastVisibleLine; i++) {
+ 		auto& line = document[i];
+@@ -454,6 +459,7 @@ void TextEditor::renderText() {
+ 
+ 		lineScreenPos.y += glyphSize.y;
+ 	}
 +	drawList->PopClipRect();
-+}
+ }
+ 
+ 
