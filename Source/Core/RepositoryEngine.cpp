@@ -81,6 +81,37 @@ bool RepositoryEngine::Enqueue(Command command)
         _impl->inspector_cv.notify_one();
         return true;
     }
+    if (const auto* refresh = std::get_if<Refresh>(&command))
+    {
+        std::lock_guard lock(_impl->queue_mutex);
+        if (!_impl->commands.empty())
+        {
+            if (auto* queued = std::get_if<Refresh>(&_impl->commands.back()))
+            {
+                const bool queued_full = queued->snapshot_working_copy && queued->paths.empty();
+                const bool incoming_full = refresh->snapshot_working_copy && refresh->paths.empty();
+                queued->snapshot_working_copy = queued->snapshot_working_copy || refresh->snapshot_working_copy;
+                queued->foreground = queued->foreground || refresh->foreground;
+                if (queued_full || incoming_full)
+                    queued->paths.clear();
+                else if (refresh->snapshot_working_copy)
+                {
+                    for (const std::string& path : refresh->paths)
+                        if (std::ranges::find(queued->paths, path) == queued->paths.end())
+                        {
+                            if (queued->paths.size() >= 4096)
+                            {
+                                queued->paths.clear();
+                                break;
+                            }
+                            queued->paths.push_back(path);
+                        }
+                }
+                _impl->queue_cv.notify_one();
+                return true;
+            }
+        }
+    }
     {
         std::lock_guard lock(_impl->queue_mutex);
         if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command)

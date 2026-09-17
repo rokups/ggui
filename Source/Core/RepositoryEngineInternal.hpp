@@ -136,7 +136,8 @@ public:
     };
 
     explicit RepositoryWatcher(std::condition_variable& wake) : _wake(wake) {}
-    void Watch(const std::filesystem::path& worktree, const std::filesystem::path& common_directory);
+    void Watch(const std::filesystem::path& worktree, const std::filesystem::path& common_directory,
+        git_repository* repository);
     void Clear();
     bool Changed() const { return _worktree_changed.load() || _metadata_changed.load(); }
     Changes ConsumeChanges();
@@ -148,8 +149,12 @@ private:
     std::condition_variable& _wake;
     std::filesystem::path _common_directory;
     std::filesystem::path _worktree;
+    bool _split_worktree = false;
+    std::string _excluded_worktree_child;
     std::mutex _changes_mutex;
     std::vector<std::string> _changed_paths;
+    std::vector<std::filesystem::path> _pending_watches;
+    std::vector<std::filesystem::path> _skipped_worktree_directories;
     std::atomic_bool _full_scan = false;
     std::atomic_bool _worktree_changed = false;
     std::atomic_bool _metadata_changed = false;
@@ -258,8 +263,10 @@ struct RepositoryEngine::Impl
     void PushBookmark(const Push& command);
     void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish);
     bool Sync(bool report_progress = true, const std::vector<std::string>& paths = {});
-    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true, bool history_changed = false);
-    void PublishSnapshot(bool include_worktree = true, bool history_changed = false);
+    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true, bool history_changed = false,
+        const std::vector<std::string>& status_paths = {});
+    void PublishSnapshot(bool include_worktree = true, bool history_changed = false,
+        const std::vector<std::string>& status_paths = {});
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);
     void LoadPatch(const LoadDiff& command, git_repository* repository, gg_repository* gg_repository,

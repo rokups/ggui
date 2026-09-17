@@ -693,6 +693,63 @@ TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
 }
 
+TEST(RepositoryEngine, IncrementalRefreshUpdatesOnlyTouchedStatusPaths)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "tracked.txt") << "modified\n";
+    std::ofstream(repository.path / "untracked.txt") << "new\n";
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return snapshot.status.size() == 2;
+    });
+    ASSERT_NE(opened, nullptr);
+    ASSERT_NE(std::ranges::find(opened->status, "tracked.txt", &StatusEntry::path), opened->status.end());
+    ASSERT_NE(std::ranges::find(opened->status, "untracked.txt", &StatusEntry::path), opened->status.end());
+
+    std::filesystem::remove(repository.path / "untracked.txt");
+    engine.Enqueue(Refresh{true, {"untracked.txt"}});
+    const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.status.size() == 1;
+    });
+    ASSERT_NE(refreshed, nullptr);
+    EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
+    EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+
+    std::filesystem::create_directories(repository.path / "untracked-dir");
+    std::ofstream(repository.path / "untracked-dir" / "nested.txt") << "new again\n";
+    engine.Enqueue(Refresh{true, {"untracked-dir"}});
+    const auto added = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > refreshed->generation && snapshot.status.size() == 2;
+    });
+    ASSERT_NE(added, nullptr);
+    EXPECT_NE(std::ranges::find(added->status, "untracked-dir/nested.txt", &StatusEntry::path), added->status.end());
+}
+
+TEST(RepositoryEngine, WatchesNewTopLevelDirectoriesAfterOpening)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(opened, nullptr);
+
+    std::filesystem::create_directories(repository.path / "new-directory");
+    std::ofstream(repository.path / "new-directory" / "file.txt") << "new\n";
+    const auto refreshed = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+            return entry.path == "new-directory/file.txt";
+        });
+    });
+    ASSERT_NE(refreshed, nullptr);
+    const auto file = std::ranges::find(refreshed->status, "new-directory/file.txt", &StatusEntry::path);
+    ASSERT_NE(file, refreshed->status.end());
+    EXPECT_EQ(file->status, GIT_DELTA_ADDED);
+}
+
 TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)
 {
     TemporaryRepository repository;

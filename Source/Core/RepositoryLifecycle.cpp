@@ -212,7 +212,7 @@ void RepositoryEngine::Impl::Attach(GitRepositoryPtr repository)
         }
         // Watch before reconciliation so no filesystem transition can fall in
         // the open/first-scan gap.
-        watcher.Watch(root, git_repository_commondir(git.get()));
+        watcher.Watch(root, git_repository_commondir(git.get()), git.get());
         gg_operation_options options = OperationOptions();
         Check(gg_repository_adopt_git_history_ex(gg, false, &options), "adopt external Git history");
 

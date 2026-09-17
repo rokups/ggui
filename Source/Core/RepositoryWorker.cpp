@@ -273,7 +273,12 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             const bool initial_reconciliation = value->snapshot_working_copy && !worktree_ready;
             if (value->snapshot_working_copy)
                 Sync(false, value->paths);
-            PublishSnapshot();
+            // A watcher refresh already tells us which files changed. Reuse
+            // the cached status for metadata-only refreshes and update only
+            // those paths for incremental worktree refreshes. An empty path
+            // list deliberately retains the full scan for F5 and directory
+            // events that the watcher could not narrow down.
+            PublishSnapshot(value->snapshot_working_copy, false, value->paths);
             if (initial_reconciliation)
             {
                 // Drain delayed notifications caused by our own initial index,
@@ -284,7 +289,8 @@ void RepositoryEngine::Impl::Execute(const Command& command)
                 const RepositoryWatcher::Changes replay = watcher.ConsumeChanges();
                 if (replay.worktree && Sync(false, replay.full_scan ? std::vector<std::string>{} : replay.paths))
                 {
-                    PublishSnapshot();
+                    PublishSnapshot(true, false, replay.full_scan ? std::vector<std::string>{}
+                                                                    : replay.paths);
                 }
             }
         }

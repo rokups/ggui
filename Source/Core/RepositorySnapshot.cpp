@@ -10,6 +10,7 @@
 #endif
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <tuple>
 #include <utility>
@@ -113,7 +114,8 @@ bool RepositoryEngine::Impl::Sync(bool report_progress, const std::vector<std::s
     return changed != 0;
 }
 
-std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_worktree, bool history_changed)
+std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
+    bool include_worktree, bool history_changed, const std::vector<std::string>& status_paths)
 {
     auto result = std::make_shared<RepoSnapshot>();
     result->generation = ++generation;
@@ -165,16 +167,44 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
     if (include_worktree)
     {
         gg_status_options status_options = GG_STATUS_OPTIONS_INIT;
+        const bool incremental_status = worktree_ready && !status_paths.empty();
+        StringArray selected_status_paths(status_paths);
+        if (incremental_status)
+            status_options.filesets = selected_status_paths.Get();
         Status status;
         Check(gg_repository_status(&status.value, gg, &status_options), "load status");
-        result->status.reserve(status.value.entry_count);
+        std::vector<StatusEntry> updated;
+        updated.reserve(status.value.entry_count);
         for (size_t index = 0; index < status.value.entry_count; ++index)
         {
             const gg_status_entry& source = status.value.entries[index];
-            result->status.push_back({source.old_path == nullptr ? "" : source.old_path,
+            updated.push_back({source.old_path == nullptr ? "" : source.old_path,
                 source.new_path == nullptr ? "" : source.new_path, source.status, source.conflicted != 0});
         }
-        cached_status = result->status;
+        if (!incremental_status)
+            cached_status = std::move(updated);
+        else
+        {
+            // Watcher paths are individual files (directory changes request a
+            // full scan). Remove stale entries for those paths, then overlay
+            // the path-filtered result. Keep both old and new names so a
+            // rename event cannot leave a ghost entry in the cache.
+            const auto touched = [&](const StatusEntry& entry) {
+                const auto selected = [&](const std::string& candidate, const std::string& path) {
+                    return candidate == path
+                        || (candidate.size() > path.size()
+                            && candidate.compare(0, path.size(), path) == 0
+                            && candidate[path.size()] == '/');
+                };
+                return std::ranges::any_of(status_paths, [&](const std::string& path) {
+                    return selected(entry.path, path) || selected(entry.old_path, path);
+                });
+            };
+            std::erase_if(cached_status, touched);
+            cached_status.insert(cached_status.end(),
+                std::make_move_iterator(updated.begin()), std::make_move_iterator(updated.end()));
+        }
+        result->status = cached_status;
         worktree_ready = true;
     }
     else if (worktree_ready)
@@ -249,11 +279,12 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(bool include_
     return result;
 }
 
-void RepositoryEngine::Impl::PublishSnapshot(bool include_worktree, bool history_changed)
+void RepositoryEngine::Impl::PublishSnapshot(
+    bool include_worktree, bool history_changed, const std::vector<std::string>& status_paths)
 {
     if (gg != nullptr)
     {
-        std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree, history_changed);
+        std::shared_ptr<RepoSnapshot> snapshot = ReadSnapshot(include_worktree, history_changed, status_paths);
         // History is request-versioned separately. The UI rebuilds it with
         // its persisted head selections after observing this generation.
         Post(SnapshotReady{std::move(snapshot)});
