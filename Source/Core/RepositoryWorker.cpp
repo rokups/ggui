@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#include <git2/sys/errors.h>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
@@ -193,6 +194,83 @@ std::vector<std::size_t> HistoryTopologicalOrder(
     if (result.size() != items.size()) throw std::runtime_error("history graph is not acyclic");
     return result;
 }
+
+struct VisibleHeads
+{
+    std::vector<git_oid> values;
+    std::size_t candidates = 0;
+    std::size_t walked = 0;
+};
+
+VisibleHeads ResolveVisibleHeads(git_repository* repository, const References& references)
+{
+    std::vector<git_oid> candidates;
+    std::unordered_set<std::string> candidate_ids;
+    for (std::size_t index = 0; index < references.value.count; ++index)
+    {
+        const gg_reference& reference = references.value.items[index];
+        const std::string_view name = reference.name == nullptr ? "" : reference.name;
+        if (!name.starts_with("refs/heads/") && !name.starts_with("refs/gg/aliases/")
+            && !name.starts_with("refs/gg/visible-heads/")
+            && !name.starts_with("refs/gg/workspaces/"))
+            continue;
+
+        git_object* raw_object = nullptr;
+        const int lookup = git_object_lookup(&raw_object, repository, &reference.target, GIT_OBJECT_ANY);
+        std::unique_ptr<git_object, decltype(&git_object_free)> object(raw_object, git_object_free);
+        git_object* raw_commit = nullptr;
+        const int peel = lookup < 0 ? lookup : git_object_peel(&raw_commit, object.get(), GIT_OBJECT_COMMIT);
+        std::unique_ptr<git_object, decltype(&git_object_free)> commit(raw_commit, git_object_free);
+        if (peel < 0)
+        {
+            git_error_clear();
+            continue;
+        }
+        const git_oid oid = *git_object_id(commit.get());
+        if (candidate_ids.insert(OidString(oid)).second) candidates.push_back(oid);
+    }
+
+    VisibleHeads result;
+    result.candidates = candidates.size();
+    if (candidates.size() < 2)
+    {
+        result.values = std::move(candidates);
+        return result;
+    }
+
+    // A visible tip is not a head exactly when it is reachable through a
+    // parent of another visible tip. One shared walk finds every such tip;
+    // resolving every pair separately repeatedly walks the same ancestry and
+    // becomes prohibitively expensive in repositories with many alias refs.
+    git_revwalk* raw_walk = nullptr;
+    Check(git_revwalk_new(&raw_walk, repository), "create visible-head walk");
+    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
+    for (const git_oid& candidate : candidates)
+    {
+        git_commit* raw_commit = nullptr;
+        Check(git_commit_lookup(&raw_commit, repository, &candidate), "load visible-head candidate");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+        for (unsigned int parent = 0; parent < git_commit_parentcount(commit.get()); ++parent)
+            Check(git_revwalk_push(walk.get(), git_commit_parent_id(commit.get(), parent)),
+                "seed visible-head walk");
+    }
+
+    std::unordered_set<std::string> ancestors;
+    git_oid oid{};
+    int next = GIT_OK;
+    while ((next = git_revwalk_next(&oid, walk.get())) == GIT_OK)
+    {
+        ++result.walked;
+        const std::string id = OidString(oid);
+        if (candidate_ids.contains(id)) ancestors.insert(std::move(id));
+    }
+    if (next != GIT_ITEROVER) Check(next, "walk visible-head ancestry");
+
+    result.values.reserve(candidates.size() - ancestors.size());
+    for (const git_oid& candidate : candidates)
+        if (!ancestors.contains(OidString(candidate))) result.values.push_back(candidate);
+    return result;
+}
 } // namespace
 
 RepositoryEngine::Impl::BackgroundActivityGuard::BackgroundActivityGuard(Impl& owner, std::string name)
@@ -206,9 +284,13 @@ RepositoryEngine::Impl::BackgroundActivityGuard::~BackgroundActivityGuard()
     owner.Post(BackgroundActivityFinished{id});
 }
 
-void RepositoryEngine::Impl::Execute(const Command& command)
+void RepositoryEngine::Impl::Execute(
+    const Command& command, std::uint64_t task, std::uint64_t repository_generation,
+    DiagnosticClock::time_point queued)
 {
     const std::string name = CommandName(command);
+    TraceTask trace(task, name, 0, repository_generation, queued);
+    TraceStage execution_stage(trace, "execution");
     const auto* refresh = std::get_if<Refresh>(&command);
     const bool quiet = (refresh != nullptr && !refresh->foreground) || std::holds_alternative<RebuildHistory>(command)
         || std::holds_alternative<ExpandHistoryRegion>(command)
@@ -247,12 +329,17 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             Close();
             {
                 std::lock_guard lock(queue_mutex);
-                std::erase_if(commands, [](const Command& queued) {
-                    return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<LoadFileContent>(queued)
-                        || std::holds_alternative<LoadBlame>(queued)
-                        || std::holds_alternative<Refresh>(queued)
-                        || std::holds_alternative<RebuildHistory>(queued)
-                        || std::holds_alternative<ExpandHistoryRegion>(queued);
+                std::erase_if(commands, [](const QueuedCommand& queued) {
+                    const bool remove = std::holds_alternative<LoadDiff>(queued.command)
+                        || std::holds_alternative<LoadFileContent>(queued.command)
+                        || std::holds_alternative<LoadBlame>(queued.command)
+                        || std::holds_alternative<Refresh>(queued.command)
+                        || std::holds_alternative<RebuildHistory>(queued.command)
+                        || std::holds_alternative<ExpandHistoryRegion>(queued.command);
+                    if (remove)
+                        TraceTaskStale(queued.task, CommandName(queued.command), 0,
+                            queued.repository_generation, queued.queued);
+                    return remove;
                 });
             }
             {
@@ -296,7 +383,11 @@ void RepositoryEngine::Impl::Execute(const Command& command)
         }
         else if (std::holds_alternative<RebuildHistory>(command)
             || std::holds_alternative<ExpandHistoryRegion>(command))
+        {
+            execution_stage.Complete();
+            trace.Finish("stale");
             return; // Interactive history reads are dispatched by Enqueue().
+        }
         else if (const auto* value = std::get_if<Fetch>(&command))
             FetchRemote(*value);
         else if (const auto* value = std::get_if<Push>(&command))
@@ -304,7 +395,11 @@ void RepositoryEngine::Impl::Execute(const Command& command)
         else if (std::holds_alternative<LoadDiff>(command)
             || std::holds_alternative<LoadFileContent>(command)
             || std::holds_alternative<LoadBlame>(command))
+        {
+            execution_stage.Complete();
+            trace.Finish("stale");
             return; // Interactive reads are dispatched by Enqueue().
+        }
         else if (const auto* value = std::get_if<ApplyPatch>(&command))
             ApplyPatchText(*value);
         else if (const auto* value = std::get_if<ResolveConflict>(&command))
@@ -317,11 +412,15 @@ void RepositoryEngine::Impl::Execute(const Command& command)
             DispatchMutation(command);
         if (!quiet)
             Post(OperationFinished{name});
+        execution_stage.Complete();
+        trace.Finish("success");
     }
     catch (const std::exception& error)
     {
         spdlog::error("{} failed: {}", name, error.what());
         Post(ErrorEvent{name, error.what()});
+        execution_stage.Complete();
+        trace.Finish("error");
     }
 }
 
@@ -334,9 +433,16 @@ void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expa
         path = latest_snapshot->root;
     }
     const std::uint64_t request = ++history_request_version;
+    const std::uint64_t task = ++diagnostic_task;
+    const auto queued = DiagnosticNow();
+    std::string_view action = "rebuild";
+    std::size_t expansion_count = 0;
     {
         std::lock_guard lock(history_mutex);
         if (repository_path != path || repository_path_session != session.load()) return;
+        if (history_request.has_value())
+            TraceTaskStale(history_request->task, "history", history_request->request,
+                history_request->query.repository_generation, history_request->queued);
         if (expand.empty())
         {
             if (query.repository_generation != active_history_query.repository_generation)
@@ -345,12 +451,25 @@ void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expa
         }
         else if (const auto found = std::ranges::find(expanded_history_regions, expand);
             found == expanded_history_regions.end())
+        {
             expanded_history_regions.push_back(expand);
+            action = expand.starts_with("region:") ? "expand-region" : "expand-merge";
+        }
         else if (toggle)
+        {
             expanded_history_regions.erase(found);
+            action = "collapse-merge";
+        }
+        else
+            action = expand.starts_with("region:") ? "expand-region" : "expand-merge";
+        expansion_count = expanded_history_regions.size();
         history_request = HistoryRequest{active_history_query, std::move(expand), std::move(path),
-            repository_path_session, request};
+            repository_path_session, request, task, queued};
     }
+    TraceTaskQueued(task, "history", request, query.repository_generation);
+    if (TraceDiagnosticsEnabled())
+        spdlog::trace("repository history request task_id={} action={} active_expansions={}",
+            task, action, expansion_count);
     history_cv.notify_one();
 }
 
@@ -366,6 +485,7 @@ void RepositoryEngine::Impl::RunHistory()
     std::unique_ptr<NamedRefs> cached_named_refs;
     std::unique_ptr<References> cached_references;
     std::unique_ptr<Workspaces> cached_workspaces;
+    std::unique_ptr<VisibleHeads> cached_visible_heads;
     std::vector<git_oid> cached_collapsed_materialized;
     RepositoryReadContext context;
     while (true)
@@ -392,6 +512,7 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_named_refs.reset();
                 cached_references.reset();
                 cached_workspaces.reset();
+                cached_visible_heads.reset();
                 cached_collapsed_materialized.clear();
                 continue;
             }
@@ -403,11 +524,25 @@ void RepositoryEngine::Impl::RunHistory()
             return stopping.load() || request.session != session.load()
                 || request.request != history_request_version.load();
         };
+        TraceTask trace(request.task, "history", request.request,
+            request.query.repository_generation, request.queued);
+        if (stale())
+        {
+            trace.Finish("stale");
+            continue;
+        }
         try
         {
-            context.Ensure(request.path, request.session, request.query.repository_generation, true);
+            {
+                TraceStage stage(trace, "repository-open-attach");
+                context.Ensure(request.path, request.session, request.query.repository_generation, true);
+            }
             GitRepositoryPtr& repository = context.repository;
             GgRepositoryPtr& history_gg = context.gg;
+            const bool metadata_cached = cached_revision_path == request.path
+                && cached_revision_generation == request.query.repository_generation
+                && cached_named_refs != nullptr;
+            TraceStage metadata_stage(trace, "cached-metadata-loading");
             if (cached_revision_path != request.path
                 || cached_revision_generation != request.query.repository_generation)
             {
@@ -417,6 +552,7 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_named_refs.reset();
                 cached_references.reset();
                 cached_workspaces.reset();
+                cached_visible_heads.reset();
                 cached_collapsed_materialized.clear();
             }
 
@@ -434,6 +570,11 @@ void RepositoryEngine::Impl::RunHistory()
             const NamedRefs& named = *cached_named_refs;
             const References& references = *cached_references;
             const Workspaces& workspaces = *cached_workspaces;
+            if (metadata_stage.Enabled())
+                metadata_stage.Complete("cache=" + std::string(metadata_cached ? "hit" : "miss")
+                    + " named_refs=" + std::to_string(named.value.count)
+                    + " references=" + std::to_string(references.value.count)
+                    + " workspaces=" + std::to_string(workspaces.value.count));
             const auto selected = [](const std::vector<std::string>& values, std::string_view value) {
                 return std::ranges::find(values, value) != values.end();
             };
@@ -484,6 +625,7 @@ void RepositoryEngine::Impl::RunHistory()
             };
             git_oid working{};
             std::string working_copy;
+            TraceStage head_selection_stage(trace, "head-selection");
             if (gg_repository_working_copy(&working, history_gg.get()) == GIT_OK)
             {
                 add(heads, working);
@@ -527,8 +669,13 @@ void RepositoryEngine::Impl::RunHistory()
                     add(conservatively_locked_heads, ref.target);
                 }
             }
+            if (head_selection_stage.Enabled())
+                head_selection_stage.Complete("heads=" + std::to_string(heads.size())
+                    + " selected_bookmarks=" + std::to_string(selected_bookmarks.size())
+                    + " unselected_bookmarks=" + std::to_string(unselected_bookmarks.size()));
             // Preserve the selected-bookmark filtering for other workspaces,
             // including native worktrees which do not have a gg reference.
+            TraceStage reachability_stage(trace, "bounded-reachability");
             for (std::size_t index = 0; index < workspaces.value.count; ++index)
             {
                 const git_oid& candidate = workspaces.value.items[index].working_copy;
@@ -538,10 +685,14 @@ void RepositoryEngine::Impl::RunHistory()
                     || (!unselected_result.complete && !unselected_bookmarks.empty());
                 if (selected_result.matched && !claimed) add(heads, candidate);
             }
+            if (reachability_stage.Enabled())
+                reachability_stage.Complete("lookups=" + std::to_string(256 - implicit_lookup_budget)
+                    + " budget_remaining=" + std::to_string(implicit_lookup_budget));
             // Alias, workspace, and explicit visible-head refs retain local
             // unnamed changes. Resolve their actual DAG heads so switching the
             // working copy cannot make a sibling head disappear. Tags are not
             // visible heads and remain governed by their panel selection.
+            TraceStage visible_heads_stage(trace, "visible-head-resolution");
             std::unordered_set<std::string> unnamed_targets;
             for (std::size_t index = 0; index < references.value.count; ++index)
             {
@@ -552,20 +703,32 @@ void RepositoryEngine::Impl::RunHistory()
                     || name.starts_with("refs/gg/workspaces/"))
                     unnamed_targets.insert(OidString(ref.target));
             }
-            Oids local_heads;
-            Check(gg_repository_resolve_set(&local_heads.value, history_gg.get(), "visible_heads()"),
-                "resolve local history heads");
-            for (std::size_t index = 0; index < local_heads.value.count; ++index)
+            const bool visible_heads_cached = cached_visible_heads != nullptr;
+            if (cached_visible_heads == nullptr)
+                cached_visible_heads = std::make_unique<VisibleHeads>(
+                    ResolveVisibleHeads(repository.get(), references));
+            for (const git_oid& candidate : cached_visible_heads->values)
             {
-                const git_oid& candidate = local_heads.value.ids[index];
                 if (!unnamed_targets.contains(OidString(candidate))) continue;
                 const BoundedReachability unselected_result = descends_from_any(candidate, unselected_bookmarks);
                 const bool claimed = unselected_result.matched
                     || (!unselected_result.complete && !unselected_bookmarks.empty());
                 if (!claimed) add(heads, candidate);
             }
-            if (stale()) continue;
+            if (visible_heads_stage.Enabled())
+                visible_heads_stage.Complete("cache="
+                    + std::string(visible_heads_cached ? "hit" : "miss")
+                    + " candidates=" + std::to_string(cached_visible_heads->candidates)
+                    + " walked=" + std::to_string(cached_visible_heads->walked)
+                    + " resolved=" + std::to_string(cached_visible_heads->values.size())
+                    + " heads=" + std::to_string(heads.size()));
+            if (stale())
+            {
+                trace.Finish("stale");
+                continue;
+            }
 
+            TraceStage direct_search_stage(trace, "direct-search-resolution");
             std::unordered_set<std::string> search_matches;
             if (!request.query.search.empty())
             {
@@ -612,8 +775,13 @@ void RepositoryEngine::Impl::RunHistory()
                     search_matches.insert(OidString(oid));
                     add(heads, oid);
                 }
+            if (direct_search_stage.Enabled())
+                direct_search_stage.Complete("enabled=" + std::to_string(!request.query.search.empty())
+                    + " matches=" + std::to_string(search_matches.size())
+                    + " cache=" + std::string(reusable_description_search ? "hit" : "miss"));
 
-            const auto hydrate = [&](const std::vector<git_oid>& oids) {
+            const auto hydrate = [&](const std::vector<git_oid>& oids, std::string_view stage_name) {
+                TraceStage hydration_stage(trace, stage_name);
                 std::vector<git_oid> missing;
                 missing.reserve(oids.size());
                 for (const git_oid& oid : oids)
@@ -638,10 +806,14 @@ void RepositoryEngine::Impl::RunHistory()
                     const std::string id = OidString(oid);
                     result.emplace(id, cached_revisions.at(id));
                 }
+                if (hydration_stage.Enabled())
+                    hydration_stage.Complete("requested=" + std::to_string(oids.size())
+                        + " cache_misses=" + std::to_string(missing.size())
+                        + " cache_size=" + std::to_string(cached_revisions.size()));
                 return result;
             };
 
-            auto head_revisions = hydrate(heads);
+            auto head_revisions = hydrate(heads, "head-hydration");
             std::ranges::sort(heads, [&](const git_oid& left, const git_oid& right) {
                 const Revision& left_revision = head_revisions.at(OidString(left));
                 const Revision& right_revision = head_revisions.at(OidString(right));
@@ -682,12 +854,22 @@ void RepositoryEngine::Impl::RunHistory()
                     item.search_match = search_matches.contains(id);
                     preview->items.push_back(std::move(item));
                 }
+                TraceStage publication_stage(trace, "publication");
+                const std::size_t published_items = preview->items.size();
                 Post(HistoryReady{std::move(preview)});
+                if (publication_stage.Enabled())
+                    publication_stage.Complete("view=skeleton items=" + std::to_string(published_items));
             }
-            if (stale()) continue;
+            if (stale())
+            {
+                trace.Finish("stale");
+                continue;
+            }
 
             const std::unordered_set<std::string> expanded(expansions.begin(), expansions.end());
             std::vector<git_oid> materialized;
+            TraceStage base_history_stage(trace, "base-history-materialization");
+            const bool reused_base_history = !request.expand.empty() && !cached_collapsed_materialized.empty();
             if (!request.expand.empty() && !cached_collapsed_materialized.empty())
                 materialized = cached_collapsed_materialized;
             else
@@ -719,18 +901,24 @@ void RepositoryEngine::Impl::RunHistory()
                 }
                 if (!stale()) cached_collapsed_materialized = materialized;
             }
+            if (base_history_stage.Enabled())
+                base_history_stage.Complete("cache=" + std::string(reused_base_history ? "hit" : "miss")
+                    + " materialized=" + std::to_string(materialized.size()));
 
             std::unordered_set<std::string> present;
             for (const git_oid& oid : materialized) present.insert(OidString(oid));
             const auto expand_from = [&](std::deque<git_oid> nearby, std::size_t limit) {
                 std::unordered_set<std::string> local;
-                for (std::size_t added = 0; !nearby.empty() && added < limit && !stale();)
+                std::size_t lookups = 0;
+                std::size_t added = 0;
+                for (; !nearby.empty() && added < limit && !stale();)
                 {
                     const git_oid oid = nearby.front();
                     nearby.pop_front();
                     const std::string id = OidString(oid);
                     if (!local.insert(id).second || present.contains(id)) continue;
                     git_commit* raw_commit = nullptr;
+                    ++lookups;
                     const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
                     if (lookup == GIT_ENOTFOUND) continue;
                     Check(lookup, "expand history");
@@ -744,42 +932,85 @@ void RepositoryEngine::Impl::RunHistory()
                     for (unsigned int index = 0; index < visible_parents; ++index)
                         nearby.push_back(*git_commit_parent_id(commit.get(), index));
                 }
+                return std::pair{lookups, added};
             };
             for (const std::string& region : expansions)
             {
                 if (stale()) break;
+                const bool collapsed_region = region.starts_with("region:");
+                TraceStage expansion_stage(trace,
+                    collapsed_region ? "collapsed-region-expansion" : "merge-branch-expansion");
+                std::size_t lookups = 0;
+                std::size_t added = 0;
                 if (!region.starts_with("region:"))
                 {
-                    if (!present.contains(region)) continue;
+                    if (!present.contains(region))
+                    {
+                        if (expansion_stage.Enabled())
+                            expansion_stage.Complete("lookups=0 added_commits=0 skipped=1");
+                        continue;
+                    }
                     git_oid merge_oid{};
                     if (git_oid_fromstr(&merge_oid, region.c_str(),
-                            git_repository_oid_type(repository.get())) != GIT_OK) continue;
+                            git_repository_oid_type(repository.get())) != GIT_OK)
+                    {
+                        if (expansion_stage.Enabled())
+                            expansion_stage.Complete("lookups=0 added_commits=0 skipped=1");
+                        continue;
+                    }
                     git_commit* raw_merge = nullptr;
+                    ++lookups;
                     const int lookup = git_commit_lookup(&raw_merge, repository.get(), &merge_oid);
-                    if (lookup == GIT_ENOTFOUND) continue;
+                    if (lookup == GIT_ENOTFOUND)
+                    {
+                        if (expansion_stage.Enabled())
+                            expansion_stage.Complete("lookups=1 added_commits=0 skipped=1");
+                        continue;
+                    }
                     Check(lookup, "expand merge history");
                     std::unique_ptr<git_commit, decltype(&git_commit_free)> merge(raw_merge, git_commit_free);
                     std::deque<git_oid> parents;
                     for (unsigned int index = 1; index < git_commit_parentcount(merge.get()); ++index)
                         parents.push_back(*git_commit_parent_id(merge.get(), index));
-                    expand_from(std::move(parents), 128);
+                    const auto expanded_counts = expand_from(std::move(parents), 128);
+                    lookups += expanded_counts.first;
+                    added += expanded_counts.second;
+                    if (expansion_stage.Enabled())
+                        expansion_stage.Complete("lookups=" + std::to_string(lookups)
+                            + " added_commits=" + std::to_string(added));
                     continue;
                 }
                 const std::size_t begin = std::string_view("region:").size();
                 const std::size_t end = region.find(':', begin);
-                if (end == std::string::npos) continue;
+                if (end == std::string::npos)
+                {
+                    if (expansion_stage.Enabled())
+                        expansion_stage.Complete("lookups=0 added_commits=0 skipped=1");
+                    continue;
+                }
                 git_oid seed{};
                 if (git_oid_fromstr(&seed, region.substr(begin, end - begin).c_str(),
-                        git_repository_oid_type(repository.get())) != GIT_OK) continue;
-                expand_from(std::deque<git_oid>{seed}, 128);
+                        git_repository_oid_type(repository.get())) != GIT_OK)
+                {
+                    if (expansion_stage.Enabled())
+                        expansion_stage.Complete("lookups=0 added_commits=0 skipped=1");
+                    continue;
+                }
+                const auto expanded_counts = expand_from(std::deque<git_oid>{seed}, 128);
+                lookups += expanded_counts.first;
+                added += expanded_counts.second;
+                if (expansion_stage.Enabled())
+                    expansion_stage.Complete("lookups=" + std::to_string(lookups)
+                        + " added_commits=" + std::to_string(added));
             }
 
             const auto make_view = [&] {
+                TraceStage assembly_stage(trace, "view-assembly");
                 auto view = std::make_shared<HistoryView>();
                 view->repository_generation = request.query.repository_generation;
                 view->request = request.request;
                 view->search = request.query.search;
-                auto revisions = hydrate(materialized);
+                auto revisions = hydrate(materialized, "materialized-revision-hydration");
                 std::unordered_set<std::string> regions;
                 for (const git_oid& oid : materialized)
                 {
@@ -813,13 +1044,22 @@ void RepositoryEngine::Impl::RunHistory()
                     view->items.push_back(std::move(item));
                 }
 
+                if (assembly_stage.Enabled())
+                    assembly_stage.Complete("materialized=" + std::to_string(materialized.size())
+                        + " items=" + std::to_string(view->items.size())
+                        + " collapsed_regions=" + std::to_string(regions.size()));
+
                 std::vector<std::string> preferred_heads;
                 for (const git_oid& oid : heads) preferred_heads.push_back(OidString(oid));
+                TraceStage ordering_stage(trace, "topological-ordering");
                 const std::vector<std::size_t> order = HistoryTopologicalOrder(view->items, preferred_heads);
                 std::vector<HistoryItem> ordered;
                 ordered.reserve(view->items.size());
                 for (const std::size_t index : order) ordered.push_back(std::move(view->items[index]));
                 view->items = std::move(ordered);
+                if (ordering_stage.Enabled())
+                    ordering_stage.Complete("items=" + std::to_string(view->items.size())
+                        + " preferred_heads=" + std::to_string(preferred_heads.size()));
 
                 std::unordered_set<std::string> pushed_items = search_matches;
                 for (const git_oid& oid : conservatively_locked_heads)
@@ -835,7 +1075,15 @@ void RepositoryEngine::Impl::RunHistory()
                 return view;
             };
 
-            if (!stale()) Post(HistoryReady{make_view()});
+            if (!stale())
+            {
+                auto view = make_view();
+                TraceStage publication_stage(trace, "publication");
+                const std::size_t published_items = view->items.size();
+                Post(HistoryReady{std::move(view)});
+                if (publication_stage.Enabled())
+                    publication_stage.Complete("view=detail items=" + std::to_string(published_items));
+            }
 
             // Description search is the only operation allowed to scan beyond
             // the bounded graph. It remains latest-wins, stops after 50
@@ -843,7 +1091,9 @@ void RepositoryEngine::Impl::RunHistory()
             if (!request.query.search.empty() && !direct_search_match
                 && !reusable_description_search && !stale())
             {
+                TraceStage search_stage(trace, "description-search");
                 std::vector<git_oid> found_description_matches;
+                std::size_t scanned = 0;
                 git_revwalk* raw_walk = nullptr;
                 Check(git_revwalk_new(&raw_walk, repository.get()), "create history search");
                 std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
@@ -857,6 +1107,7 @@ void RepositoryEngine::Impl::RunHistory()
                     const int next = git_revwalk_next(&oid, walk.get());
                     if (next == GIT_ITEROVER) break;
                     Check(next, "search repository history");
+                    ++scanned;
                     git_commit* raw_commit = nullptr;
                     if (git_commit_lookup(&raw_commit, repository.get(), &oid) != GIT_OK) continue;
                     std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
@@ -872,7 +1123,16 @@ void RepositoryEngine::Impl::RunHistory()
                         if (found_description_matches.size() == 1
                             || now - last_publish >= std::chrono::milliseconds(100))
                         {
-                            if (!stale()) Post(HistoryReady{make_view()});
+                            if (!stale())
+                            {
+                                auto view = make_view();
+                                TraceStage publication_stage(trace, "publication");
+                                const std::size_t published_items = view->items.size();
+                                Post(HistoryReady{std::move(view)});
+                                if (publication_stage.Enabled())
+                                    publication_stage.Complete("view=search items="
+                                        + std::to_string(published_items));
+                            }
                             last_publish = now;
                             unpublished_matches = false;
                         }
@@ -880,24 +1140,45 @@ void RepositoryEngine::Impl::RunHistory()
                 }
                 if (!stale())
                 {
-                    if (unpublished_matches) Post(HistoryReady{make_view()});
+                    if (unpublished_matches)
+                    {
+                        auto view = make_view();
+                        TraceStage publication_stage(trace, "publication");
+                        const std::size_t published_items = view->items.size();
+                        Post(HistoryReady{std::move(view)});
+                        if (publication_stage.Enabled())
+                            publication_stage.Complete("view=search items="
+                                + std::to_string(published_items));
+                    }
                     cached_search_path = request.path;
                     cached_search_text = request.query.search;
                     cached_search_generation = request.query.repository_generation;
+                    const std::size_t matched = found_description_matches.size();
                     cached_description_matches = std::move(found_description_matches);
+                    if (search_stage.Enabled())
+                        search_stage.Complete("scanned=" + std::to_string(scanned)
+                            + " matched=" + std::to_string(matched));
                 }
+                else if (search_stage.Enabled())
+                    search_stage.Complete("scanned=" + std::to_string(scanned)
+                        + " matched=" + std::to_string(found_description_matches.size()));
             }
-            if (stale()) continue;
-
-
+            if (stale())
+            {
+                trace.Finish("stale");
+                continue;
+            }
+            trace.Finish("success");
         }
         catch (const std::exception& error)
         {
             cached_named_refs.reset();
             cached_references.reset();
             cached_workspaces.reset();
+            cached_visible_heads.reset();
             cached_collapsed_materialized.clear();
             if (!stale()) Post(ErrorEvent{"history", error.what()});
+            trace.Finish(stale() ? "stale" : "error");
         }
     }
 }
@@ -923,10 +1204,20 @@ void RepositoryEngine::Impl::RunInspector()
             request = std::move(inspector_requests.front());
             inspector_requests.pop_front();
         }
-        if (request.session != session.load() || request.request != inspector_request.load()) continue;
+        const std::string_view kind = std::holds_alternative<LoadDiff>(request.command) ? "diff"
+            : std::holds_alternative<LoadFileContent>(request.command) ? "file" : "blame";
+        TraceTask trace(request.task, kind, request.request, request.repository_generation, request.queued);
+        if (request.session != session.load() || request.request != inspector_request.load())
+        {
+            trace.Finish("stale");
+            continue;
+        }
         try
         {
-            context.Ensure(request.path, request.session, request.repository_generation, true);
+            {
+                TraceStage stage(trace, "repository-open-attach");
+                context.Ensure(request.path, request.session, request.repository_generation, true);
+            }
             if (const auto* diff = std::get_if<LoadDiff>(&request.command))
                 LoadPatch(*diff, context.repository.get(), context.gg.get(), request.snapshot_generation,
                     request.request, request.session);
@@ -935,12 +1226,16 @@ void RepositoryEngine::Impl::RunInspector()
             else
                 LoadBlameFile(std::get<LoadBlame>(request.command), context.repository.get(), context.gg.get(),
                     request.snapshot_generation, request.request, request.session);
+            trace.Finish(request.session == session.load()
+                    && request.request == inspector_request.load() ? "success" : "stale");
         }
         catch (const std::exception& error)
         {
             if (request.session == session.load() && request.request == inspector_request.load())
                 Post(ErrorEvent{std::holds_alternative<LoadDiff>(request.command) ? "diff"
                     : std::holds_alternative<LoadFileContent>(request.command) ? "file" : "blame", error.what()});
+            trace.Finish(request.session == session.load()
+                    && request.request == inspector_request.load() ? "error" : "stale");
         }
     }
 }
@@ -949,7 +1244,7 @@ void RepositoryEngine::Impl::Run()
 {
     while (true)
     {
-        std::optional<Command> command;
+        std::optional<QueuedCommand> command;
         {
             std::unique_lock lock(queue_mutex);
             queue_cv.wait(lock, [this] { return stopping || !commands.empty() || watcher.Changed(); });
@@ -962,7 +1257,7 @@ void RepositoryEngine::Impl::Run()
             }
         }
         if (command.has_value())
-            Execute(*command);
+            Execute(command->command, command->task, command->repository_generation, command->queued);
         else if (gg != nullptr && !test_commands_suppressed)
         {
             // Editors and conflict tools commonly update a file through a
@@ -977,8 +1272,15 @@ void RepositoryEngine::Impl::Run()
             }
             const RepositoryWatcher::Changes changes = watcher.ConsumeChanges();
             if (changes.worktree || changes.metadata)
+            {
+                const std::uint64_t task = ++diagnostic_task;
+                const auto queued = DiagnosticNow();
+                TraceTaskQueued(task, "refresh", 0, topology_generation.load());
+                const std::uint64_t repository_generation = topology_generation.load();
                 Execute(Refresh{changes.worktree,
-                    changes.full_scan ? std::vector<std::string>{} : std::move(changes.paths)});
+                    changes.full_scan ? std::vector<std::string>{} : std::move(changes.paths)}, task,
+                    repository_generation, queued);
+            }
         }
     }
 }

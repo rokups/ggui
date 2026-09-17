@@ -829,7 +829,6 @@ void Application::ResetRepositoryState()
     _history_anchor.clear();
     _history_anchor_offset = 0.0f;
     _history_expansion_pending.clear();
-    _history_expansion_feedback_until = {};
     _revision_prefixes.clear();
     _operation_prefixes.clear();
     _history_refs_by_revision.clear();

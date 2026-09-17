@@ -205,6 +205,7 @@ add_library(ggui_core STATIC
   Source/Core/Commands.hpp
   Source/Core/Events.hpp
   Source/Core/RepositoryEngine.hpp
+  Source/Core/RepositoryDiagnostics.hpp
   Source/Core/RepositoryEngineInternal.hpp
   Source/Core/RepositorySupport.cpp
   Source/Core/RepositoryEngine.cpp
@@ -318,7 +319,7 @@ if(GGUI_BUILD_TESTS)
     VERSION 1.17.0
     OPTIONS "INSTALL_GTEST OFF")
   add_executable(ggui_tests Tests/Tests.cpp)
-  target_link_libraries(ggui_tests PRIVATE ggui_core GTest::gtest_main)
+  target_link_libraries(ggui_tests PRIVATE ggui_core GTest::gtest_main spdlog::spdlog)
   target_compile_options(ggui_tests PRIVATE ${GGUI_WARNING_OPTIONS})
   if(GGUI_ENABLE_COVERAGE)
     target_link_libraries(ggui_tests PRIVATE ggui_coverage)

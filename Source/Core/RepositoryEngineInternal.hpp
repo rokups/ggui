@@ -3,6 +3,7 @@
 #pragma once
 
 #include "RepositoryEngine.hpp"
+#include "RepositoryDiagnostics.hpp"
 
 #include <efsw/efsw.hpp>
 
@@ -170,7 +171,15 @@ struct RepositoryEngine::Impl
 {
     std::mutex queue_mutex;
     std::condition_variable queue_cv;
-    std::deque<Command> commands;
+    struct QueuedCommand
+    {
+        Command command;
+        std::uint64_t task = 0;
+        std::uint64_t repository_generation = 0;
+        RepositoryInternal::DiagnosticClock::time_point queued;
+    };
+    std::deque<QueuedCommand> commands;
+    std::atomic_uint64_t diagnostic_task = 0;
     std::atomic_bool stopping = false;
 
     std::mutex event_mutex;
@@ -196,6 +205,8 @@ struct RepositoryEngine::Impl
         std::uint64_t snapshot_generation = 0;
         std::uint64_t session = 0;
         std::uint64_t request = 0;
+        std::uint64_t task = 0;
+        RepositoryInternal::DiagnosticClock::time_point queued;
     };
     std::mutex inspector_mutex;
     std::condition_variable inspector_cv;
@@ -213,6 +224,8 @@ struct RepositoryEngine::Impl
         std::string path;
         std::uint64_t session = 0;
         std::uint64_t request = 0;
+        std::uint64_t task = 0;
+        RepositoryInternal::DiagnosticClock::time_point queued;
     };
     std::optional<HistoryRequest> history_request;
     std::string repository_path;
@@ -291,7 +304,8 @@ struct RepositoryEngine::Impl
         PublishSnapshot(true, true);
     }
     void DispatchMutation(const Command& command);
-    void Execute(const Command& command);
+    void Execute(const Command& command, std::uint64_t task,
+        std::uint64_t repository_generation, RepositoryInternal::DiagnosticClock::time_point queued);
     void Run();
     void RunInspector();
     void RunHistory();

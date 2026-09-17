@@ -836,8 +836,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Cancel").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK_GE(context->ItemInfo("Cancel").RectFull.GetHeight(),
             context->ItemInfo("Refresh").RectFull.GetHeight() - 1.0f);
-        IM_CHECK(!context->ItemExists("Open repository folder"));
         IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/merge"));
         IM_CHECK_GT(context->ItemInfo("Cancel").RectFull.Min.x,
             context->ItemInfo("Repository activity").RectFull.Max.x);
 
@@ -916,6 +918,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK(context->ItemExists("Repository activity"));
         IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/merge"));
         IM_CHECK_EQ(context->ItemInfo("Repository activity").RectFull.Min.y,
             context->ItemInfo("**/Refresh").RectFull.Min.y);
         context->MouseMove("Repository activity");
@@ -929,6 +934,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK(context->ItemExists("Repository activity"));
         IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/merge"));
         IM_CHECK_EQ(context->ItemInfo("Repository activity").RectFull.GetHeight(), ImGui::GetFrameHeight());
         context->MouseMove("Repository activity");
         context->Yield(2);
@@ -2683,6 +2691,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK(context->ItemExists("Repository activity"));
         IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/c0"));
         context->MouseMove("Repository activity");
         context->Yield(2);
         IM_CHECK(GImGui->TooltipPreviousWindow != nullptr);
@@ -2709,9 +2720,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(HistoryReady{std::move(expanded)});
         context->Yield(5);
         IM_CHECK(!application.HistoryExpansionPendingForTest());
-        IM_CHECK(application.HistoryExpansionFeedbackForTest());
-        IM_CHECK(!context->ItemExists("**/Commits loaded"));
         IM_CHECK(context->ItemExists("Repository activity"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/c0"));
         application.ApplyEventForTest(BackgroundActivityFinished{84});
         IM_CHECK_LE(std::fabs((*graph)->Scroll.y - scroll_before), 0.01f);
 
@@ -2725,6 +2737,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui dockspace");
         IM_CHECK(context->ItemExists("Repository activity"));
         IM_CHECK(context->ItemExists("**/Refresh"));
+        IM_CHECK(context->ItemExists("Repository"));
+        IM_CHECK(context->ItemExists("Open repository folder"));
+        IM_CHECK(context->ItemExists("**/c0"));
     };
 
     test = IM_REGISTER_TEST(engine, "Workflow", "SubmitEveryDialog");

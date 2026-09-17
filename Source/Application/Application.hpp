@@ -100,7 +100,6 @@ public:
     const std::filesystem::path& OpenedEditorPathForTest() const;
     bool HistoryLoadPendingForTest() const;
     bool HistoryExpansionPendingForTest() const;
-    bool HistoryExpansionFeedbackForTest() const;
     void CancelHistorySearchForTest();
     const std::vector<std::string>& VisibleBookmarksForTest() const;
     const std::vector<std::string>& SelectedTagsForTest() const;
@@ -292,7 +291,6 @@ private:
     std::string _history_anchor;
     float _history_anchor_offset = 0.0f;
     std::string _history_expansion_pending;
-    std::chrono::steady_clock::time_point _history_expansion_feedback_until{};
     std::string _bookmark_filter;
     std::vector<std::string> _visible_bookmarks;
     bool _visible_bookmarks_user_selected = false;

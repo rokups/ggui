@@ -79,6 +79,9 @@ void RepositoryEngine::Impl::Close()
     ++history_request_version;
     {
         std::lock_guard lock(history_mutex);
+        if (history_request.has_value())
+            TraceTaskStale(history_request->task, "history", history_request->request,
+                history_request->query.repository_generation, history_request->queued);
         history_request.reset();
         active_history_query = {};
         expanded_history_regions.clear();
@@ -91,6 +94,11 @@ void RepositoryEngine::Impl::Close()
     }
     {
         std::lock_guard lock(inspector_mutex);
+        for (const InspectorRequest& request : inspector_requests)
+            TraceTaskStale(request.task,
+                std::holds_alternative<LoadDiff>(request.command) ? "diff"
+                    : std::holds_alternative<LoadFileContent>(request.command) ? "file" : "blame",
+                request.request, request.repository_generation, request.queued);
         inspector_requests.clear();
         ++inspector_request;
     }
@@ -220,7 +228,11 @@ void RepositoryEngine::Impl::Attach(GitRepositoryPtr repository)
         Post(SnapshotReady{std::move(initial)});
         {
             std::lock_guard lock(queue_mutex);
-            commands.emplace_back(Refresh{true, {}});
+            const std::uint64_t task = ++diagnostic_task;
+            const auto queued = DiagnosticNow();
+            const std::uint64_t repository_generation = topology_generation.load();
+            commands.push_back({Refresh{true, {}}, task, repository_generation, queued});
+            TraceTaskQueued(task, "refresh", 0, repository_generation);
         }
         queue_cv.notify_one();
     }

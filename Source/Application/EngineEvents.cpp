@@ -69,7 +69,6 @@ void Application::ApplyEvent(Event event)
                         _history_requested_filter.clear();
                         _history_anchor.clear();
                         _history_expansion_pending.clear();
-                        _history_expansion_feedback_until = {};
                         RestoreRepositorySelections(_snapshot->root);
                         _selected_revision = CurrentCommit(*_snapshot);
                         _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
@@ -125,14 +124,7 @@ void Application::ApplyEvent(Event event)
                     _history_hovered_track = -1;
                     _history_hovered_commit_row = -1;
                     if (!_history_view->skeleton && !_history_expansion_pending.empty())
-                    {
                         _history_expansion_pending.clear();
-                        // Fast expansions can finish between two rendered
-                        // frames. Keep a short completion acknowledgement so
-                        // the click never appears to have done nothing.
-                        _history_expansion_feedback_until = std::chrono::steady_clock::now()
-                            + std::chrono::seconds(2);
-                    }
                     _history_revisions.clear();
                     _visible_revisions.clear();
                     std::vector<GraphNode> nodes;

@@ -343,7 +343,6 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _history_requested_filter.clear();
     _history_anchor.clear();
     _history_expansion_pending.clear();
-    _history_expansion_feedback_until = {};
     _visible_bookmarks.clear();
     _visible_bookmarks_user_selected = false;
     _selected_tags.clear();
@@ -360,12 +359,6 @@ bool Application::HistoryLoadPendingForTest() const
 bool Application::HistoryExpansionPendingForTest() const
 {
     return !_history_expansion_pending.empty();
-}
-
-bool Application::HistoryExpansionFeedbackForTest() const
-{
-    return !_history_expansion_pending.empty()
-        || std::chrono::steady_clock::now() < _history_expansion_feedback_until;
 }
 
 void Application::CancelHistorySearchForTest()

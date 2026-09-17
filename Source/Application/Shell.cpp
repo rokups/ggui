@@ -472,9 +472,6 @@ void Application::RenderToolbar()
 {
     // Change actions
     const std::string& current_commit = CurrentCommit(*_snapshot);
-    const bool expansion_loading = !_history_expansion_pending.empty();
-    const bool expansion_feedback = expansion_loading
-        || std::chrono::steady_clock::now() < _history_expansion_feedback_until;
     ImGui::SetCursorPos(ImVec2(10.0f, 8.0f));
     ImGui::BeginDisabled(!_active_operation.empty());
     ImGui::BeginDisabled(current_commit.empty());
@@ -513,10 +510,6 @@ void Application::RenderToolbar()
     ImGui::PopStyleColor(3);
     ImGui::EndDisabled();
 
-    // A cancellable history search takes precedence over repository metadata
-    // in the fixed-width toolbar. Rendering it before the selector keeps the
-    // cancel control reachable instead of placing a working button beyond the
-    // right edge on ordinary window sizes.
     const bool reveal_loaded = RevealRevisionLoaded();
     const bool reveal_visible = reveal_loaded && std::ranges::any_of(_visible_revisions, [&](const int index) {
         if (index < 0 || static_cast<std::size_t>(index) >= _history_revisions.size()) return false;
@@ -551,38 +544,32 @@ void Application::RenderToolbar()
     else
         foreground_activity = history_activity;
     const bool activity_running = !foreground_activity.empty() || !_background_activities.empty();
-    const bool completion_feedback = expansion_feedback && !expansion_loading;
-    // Repository metadata yields the limited toolbar space while transient
-    // history work needs a reachable cancel control.
-    if (!activity_running && !completion_feedback)
+    ImGui::SameLine();
+    ImGui::TextDisabled("REPOSITORY");
+    ImGui::SameLine();
+    const std::string repository_name = RepositoryName(_snapshot->root);
+    const bool can_switch_repository = std::any_of(_recent_repositories.begin(), _recent_repositories.end(),
+        [&](const std::string& path) { return path != _snapshot->root; });
+    ImGui::BeginDisabled(!_active_operation.empty() || !can_switch_repository);
+    const bool repository_combo_open =
+        ImGui::BeginCombo("###Repository", repository_name.c_str(), ImGuiComboFlags_WidthFitPreview);
+    const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+    if (repository_combo_open)
     {
-        ImGui::SameLine();
-        ImGui::TextDisabled("REPOSITORY");
-        ImGui::SameLine();
-        const std::string repository_name = RepositoryName(_snapshot->root);
-        const bool can_switch_repository = std::any_of(_recent_repositories.begin(), _recent_repositories.end(),
-            [&](const std::string& path) { return path != _snapshot->root; });
-        ImGui::BeginDisabled(!_active_operation.empty() || !can_switch_repository);
-        const bool repository_combo_open =
-            ImGui::BeginCombo("###Repository", repository_name.c_str(), ImGuiComboFlags_WidthFitPreview);
-        const bool repository_combo_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
-        if (repository_combo_open)
-        {
-            RenderRecentRepositories();
-            ImGui::EndCombo();
-        }
-        ImGui::EndDisabled();
-        if (repository_combo_hovered)
-            ImGui::SetTooltip("%s\nSwitch repository.", _snapshot->root.c_str());
-        ImGui::SameLine();
-        if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
-            OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
-        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
+        RenderRecentRepositories();
+        ImGui::EndCombo();
     }
+    ImGui::EndDisabled();
+    if (repository_combo_hovered)
+        ImGui::SetTooltip("%s\nSwitch repository.", _snapshot->root.c_str());
+    ImGui::SameLine();
+    if (ImGui::Button(ICON_MS_FOLDER_OPEN "###Open repository folder"))
+        OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
 
-    // Current commit and bookmark. Transient activity takes this same compact
-    // status slot so it remains visible even when the action bar is crowded.
-    if (!current_commit.empty() && !activity_running && !completion_feedback)
+    // Current commit and bookmark are stable context. Activity is appended
+    // after them and never replaces repository context that is already known.
+    if (!current_commit.empty())
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
@@ -633,21 +620,12 @@ void Application::RenderToolbar()
         }
         else if (history_searching)
         {
-            const float cancel_width = ImGui::CalcTextSize("Cancel").x
-                + ImGui::GetStyle().FramePadding.x * 2.0f;
-            ImGui::SameLine(std::max(0.0f, ImGui::GetWindowWidth() - cancel_width - 10.0f));
+            ImGui::SameLine();
             const bool cancel_history = ImGui::Button("Cancel###Cancel history search");
             if (cancel_history || ImGui::IsItemClicked())
                 CancelHistorySearch();
         }
     }
-    else if (completion_feedback)
-    {
-        ImGui::SameLine();
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextDisabled("Commits loaded");
-    }
-
     // Error banner
     if (!_error_message.empty())
     {

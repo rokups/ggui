@@ -5,6 +5,8 @@
 #include "Graph/Layout.hpp"
 
 #include <gtest/gtest.h>
+#include <spdlog/sinks/base_sink.h>
+#include <spdlog/spdlog.h>
 
 #include <algorithm>
 #include <array>
@@ -33,6 +35,49 @@ namespace
 {
 
 using namespace std::chrono_literals;
+
+class TraceCaptureSink final : public spdlog::sinks::base_sink<std::mutex>
+{
+public:
+    std::string Text()
+    {
+        std::lock_guard lock(mutex_);
+        return _text;
+    }
+
+private:
+    void sink_it_(const spdlog::details::log_msg& message) override
+    {
+        _text.append(message.payload.data(), message.payload.size());
+        _text.push_back('\n');
+    }
+    void flush_() override {}
+
+    std::string _text;
+};
+
+class ScopedTraceCapture
+{
+public:
+    ScopedTraceCapture() : _previous(spdlog::default_logger())
+    {
+        static std::atomic_uint counter = 0;
+        _sink = std::make_shared<TraceCaptureSink>();
+        auto logger = std::make_shared<spdlog::logger>(
+            "ggui-test-trace-" + std::to_string(++counter), _sink);
+        logger->set_level(spdlog::level::trace);
+        logger->set_pattern("%v");
+        spdlog::set_default_logger(std::move(logger));
+    }
+
+    ~ScopedTraceCapture() { spdlog::set_default_logger(std::move(_previous)); }
+
+    std::string Text() const { return _sink->Text(); }
+
+private:
+    std::shared_ptr<spdlog::logger> _previous;
+    std::shared_ptr<TraceCaptureSink> _sink;
+};
 
 void CheckGit(int result)
 {
@@ -1133,6 +1178,7 @@ TEST(RepositoryEngine, CollapsesAndTogglesMergeHistory)
     ASSERT_EQ(git("merge --no-ff feature -m merge-feature"), 0);
     ASSERT_EQ(git("branch -D feature"), 0);
 
+    ScopedTraceCapture trace;
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
@@ -1182,6 +1228,40 @@ TEST(RepositoryEngine, CollapsesAndTogglesMergeHistory)
     ASSERT_NE(recollapsed_merge, recollapsed->items.end());
     EXPECT_EQ(recollapsed_merge->parents.size(), 1U);
     EXPECT_EQ(find_description(*recollapsed, "feature-two"), recollapsed->items.end());
+
+    std::string diagnostics;
+    const auto trace_deadline = std::chrono::steady_clock::now() + 1s;
+    do
+    {
+        diagnostics = trace.Text();
+        std::size_t completed_histories = 0;
+        for (std::size_t position = 0;
+            (position = diagnostics.find("kind=history request=", position)) != std::string::npos;
+            ++position)
+        {
+            const std::size_t line_end = diagnostics.find('\n', position);
+            if (diagnostics.find("outcome=success", position) < line_end) ++completed_histories;
+        }
+        if (completed_histories >= 3) break;
+        std::this_thread::sleep_for(1ms);
+    } while (std::chrono::steady_clock::now() < trace_deadline);
+    EXPECT_NE(diagnostics.find("repository task queued task_id="), std::string::npos);
+    EXPECT_NE(diagnostics.find("kind=history request="), std::string::npos);
+    EXPECT_NE(diagnostics.find("repository_generation="), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=cached-metadata-loading"), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=head-selection"), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=bounded-reachability"), std::string::npos);
+    EXPECT_NE(diagnostics.find("cache=hit candidates="), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=base-history-materialization"), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=merge-branch-expansion"), std::string::npos);
+    EXPECT_NE(diagnostics.find("action=collapse-merge active_expansions=0"), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=materialized-revision-hydration"), std::string::npos);
+    EXPECT_NE(diagnostics.find("cache_misses="), std::string::npos);
+    EXPECT_NE(diagnostics.find("added_commits="), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=topological-ordering"), std::string::npos);
+    EXPECT_NE(diagnostics.find("stage=publication"), std::string::npos);
+    EXPECT_NE(diagnostics.find("outcome=success total_ms="), std::string::npos);
+    EXPECT_EQ(diagnostics.find(repository.path.string()), std::string::npos);
 }
 
 TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)

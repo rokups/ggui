@@ -204,9 +204,19 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                     {
                         for (const std::string& tip : tips)
                         {
+                            git_oid current_tip{}, current_destination{};
+                            Check(gg_repository_resolve(&current_tip, gg, tip.c_str()),
+                                "resolve squash descendant");
+                            Check(gg_repository_resolve(
+                                      &current_destination, gg, destination.c_str()),
+                                "resolve squash destination");
+                            if (git_oid_equal(&current_tip, &current_destination))
+                                continue;
                             gg_squash_options options = GG_SQUASH_OPTIONS_INIT;
-                            options.source = tip.c_str();
-                            options.destination = destination.c_str();
+                            const std::string current_tip_id = OidString(current_tip);
+                            const std::string current_destination_id = OidString(current_destination);
+                            options.source = current_tip_id.c_str();
+                            options.destination = current_destination_id.c_str();
                             options.message = value.message_provided || !value.message.empty()
                                 ? value.message.c_str() : nullptr;
                             Mutation mutation;
@@ -391,13 +401,17 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                     Close();
                     {
                         std::lock_guard lock(queue_mutex);
-                        std::erase_if(commands, [](const Command& queued) {
-                            return std::holds_alternative<Refresh>(queued)
-                                || std::holds_alternative<RebuildHistory>(queued)
-                                || std::holds_alternative<ExpandHistoryRegion>(queued)
-                                || std::holds_alternative<LoadDiff>(queued)
-                                || std::holds_alternative<LoadFileContent>(queued)
-                                || std::holds_alternative<LoadBlame>(queued);
+                        std::erase_if(commands, [](const QueuedCommand& queued) {
+                            const bool remove = std::holds_alternative<Refresh>(queued.command)
+                                || std::holds_alternative<RebuildHistory>(queued.command)
+                                || std::holds_alternative<ExpandHistoryRegion>(queued.command)
+                                || std::holds_alternative<LoadDiff>(queued.command)
+                                || std::holds_alternative<LoadFileContent>(queued.command)
+                                || std::holds_alternative<LoadBlame>(queued.command);
+                            if (remove)
+                                TraceTaskStale(queued.task, CommandName(queued.command), 0,
+                                    queued.repository_generation, queued.queued);
+                            return remove;
                         });
                     }
                     Post(WorkspaceRemoved{value.root, true});

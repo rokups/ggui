@@ -59,10 +59,19 @@ bool RepositoryEngine::Enqueue(Command command)
         repository_generation = _impl->topology_generation.load();
         snapshot_generation = _impl->generation.load();
         const std::uint64_t request = ++_impl->inspector_request;
+        const std::uint64_t task = ++_impl->diagnostic_task;
+        const auto queued_at = DiagnosticNow();
+        const std::string_view kind = std::holds_alternative<LoadDiff>(command) ? "diff"
+            : std::holds_alternative<LoadFileContent>(command) ? "file" : "blame";
         {
             std::lock_guard lock(_impl->inspector_mutex);
             // Reads are latest-wins. Running reads are allowed to finish, but
             // their generation check prevents them from publishing stale UI.
+            for (const RepositoryEngine::Impl::InspectorRequest& pending : _impl->inspector_requests)
+                TraceTaskStale(pending.task,
+                    std::holds_alternative<LoadDiff>(pending.command) ? "diff"
+                        : std::holds_alternative<LoadFileContent>(pending.command) ? "file" : "blame",
+                    pending.request, pending.repository_generation, pending.queued);
             _impl->inspector_requests.clear();
             RepositoryEngine::Impl::InspectorRequest queued;
             queued.path = std::move(path);
@@ -70,6 +79,8 @@ bool RepositoryEngine::Enqueue(Command command)
             queued.snapshot_generation = snapshot_generation;
             queued.session = request_session;
             queued.request = request;
+            queued.task = task;
+            queued.queued = queued_at;
             if (auto* diff = std::get_if<LoadDiff>(&command))
                 queued.command = std::move(*diff);
             else if (auto* file = std::get_if<LoadFileContent>(&command))
@@ -78,6 +89,7 @@ bool RepositoryEngine::Enqueue(Command command)
                 queued.command = std::move(std::get<LoadBlame>(command));
             _impl->inspector_requests.push_back(std::move(queued));
         }
+        TraceTaskQueued(task, kind, request, repository_generation);
         _impl->inspector_cv.notify_one();
         return true;
     }
@@ -86,7 +98,7 @@ bool RepositoryEngine::Enqueue(Command command)
         std::lock_guard lock(_impl->queue_mutex);
         if (!_impl->commands.empty())
         {
-            if (auto* queued = std::get_if<Refresh>(&_impl->commands.back()))
+            if (auto* queued = std::get_if<Refresh>(&_impl->commands.back().command))
             {
                 const bool queued_full = queued->snapshot_working_copy && queued->paths.empty();
                 const bool incoming_full = refresh->snapshot_working_copy && refresh->paths.empty();
@@ -117,19 +129,34 @@ bool RepositoryEngine::Enqueue(Command command)
         if (std::holds_alternative<LoadDiff>(command) || std::holds_alternative<LoadFileContent>(command)
             || std::holds_alternative<LoadBlame>(command))
             std::erase_if(_impl->commands,
-                [](const Command& queued) {
-                    return std::holds_alternative<LoadDiff>(queued)
-                        || std::holds_alternative<LoadFileContent>(queued)
-                        || std::holds_alternative<LoadBlame>(queued);
+                [](const RepositoryEngine::Impl::QueuedCommand& queued) {
+                    const bool remove = std::holds_alternative<LoadDiff>(queued.command)
+                        || std::holds_alternative<LoadFileContent>(queued.command)
+                        || std::holds_alternative<LoadBlame>(queued.command);
+                    if (remove)
+                        TraceTaskStale(queued.task, CommandName(queued.command), 0,
+                            queued.repository_generation, queued.queued);
+                    return remove;
                 });
         else if (std::holds_alternative<CloseRepository>(command))
-            std::erase_if(_impl->commands, [](const Command& queued) {
-                return std::holds_alternative<LoadDiff>(queued) || std::holds_alternative<LoadFileContent>(queued)
-                    || std::holds_alternative<LoadBlame>(queued) || std::holds_alternative<Refresh>(queued)
-                    || std::holds_alternative<RebuildHistory>(queued)
-                    || std::holds_alternative<ExpandHistoryRegion>(queued);
+            std::erase_if(_impl->commands, [](const RepositoryEngine::Impl::QueuedCommand& queued) {
+                const bool remove = std::holds_alternative<LoadDiff>(queued.command)
+                    || std::holds_alternative<LoadFileContent>(queued.command)
+                    || std::holds_alternative<LoadBlame>(queued.command)
+                    || std::holds_alternative<Refresh>(queued.command)
+                    || std::holds_alternative<RebuildHistory>(queued.command)
+                    || std::holds_alternative<ExpandHistoryRegion>(queued.command);
+                if (remove)
+                    TraceTaskStale(queued.task, CommandName(queued.command), 0,
+                        queued.repository_generation, queued.queued);
+                return remove;
             });
-        _impl->commands.push_back(std::move(command));
+        const std::uint64_t task = ++_impl->diagnostic_task;
+        const auto queued = DiagnosticNow();
+        const std::string name = CommandName(command);
+        const std::uint64_t repository_generation = _impl->topology_generation.load();
+        _impl->commands.push_back({std::move(command), task, repository_generation, queued});
+        TraceTaskQueued(task, name, 0, repository_generation);
     }
     _impl->queue_cv.notify_one();
     return true;

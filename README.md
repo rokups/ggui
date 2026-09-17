@@ -10,7 +10,7 @@ connected skeleton for the current workspace and selected heads, then replaces
 it with up to 256 nearby commits. Ellipsis rows are real collapsed ancestry
 regions: selecting one adds up to 128 nearby commits while preserving the
 viewport anchor, and both the row and toolbar report that expansion is
-loading. Very fast expansions leave a brief “Commits loaded” acknowledgement.
+loading without replacing the repository and current-commit context.
 Merge commits show their first-parent history by default. Their graph dot has
 a `+` control for revealing the merged branch and a `-` control for collapsing
 it again; nested merges remain independently collapsed.
@@ -39,6 +39,37 @@ For a Windows cross-build, install MinGW-w64 and a static Windows build of
 
 For a native Visual Studio 2022 x64 build, configure with `msvc-x64`, then
 build with either `msvc-x64-debug` or `msvc-x64-release`.
+
+## Repository timing diagnostics
+
+Repository timing logs are disabled during normal use. To diagnose a slow
+repository operation, launch ggui from a terminal with spdlog's standard
+`SPDLOG_LEVEL` environment variable set to `trace` and redirect stderr to a
+file:
+
+```sh
+SPDLOG_LEVEL=trace ./build/linux-x64/Debug/ggui /path/to/repository 2>ggui-support.log
+```
+
+Windows GUI applications do not have an inherited stderr stream, so use
+`GGUI_LOG_FILE` to select the support log directly in PowerShell:
+
+```powershell
+$env:SPDLOG_LEVEL = "trace"
+$env:GGUI_LOG_FILE = "$PWD\ggui-support.log"
+.\build\msvc-x64\Debug\ggui.exe C:\path\to\repository
+```
+
+`GGUI_LOG_FILE` works on every platform and truncates the selected file when
+ggui starts. If the file cannot be opened, ggui falls back to stderr and
+reports the error there.
+
+Reproduce the slow operation, close ggui, and provide `ggui-support.log` with
+the support report. Trace records include timestamps, thread IDs, correlated
+repository task and stage durations, and count/cache metadata. They do not
+include repository paths, ref names, search text, file contents, commit
+messages, URLs, or credentials. ggui does not create a log file itself unless
+`GGUI_LOG_FILE` is set.
 
 The application operates on one repository at a time. Repository mutations
 are serialized on a worker thread and use libgg's public C API.
