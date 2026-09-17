@@ -295,7 +295,34 @@ void Application::CreateChange(const std::string& parent)
     const std::vector<std::string> create_parents = parent.empty() ? SelectedParentRevisions()
         : parent == "@" && !_snapshot->working_copy.empty()        ? std::vector<std::string>{"@"}
                                                                    : std::vector{selected_revision};
-    EnqueueAction(NewChange{{}, create_parents, {}, {}, false});
+    const Revision* selected = ResolveSnapshotRevision(*_snapshot, selected_revision, _history_revisions);
+    const std::string selected_oid = selected == nullptr ? selected_revision : selected->oid;
+    NewChange create{{}, create_parents, {}, {}, false};
+    std::vector<std::string> bookmarks;
+    for (const NamedRef& ref : _snapshot->refs)
+        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == selected_oid)
+            bookmarks.push_back(ref.name);
+
+    std::vector<Command> commands;
+    commands.emplace_back(std::move(create));
+
+    // A fresh, undescribed empty change does not add a useful boundary. Once
+    // its child exists, splice that placeholder out so repeated New actions
+    // continue the same change instead of building an empty stack. Pushed
+    // history (including pushed descendants) and other workspaces must stay
+    // intact because abandoning it would rewrite protected history.
+    const bool another_workspace = std::ranges::any_of(_snapshot->workspaces,
+        [&](const Workspace& workspace) {
+            return !workspace.current && workspace.working_copy == selected_oid;
+        });
+    if (selected != nullptr && !selected->parents.empty() && selected->empty
+        && selected->description.empty() && !selected->pushed && !another_workspace
+        && !RewritesLockedCommit(selected_oid))
+        commands.emplace_back(Abandon{{selected_oid}, true, false, {}});
+
+    if (!bookmarks.empty())
+        commands.emplace_back(Bookmark{GG_BOOKMARK_ADVANCE, std::move(bookmarks), "@", {}});
+    QueueCommands(std::move(commands), {}, {});
 }
 
 bool Application::IsLocked(const std::string& identifier) const

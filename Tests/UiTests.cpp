@@ -527,31 +527,41 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(empty_change->empty);
         const std::size_t revision_count = Application::Instance().HistoryRevisionsForTest().size();
         IM_CHECK(Application::Instance().ActiveOperationForTest().empty());
+        const auto advanced_bookmark = std::ranges::find_if(
+            Application::Instance().SnapshotForTest()->refs, [](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+            });
+        IM_CHECK_NE(advanced_bookmark, Application::Instance().SnapshotForTest()->refs.end());
+        IM_CHECK_EQ(advanced_bookmark->target, empty_working_copy);
         IM_CHECK_EQ(Application::Instance().SelectedRevisionsForTest(),
             std::vector<std::string>{empty_working_copy});
         Application::Instance().CreateChangeForTest("@");
-        for (int attempt = 0; attempt < 1000
-            && Application::Instance().SnapshotForTest()->working_copy == empty_working_copy; ++attempt)
+        std::shared_ptr<const RepoSnapshot> replacement;
+        for (int attempt = 0; attempt < 1000 && replacement == nullptr; ++attempt)
         {
             context->Yield();
-            std::this_thread::sleep_for(5ms);
-        }
-        const auto next = Application::Instance().SnapshotForTest();
-        IM_CHECK_NE(next->working_copy, empty_working_copy);
-        std::optional<Revision> next_change;
-        for (int attempt = 0; attempt < 1000 && !next_change.has_value(); ++attempt)
-        {
-            context->Yield();
+            const auto snapshot = Application::Instance().SnapshotForTest();
             const auto& revisions = Application::Instance().HistoryRevisionsForTest();
-            const auto found = std::ranges::find(revisions, next->working_copy, &Revision::oid);
-            if (found != revisions.end()) next_change = *found;
-            else std::this_thread::sleep_for(5ms);
+            if (snapshot != nullptr && snapshot->working_copy != empty_working_copy
+                && std::ranges::none_of(revisions,
+                    [&](const Revision& revision) { return revision.oid == empty_working_copy; }))
+                replacement = snapshot;
+            else
+                std::this_thread::sleep_for(5ms);
         }
-        IM_CHECK(next_change.has_value());
+        IM_CHECK_NE(replacement, nullptr);
+        if (replacement == nullptr)
+            return;
+        const auto& replacement_revisions = Application::Instance().HistoryRevisionsForTest();
+        const auto next_change = std::ranges::find(replacement_revisions,
+            replacement->working_copy, &Revision::oid);
+        IM_CHECK_NE(next_change, replacement_revisions.end());
+        if (next_change == replacement_revisions.end())
+            return;
         IM_CHECK(next_change->empty);
-        IM_CHECK_EQ(next_change->parents, std::vector<std::string>{empty_working_copy});
-        IM_CHECK_EQ(Application::Instance().HistoryRevisionsForTest().size(), revision_count + 1);
-        IM_CHECK(std::ranges::any_of(Application::Instance().HistoryRevisionsForTest(),
+        IM_CHECK_EQ(next_change->parents, empty_change->parents);
+        IM_CHECK_EQ(replacement_revisions.size(), revision_count);
+        IM_CHECK(std::ranges::none_of(replacement_revisions,
             [&](const Revision& revision) { return revision.oid == empty_working_copy; }));
 
         Repository().Write("tracked.txt", "changed\n");

@@ -90,7 +90,7 @@ Backend names are `gg_repository_*` C API suffixes. GUI dispatch is in
 
 | Action and entry points | Backend | Reviewed behavior | Supporting coverage |
 | --- | --- | --- | --- |
-| New: toolbar, Ctrl+N, N, row menu; selected merge parents | `new_change` | Creates a child without abandoning empty or pushed parents. One GUI command and one logical undo step. | Workflow creation/insertion/merge tests; engine creation tests; real UI locked historical parent and multi-parent regressions. |
+| New: toolbar, Ctrl+N, N, row menu; selected merge parents | `new_change` | Creates a child over non-empty or pushed parents. An unpushed, undescribed empty parent is consumed after the child is created; protected history and other workspaces are preserved. | Workflow creation/insertion/merge tests; engine creation tests; real UI locked historical parent and multi-parent regressions. |
 | Edit: E/menu | `edit` | Moves workspace to selected change; root editing retains identity through later snapshots. Dirty files are synchronized first. | Workflow edit/navigation; root identity, no-workspace and HEAD-lock regressions. |
 | Previous/Next: menu/toolbar | `move` | Default navigation creates a working change at the selected adjacent revision; ambiguous/missing targets reject cleanly. | Workflow navigation tests, including `NavigationCreatesChangesUnlessEditIsRequested`. |
 | Duplicate Change/Branch: D/Shift+D/menu | `duplicate` | Original graph and refs remain intact. Copies remap their selected parents and workspace only. | `DuplicatesABranchWithoutRewritingTheOriginal`, selected-only duplication test. |
@@ -116,9 +116,9 @@ Backend names are `gg_repository_*` C API suffixes. GUI dispatch is in
 - Added the squash API used by the GUI, with arbitrary supported endpoints and
   branch-path semantics. Reduced unnecessary rewrites for no-op rebase,
   unchanged identities and reorder prefixes.
-- Removed New's implicit empty-parent abandonment. Lock checks now distinguish
-  rewritten roots/descendants from read-only inputs and share revision
-  resolution. Rewrite confirmations bind to reviewed state.
+- New consumes only disposable empty parents. Lock checks distinguish rewritten
+  roots/descendants from read-only inputs and share revision resolution.
+  Rewrite confirmations bind to reviewed state.
 - Fixed metadata clearing, default Restore source, and Undo/Redo snapshotting.
 - Replaced broad descendant-tree restoration during partial transfers with
   atomic selected transfers. Preserved edited destinations, renames, merge
