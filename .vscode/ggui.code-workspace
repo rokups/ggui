@@ -7,5 +7,7 @@
 			"path": "../../gg"
 		}
 	],
-	"settings": {}
+	"settings": {
+		"cmake.mergedCompileCommands": "${workspaceFolder}/compile_commands.json"
+	}
 }

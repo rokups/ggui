@@ -239,13 +239,13 @@ void Application::ProcessEvent(SDL_Event& event)
             _window_y = event.window.data2;
             _window_has_position = true;
         }
-        if (normal && event.type == SDL_EVENT_WINDOW_RESIZED)
+        if (normal && (event.type == SDL_EVENT_WINDOW_RESIZED
+            || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED))
         {
-            _window_width = event.window.data1;
-            _window_height = event.window.data2;
-            _window_has_size = true;
+            _window_has_size = SDL_GetWindowSize(_window, &_window_width, &_window_height);
         }
         if (event.type == SDL_EVENT_WINDOW_MOVED || event.type == SDL_EVENT_WINDOW_RESIZED
+            || event.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED
             || event.type == SDL_EVENT_WINDOW_MAXIMIZED || event.type == SDL_EVENT_WINDOW_RESTORED)
             ImGui::MarkIniSettingsDirty();
         if (event.type == SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED)
@@ -260,9 +260,19 @@ bool Application::Initialize()
         spdlog::error("SDL_Init failed: {}", SDL_GetError());
         return false;
     }
+    int window_width = 1440;
+    int window_height = 900;
+    const SDL_DisplayID primary_display = SDL_GetPrimaryDisplay();
+    SDL_Rect usable_bounds{};
+    if (primary_display != 0 && SDL_GetDisplayUsableBounds(primary_display, &usable_bounds)
+        && usable_bounds.w > 0 && usable_bounds.h > 0)
+    {
+        window_width = std::max(320, usable_bounds.w / 2);
+        window_height = std::max(240, usable_bounds.h / 2);
+    }
     _window = SDL_CreateWindow(
-        "ggui", 1440, 900,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+        "ggui", window_width, window_height,
+        SDL_WINDOW_HIDDEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (_window == nullptr)
     {
         spdlog::error("SDL_CreateWindow failed: {}", SDL_GetError());
@@ -328,6 +338,12 @@ bool Application::Initialize()
     if (!ImGui_ImplSDLGPU3_Init(&init_info))
     {
         spdlog::error("ImGui SDL_GPU initialization failed");
+        Shutdown();
+        return false;
+    }
+    if (!SDL_ShowWindow(_window))
+    {
+        spdlog::error("SDL_ShowWindow failed: {}", SDL_GetError());
         Shutdown();
         return false;
     }
