@@ -18,11 +18,25 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 namespace Ggui
 {
 using namespace ApplicationInternal;
+
+namespace
+{
+std::string NormalizedRepositoryPath(const std::string& path)
+{
+    if (path.empty()) return {};
+    std::filesystem::path normalized = std::filesystem::path(path).lexically_normal();
+    std::error_code error;
+    const std::filesystem::path canonical = std::filesystem::weakly_canonical(normalized, error);
+    if (!error) normalized = canonical;
+    return normalized.string();
+}
+} // namespace
 
 SDL_Rect ApplicationInternal::FitWindowToDisplays(
     SDL_Rect window, std::span<const SDL_Rect> displays)
@@ -225,8 +239,27 @@ void Application::ProcessEvent(SDL_Event& event)
     if (event.type == SDL_EVENT_QUIT
         || (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(_window)))
         _running = false;
-    if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr && _active_operation.empty())
-        EnqueueAction(OpenRepository{event.drop.data});
+    if (event.type == SDL_EVENT_DROP_BEGIN)
+    {
+        _drop_batch_active = true;
+        _drop_batch_opened = false;
+    }
+    if (event.type == SDL_EVENT_DROP_FILE && event.drop.data != nullptr)
+    {
+        RememberRepository(event.drop.data);
+        const bool first_drop = !_drop_batch_active || !_drop_batch_opened;
+        if (first_drop)
+        {
+            _drop_batch_opened = true;
+            if (_active_operation.empty())
+                EnqueueAction(OpenRepository{event.drop.data});
+        }
+    }
+    if (event.type == SDL_EVENT_DROP_COMPLETE)
+    {
+        _drop_batch_active = false;
+        _drop_batch_opened = false;
+    }
     if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST
         && event.window.windowID == SDL_GetWindowID(_window))
     {
@@ -526,7 +559,11 @@ void Application::LoadSettings()
         std::ifstream input(_settings_path);
         nlohmann::json json;
         input >> json;
-        _recent_repositories = json.value("recentRepositories", std::vector<std::string>{});
+        const std::vector<std::string> loaded_recent_repositories =
+            json.value("recentRepositories", std::vector<std::string>{});
+        _recent_repositories.clear();
+        for (auto path = loaded_recent_repositories.rbegin(); path != loaded_recent_repositories.rend(); ++path)
+            RememberRepository(*path);
         _repository_visible_bookmarks = json.value("visibleBookmarks", decltype(_repository_visible_bookmarks){});
         _repository_selected_tags = json.value("selectedTags", decltype(_repository_selected_tags){});
         _repository_selected_remotes = json.value("selectedRemotes", decltype(_repository_selected_remotes){});
@@ -577,11 +614,11 @@ void Application::SaveSettings()
 
 void Application::RememberRepository(const std::string& path)
 {
-    _recent_repositories.erase(
-        std::remove(_recent_repositories.begin(), _recent_repositories.end(), path), _recent_repositories.end());
-    _recent_repositories.insert(_recent_repositories.begin(), path);
-    if (_recent_repositories.size() > 10)
-        _recent_repositories.resize(10);
+    const std::string normalized_path = NormalizedRepositoryPath(path);
+    std::erase_if(_recent_repositories, [&](const std::string& recent_path) {
+        return NormalizedRepositoryPath(recent_path) == normalized_path;
+    });
+    _recent_repositories.insert(_recent_repositories.begin(), normalized_path);
 }
 
 void Application::ForgetRepository(const std::string& path)

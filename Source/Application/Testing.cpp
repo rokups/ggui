@@ -391,6 +391,11 @@ void Application::AddRecentForTest(const std::string& path)
     RememberRepository(path);
 }
 
+const std::vector<std::string>& Application::RecentRepositoriesForTest() const
+{
+    return _recent_repositories;
+}
+
 void Application::ProcessEventForTest(SDL_Event event)
 {
     const bool running = _running;

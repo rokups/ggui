@@ -75,6 +75,7 @@ public:
     void SetSnapshotForTest(RepoSnapshot snapshot);
     void ClearSnapshotForTest();
     void AddRecentForTest(const std::string& path);
+    const std::vector<std::string>& RecentRepositoriesForTest() const;
     void ProcessEventForTest(SDL_Event event);
     void SetDarkThemeForTest(bool dark);
     static std::vector<std::string> SplitLinesForTest(const std::string& text);
@@ -331,6 +332,8 @@ private:
     std::string _compare_to;
     bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;
+    bool _drop_batch_active = false;
+    bool _drop_batch_opened = false;
     std::filesystem::path _settings_path;
     std::filesystem::path _executable_path;
     std::string _imgui_ini_path;

@@ -1835,6 +1835,39 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_Escape);
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DroppedRepositories");
+    test->TestFunc = [](ImGuiTestContext*) {
+        Application& application = Application::Instance();
+        const std::vector<std::string> dropped_paths{
+            "dropped-first", "dropped-second", "dropped-third", "dropped-fourth", "dropped-fifth",
+            "dropped-sixth", "dropped-seventh", "dropped-eighth", "dropped-ninth", "dropped-tenth",
+            "dropped-eleventh", "dropped-twelfth"};
+        SDL_Event event{};
+        event.type = SDL_EVENT_DROP_BEGIN;
+        application.ProcessEventForTest(event);
+        for (const std::string& path : dropped_paths)
+        {
+            event = {};
+            event.type = SDL_EVENT_DROP_FILE;
+            event.drop.data = path.c_str();
+            application.ProcessEventForTest(event);
+        }
+        event = {};
+        event.type = SDL_EVENT_DROP_COMPLETE;
+        application.ProcessEventForTest(event);
+
+        const auto& recent_repositories = application.RecentRepositoriesForTest();
+        IM_CHECK_GE(recent_repositories.size(), dropped_paths.size());
+        for (std::size_t index = 0; index < dropped_paths.size(); ++index)
+            IM_CHECK_EQ(recent_repositories[index], dropped_paths[dropped_paths.size() - index - 1]);
+
+        application.AddRecentForTest(dropped_paths.front() + "/");
+        std::size_t duplicate_count = 0;
+        for (const std::string& path : application.RecentRepositoriesForTest())
+            duplicate_count += path == dropped_paths.front();
+        IM_CHECK_EQ(duplicate_count, 1U);
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "RichRepositoryStates");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
