@@ -66,6 +66,7 @@ inline constexpr ImU32 kStatusDeleted = IM_COL32(248, 81, 73, 255);
 inline constexpr ImU32 kStatusRenamed = IM_COL32(47, 129, 247, 255);
 inline constexpr ImU32 kStatusSpecial = IM_COL32(166, 91, 216, 255);
 inline constexpr ImU32 kStatusConflict = IM_COL32(255, 123, 114, 255);
+inline constexpr ImU32 kHistoryConflict = IM_COL32(220, 38, 38, 255);
 inline constexpr ImU32 kStatusPushed = IM_COL32(246, 248, 250, 255);
 inline constexpr ImU32 kStatusUnpushed = IM_COL32(219, 109, 40, 255);
 inline constexpr ImU32 kCommitId = IM_COL32(47, 129, 247, 255);

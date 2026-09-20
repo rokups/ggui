@@ -448,6 +448,11 @@ void Application::RenderHistory()
 
             const Revision& revision = item.revision;
             const float dot_radius = std::min(kDotRadius, lane_width * 0.35f);
+            const bool working_copy_conflicted = revision.working_copy && _snapshot != nullptr
+                && std::ranges::any_of(_snapshot->status, [](const StatusEntry& entry) {
+                    return entry.conflicted;
+                });
+            const bool conflicted = revision.conflicted || working_copy_conflicted;
             const ImRect dot_rect({dot_x - dot_radius - 3.0f, center - dot_radius - 3.0f},
                 {dot_x + dot_radius + 3.0f, center + dot_radius + 3.0f});
             const bool merge = revision.parents.size() > 1;
@@ -466,7 +471,7 @@ void Application::RenderHistory()
                 draw->AddCircle({dot_x, center}, dot_radius + 2.5f,
                     IM_COL32(255, 255, 255, 180), 0, 2.5f);
             draw->AddCircleFilled({dot_x, center}, dot_radius,
-                revision.conflicted ? kStatusConflict : revision.working_copy ? kWorkingCommitId
+                conflicted ? kHistoryConflict : revision.working_copy ? kWorkingCommitId
                     : revision.pushed ? kStatusPushed : kStatusUnpushed);
             if (merge)
             {
