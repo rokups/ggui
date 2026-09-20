@@ -20,6 +20,44 @@ using namespace RepositoryInternal;
 
 namespace
 {
+bool IsConflictMarkerLine(std::string_view line)
+{
+    if (!line.empty() && line.back() == '\r')
+        line.remove_suffix(1);
+    if (line.size() < 7)
+        return false;
+    const char marker = line.front();
+    const std::size_t marker_end = line.find_first_not_of(marker);
+    const std::size_t marker_length = marker_end == std::string_view::npos ? line.size() : marker_end;
+    if (marker_length < 7)
+        return false;
+    const std::string_view label = line.substr(marker_length);
+    switch (marker)
+    {
+    case '<':
+    case '>':
+    case '|': return label.empty() || label.starts_with(' ');
+    case '=': return label.empty();
+    case '+': return label.starts_with(" Side #");
+    case '-': return label.starts_with(" Base #");
+    default: return false;
+    }
+}
+
+bool ContainsConflictMarker(std::string_view contents)
+{
+    while (!contents.empty())
+    {
+        const std::size_t line_end = contents.find('\n');
+        if (IsConflictMarkerLine(contents.substr(0, line_end)))
+            return true;
+        if (line_end == std::string_view::npos)
+            break;
+        contents.remove_prefix(line_end + 1);
+    }
+    return false;
+}
+
 void RequireCurrentLineSource(git_repository* repository, const std::string& requested, const git_oid& resolved)
 {
     // Diff selections identify positions in a particular snapshot. An alias
@@ -125,6 +163,7 @@ void RepositoryEngine::Impl::ResolveConflictFile(const ResolveConflict& command)
     options.from = source.c_str();
     options.into = command.revision.c_str();
     options.filesets = filesets.Get();
+    options.preserve_conflicts = command.present && ContainsConflictMarker(command.contents);
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
     Check(gg_repository_restore(&mutation.value, gg, &options, &operation), "restore conflict resolution");

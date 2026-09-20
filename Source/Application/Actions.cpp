@@ -4,6 +4,10 @@
 
 #include <nfd.h>
 
+#include <git2/merge.h>
+#include <git2/sys/errors.h>
+
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +68,98 @@ void CheckMerge(int result, std::string_view action)
     const git_error* error = git_error_last();
     throw std::runtime_error(std::string(action) + ": "
         + (error == nullptr || error->message == nullptr ? "libgit2 error" : error->message));
+}
+
+bool IsGgConflictFile(std::string_view contents)
+{
+    bool opening = false;
+    bool side = false;
+    bool base = false;
+    bool closing = false;
+    while (!contents.empty())
+    {
+        const std::size_t line_end = contents.find('\n');
+        std::string_view line = contents.substr(0, line_end);
+        if (!line.empty() && line.back() == '\r')
+            line.remove_suffix(1);
+        const char marker = line.empty() ? '\0' : line.front();
+        const std::size_t marker_end = line.find_first_not_of(marker);
+        const std::size_t marker_length = marker_end == std::string_view::npos ? line.size() : marker_end;
+        const std::string_view label = marker_length >= 7 ? line.substr(marker_length) : std::string_view{};
+        opening |= marker == '<' && marker_length >= 7 && label == " Conflict";
+        side |= marker == '+' && marker_length >= 7 && label.starts_with(" Side #");
+        base |= marker == '-' && marker_length >= 7 && label.starts_with(" Base #");
+        closing |= marker == '>' && marker_length >= 7 && label == " Conflict ends";
+        if (line_end == std::string_view::npos)
+            break;
+        contents.remove_prefix(line_end + 1);
+    }
+    return opening && (side || base) && closing;
+}
+
+std::optional<std::string> TreeBlobContents(git_repository* repository, git_tree* tree, const char* path)
+{
+    git_tree_entry* raw_entry = nullptr;
+    const int entry_result = git_tree_entry_bypath(&raw_entry, tree, path);
+    if (entry_result == GIT_ENOTFOUND)
+    {
+        git_error_clear();
+        return std::nullopt;
+    }
+    CheckMerge(entry_result, "load conflicted file");
+    GitPtr<git_tree_entry, git_tree_entry_free> entry(raw_entry);
+    if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
+        throw std::runtime_error("The conflicted path is not a file");
+    git_blob* raw_blob = nullptr;
+    CheckMerge(git_blob_lookup(&raw_blob, repository, git_tree_entry_id(entry.get())),
+        "load conflicted file contents");
+    GitPtr<git_blob, git_blob_free> blob(raw_blob);
+    return std::string(static_cast<const char*>(git_blob_rawcontent(blob.get())),
+        static_cast<std::size_t>(git_blob_rawsize(blob.get())));
+}
+
+std::string StandardMergeContents(
+    git_repository* repository, const gg_conflict& conflict, const std::string& path)
+{
+    struct MergeInput
+    {
+        GitPtr<git_blob, git_blob_free> blob{nullptr};
+        git_merge_file_input input = GIT_MERGE_FILE_INPUT_INIT;
+    };
+    std::array<MergeInput, 3> inputs;
+    const gg_conflict_term* terms[]{
+        conflict.remove_count == 0 ? nullptr : conflict.removes,
+        conflict.add_count == 0 ? nullptr : conflict.adds,
+        conflict.add_count < 2 ? nullptr : conflict.adds + 1};
+    for (std::size_t index = 0; index < inputs.size(); ++index)
+    {
+        const gg_conflict_term* term = terms[index];
+        if (term == nullptr || !term->present)
+            continue;
+        git_blob* raw_blob = nullptr;
+        CheckMerge(git_blob_lookup(&raw_blob, repository, &term->oid), "load merge input");
+        inputs[index].blob.reset(raw_blob);
+        inputs[index].input.ptr = static_cast<const char*>(git_blob_rawcontent(inputs[index].blob.get()));
+        inputs[index].input.size = static_cast<std::size_t>(git_blob_rawsize(inputs[index].blob.get()));
+        inputs[index].input.path = path.c_str();
+        inputs[index].input.mode = term->mode;
+    }
+    git_merge_file_options options = GIT_MERGE_FILE_OPTIONS_INIT;
+    options.flags = GIT_MERGE_FILE_STYLE_MERGE;
+    options.ancestor_label = "BASE";
+    options.our_label = "LOCAL";
+    options.their_label = "REMOTE";
+    git_merge_file_result result{};
+    CheckMerge(git_merge_file(&result, &inputs[0].input, &inputs[1].input, &inputs[2].input, &options),
+        "create standard merge file");
+    struct ResultGuard
+    {
+        git_merge_file_result& value;
+        ~ResultGuard() { git_merge_file_result_free(&value); }
+    } result_guard{result};
+    if (result.path == nullptr)
+        throw std::runtime_error("The conflict sides have incompatible paths");
+    return std::string(result.ptr == nullptr ? "" : result.ptr, result.len);
 }
 
 git_index_entry ConflictIndexEntry(const gg_conflict_term& term, const std::string& path)
@@ -1056,31 +1152,15 @@ void Application::OpenConflictInMergeTool(const std::string& path)
         git_tree* raw_tree = nullptr;
         CheckMerge(git_commit_tree(&raw_tree, revision.get()), "load conflicted revision tree");
         GitPtr<git_tree, git_tree_free> tree(raw_tree);
-        git_tree_entry* raw_entry = nullptr;
-        const int entry_result = git_tree_entry_bypath(&raw_entry, tree.get(), path.c_str());
-        if (entry_result == GIT_ENOTFOUND)
-        {
-            std::ofstream output(_merge_result_path, std::ios::binary);
-            if (!output)
-                throw std::runtime_error("Could not prepare the merge result file");
-        }
-        else
-        {
-            CheckMerge(entry_result, "load conflicted file");
-            GitPtr<git_tree_entry, git_tree_entry_free> entry(raw_entry);
-            if (git_tree_entry_type(entry.get()) != GIT_OBJECT_BLOB)
-                throw std::runtime_error("The conflicted path is not a file");
-            git_blob* raw_blob = nullptr;
-            CheckMerge(git_blob_lookup(&raw_blob, repository.get(), git_tree_entry_id(entry.get())),
-                "load conflicted file contents");
-            GitPtr<git_blob, git_blob_free> blob(raw_blob);
-            std::ofstream output(_merge_result_path, std::ios::binary | std::ios::trunc);
-            if (git_blob_rawsize(blob.get()) != 0)
-                output.write(static_cast<const char*>(git_blob_rawcontent(blob.get())),
-                    static_cast<std::streamsize>(git_blob_rawsize(blob.get())));
-            if (!output)
-                throw std::runtime_error("Could not prepare the merge result file");
-        }
+        const std::optional<std::string> current = TreeBlobContents(repository.get(), tree.get(), path.c_str());
+        const std::string initial = current.has_value() && !IsGgConflictFile(*current)
+            ? *current
+            : StandardMergeContents(repository.get(), *conflict, path);
+        std::ofstream output(_merge_result_path, std::ios::binary | std::ios::trunc);
+        if (!initial.empty())
+            output.write(initial.data(), static_cast<std::streamsize>(initial.size()));
+        if (!output)
+            throw std::runtime_error("Could not prepare the merge result file");
 
         const std::filesystem::path index_path = _merge_temp_directory / "index";
         git_index* raw_index = nullptr;
@@ -1101,12 +1181,15 @@ void Application::OpenConflictInMergeTool(const std::string& path)
             "stage conflict sides");
         CheckMerge(git_index_write(index.get()), "write temporary merge index");
 
-        const char* arguments[]{"git", "-C", _snapshot->root.c_str(), "mergetool", "--no-prompt", "--",
-            path.c_str(), nullptr};
+        const char* raw_git_directory = git_repository_path(repository.get());
+        if (raw_git_directory == nullptr)
+            throw std::runtime_error("The repository has no git directory");
+        const std::string git_directory(raw_git_directory);
+        const char* arguments[]{"git", "-C", worktree.c_str(), "--git-dir", git_directory.c_str(), "mergetool",
+            "--no-prompt", "--", path.c_str(), nullptr};
         SDL_Environment* environment = SDL_CreateEnvironment(true);
         if (environment == nullptr
-            || !SDL_SetEnvironmentVariable(environment, "GIT_INDEX_FILE", index_path.string().c_str(), true)
-            || !SDL_SetEnvironmentVariable(environment, "GIT_WORK_TREE", worktree.string().c_str(), true))
+            || !SDL_SetEnvironmentVariable(environment, "GIT_INDEX_FILE", index_path.string().c_str(), true))
         {
             if (environment != nullptr)
                 SDL_DestroyEnvironment(environment);
@@ -1176,9 +1259,11 @@ void Application::FinishConflictMerge(bool resolved)
             if (std::filesystem::is_regular_file(_merge_result_path))
             {
                 std::ifstream input(_merge_result_path, std::ios::binary);
+                if (!input)
+                    throw std::runtime_error("Could not open the merge result file");
                 resolution.contents.assign(
                     std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
-                if (!input.eof())
+                if (input.bad())
                     throw std::runtime_error("Could not read the merge result file");
                 resolution.present = true;
             }

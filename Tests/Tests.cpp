@@ -1967,6 +1967,23 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     });
     ASSERT_NE(resolution_child, nullptr);
 
+    engine.Enqueue(ResolveConflict{rebased_source_id, "tracked.txt",
+        "<<<<<<< ours\npartial resolution\n=======\ndestination\n>>>>>>> theirs\n", true});
+    const auto partial_resolution = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        if (snapshot.generation <= resolution_child->generation)
+            return false;
+        const auto revision = FindRevision(snapshot, rebased_source_id);
+        return revision != snapshot.revisions.end() && revision->conflicted
+            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
+                   return entry.path == "tracked.txt" && entry.conflicted;
+               });
+    });
+    ASSERT_NE(partial_resolution, nullptr);
+    engine.Enqueue(LoadDiff{rebased_source_id, "tracked.txt"});
+    const auto partial_resolution_diff = WaitForDiff(engine);
+    ASSERT_TRUE(partial_resolution_diff.has_value());
+    EXPECT_NE(partial_resolution_diff->after.find("partial resolution"), std::string::npos);
+
     engine.Enqueue(ResolveConflict{rebased_source_id, "tracked.txt", "resolved\n", true});
     const auto resolved = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         if (snapshot.generation <= resolution_child->generation)
