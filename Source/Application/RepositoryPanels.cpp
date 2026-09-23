@@ -308,12 +308,7 @@ void Application::RenderBookmarks()
                 _input_primary = name;
                 _input_secondary = name;
             }
-            const std::string delete_label = IconLabel(ICON_MS_DELETE, "Delete");
-            if (ImGui::BeginMenu(delete_label.c_str()))
-            {
-                RenderBookmarkDeleteItems(name);
-                ImGui::EndMenu();
-            }
+            RenderBookmarkDeleteMenu(name);
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
@@ -335,25 +330,68 @@ void Application::RenderBookmarks()
     ImGui::End();
 }
 
-void Application::RenderBookmarkDeleteItems(const std::string& name)
+// Offers every location a bookmark can be deleted from. A bookmark that
+// exists in one location gets a single item instead of a one-item submenu.
+// Nested menus are labelled by bookmark name for commits with several.
+void Application::RenderBookmarkDeleteMenu(const std::string& name, bool nested)
 {
-    const bool has_local = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
-    });
-    std::vector<std::string> remotes;
-    for (const NamedRef& ref : _snapshot->refs)
-        if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name && !ref.remote.empty()
-            && std::ranges::find(remotes, ref.remote) == remotes.end())
-            remotes.push_back(ref.remote);
+    const std::vector<NamedRef>& refs = _snapshot->refs;
+    // Lists each remote once, without collecting them while the menu is open.
+    const auto remote_at = [&](std::size_t index) {
+        const NamedRef& ref = refs[index];
+        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name && !ref.remote.empty()
+            && std::none_of(refs.begin(), refs.begin() + static_cast<std::ptrdiff_t>(index),
+                [&](const NamedRef& earlier) {
+                    return earlier.kind == ref.kind && earlier.name == name && earlier.remote == ref.remote;
+                });
+    };
+    const auto all_remotes = [&] {
+        std::vector<std::string> result;
+        for (std::size_t index = 0; index < refs.size(); ++index)
+            if (remote_at(index))
+                result.push_back(refs[index].remote);
+        return result;
+    };
+    bool has_local = false;
+    const NamedRef* last_remote = nullptr;
+    std::size_t remote_count = 0;
+    for (std::size_t index = 0; index < refs.size(); ++index)
+    {
+        has_local |= refs[index].kind == GG_NAMED_REF_LOCAL_BOOKMARK && refs[index].name == name;
+        if (remote_at(index))
+        {
+            last_remote = &refs[index];
+            ++remote_count;
+        }
+    }
+    if (!has_local && remote_count == 0)
+        return;
 
-    if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
+    if ((has_local ? 1U : 0U) + remote_count == 1)
+    {
+        const std::string_view location = has_local ? std::string_view("local") : last_remote->remote;
+        const int location_size = static_cast<int>(location.size());
+        const char* label = nullptr;
+        if (nested)
+            ImFormatStringToTempBuffer(&label, nullptr, "%s%s (%.*s)###%s (%.*s)", ICON_MS_BOOKMARK, name.c_str(),
+                location_size, location.data(), name.c_str(), location_size, location.data());
+        else
+            ImFormatStringToTempBuffer(&label, nullptr, "%sDelete %.*s bookmark###Delete %.*s bookmark",
+                ICON_MS_DELETE, location_size, location.data(), location_size, location.data());
+        if (ImGui::MenuItem(label))
+            RequestBookmarkDelete(name, has_local, has_local ? std::vector<std::string>{} : all_remotes());
+        return;
+    }
+    if (!ImGui::BeginMenu(nested ? TempIconLabel(ICON_MS_BOOKMARK, name) : TempIconLabel(ICON_MS_DELETE, "Delete bookmark")))
+        return;
+    if (has_local && ActionMenuItem(ICON_MS_BOOKMARK, "Local"))
         RequestBookmarkDelete(name, true, {});
-    for (const std::string& remote : remotes)
-        if (ActionMenuItem(ICON_MS_CLOUD, remote))
-            RequestBookmarkDelete(name, false, {remote});
-    if (has_local && !remotes.empty()
-        && ActionMenuItem(ICON_MS_DELETE_SWEEP, remotes.size() == 1 ? "Local & remote" : "Local & all remotes"))
-        RequestBookmarkDelete(name, true, remotes);
+    for (std::size_t index = 0; index < refs.size(); ++index)
+        if (remote_at(index) && ActionMenuItem(ICON_MS_CLOUD, refs[index].remote))
+            RequestBookmarkDelete(name, false, {refs[index].remote});
+    if (has_local && ActionMenuItem(ICON_MS_DELETE_SWEEP, remote_count == 1 ? "Local & remote" : "Local & all remotes"))
+        RequestBookmarkDelete(name, true, all_remotes());
+    ImGui::EndMenu();
 }
 
 void Application::RenderTags()

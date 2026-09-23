@@ -879,7 +879,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Reveal commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Delete").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Delete local bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
 
         FocusWindow(context, "Tags");
@@ -1420,7 +1420,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(rows.front(), ImGuiMouseButton_Right);
             context->Yield();
             context->SetRef("//$FOCUSED");
-            context->MenuClick("Delete bookmark/doomed/Local");
+            context->MenuClick("Delete bookmark/doomed (local)");
             IM_CHECK_RETV(WaitForWindow(context, "ggui action") != nullptr, false);
             context->SetRef("ggui action");
             IM_CHECK_RETV(RenderedTextContains(context, "Local bookmark"), false);
@@ -1436,6 +1436,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(request_delete());
         context->ItemClick("Delete");
         IM_CHECK(WaitNavigation(context, [&] { return !bookmark_exists(); }));
+
+        // A lone local bookmark is deleted directly instead of via a submenu.
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK(!rows.empty());
+        context->SetRef("History");
+        context->ItemClick(rows.front(), ImGuiMouseButton_Right);
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        IM_CHECK(!context->ItemExists("Delete bookmark"));
+        IM_CHECK(context->ItemExists("Delete local bookmark"));
+        context->KeyPress(ImGuiKey_Escape);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "DeleteLocalAndRemoteBookmark");
@@ -2636,12 +2647,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Delete").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        context->ItemClick("**/Delete");
-        context->Yield();
-        IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/upstream").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        context->KeyPress(ImGuiKey_Escape);
+        IM_CHECK(!context->ItemExists("**/Delete bookmark"));
+        IM_CHECK((context->ItemInfo("**/Delete upstream bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->KeyPress(ImGuiKey_Escape);
         FocusWindow(context, "Bookmarks");
 
@@ -2652,10 +2659,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(!context->ItemExists("**/reconcile-origin"));
-        context->ItemClick("**/Delete");
+        IM_CHECK(!context->ItemExists("**/Delete local bookmark"));
+        context->ItemClick("**/Delete bookmark");
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/origin").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Local & remote").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->KeyPress(ImGuiKey_Escape);
         context->KeyPress(ImGuiKey_Escape);
     };
@@ -3718,9 +3727,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK(context->ItemExists("**/Push"));
         IM_CHECK(context->ItemExists("**/Push to..."));
-        context->ItemClick("**/Delete");
-        context->Yield();
-        context->ItemClick("**/Local");
+        context->ItemClick("**/Delete local bookmark");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Delete");

@@ -193,7 +193,7 @@ private:
     void ReloadNativeSettings();
     void ForgetRepository(const std::string& path);
     void RenderBookmarks();
-    void RenderBookmarkDeleteItems(const std::string& name);
+    void RenderBookmarkDeleteMenu(const std::string& name, bool nested = false);
     void RenderTags();
     void RenderWorkspaces();
     void RenderRemotes();

@@ -775,16 +775,16 @@ void Application::RenderHistory()
                         }
                     ImGui::EndMenu();
                 }
-                const std::string delete_bookmark = IconLabel(ICON_MS_DELETE, "Delete bookmark");
-                if (ImGui::BeginMenu(delete_bookmark.c_str(), bookmark != nullptr))
+                const auto local_here = [&](const NamedRef& ref) {
+                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid;
+                };
+                if (std::ranges::count_if(_snapshot->refs, local_here) == 1)
+                    RenderBookmarkDeleteMenu(bookmark->name);
+                else if (ImGui::BeginMenu(TempIconLabel(ICON_MS_DELETE, "Delete bookmark"), bookmark != nullptr))
                 {
                     for (const NamedRef& ref : _snapshot->refs)
-                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid
-                            && ImGui::BeginMenu(IconLabel(ICON_MS_BOOKMARK, ref.name).c_str()))
-                        {
-                            RenderBookmarkDeleteItems(ref.name);
-                            ImGui::EndMenu();
-                        }
+                        if (local_here(ref))
+                            RenderBookmarkDeleteMenu(ref.name, true);
                     ImGui::EndMenu();
                 }
 
