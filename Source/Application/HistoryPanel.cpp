@@ -575,7 +575,7 @@ void Application::RenderHistory()
             float badge_width = 0.0f;
             for (const HistoryBadge& badge : badges)
             {
-                badge_width += ImGui::CalcTextSize(badge.label.c_str()).x + FontPx(20.0f);
+                badge_width += BadgeWidth(badge.label) + FontPx(6.0f);
             }
             const float message_right = badges.empty() ? content_right
                 : std::max(content_x, content_right - badge_width - FontPx(6.0f));

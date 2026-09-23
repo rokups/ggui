@@ -11,23 +11,66 @@
 namespace Ggui::ApplicationInternal
 {
 
+namespace
+{
+struct StartElidedText
+{
+    std::size_t start = 0;
+    float width = 0.0f;
+    char ellipsis[5]{};
+};
+
+StartElidedText ElideStart(std::string_view text, float maximum_width)
+{
+    StartElidedText result;
+    const char* const end = text.data() + text.size();
+    result.width = ImGui::CalcTextSize(text.data(), end).x;
+    if (result.width <= maximum_width)
+        return result;
+    ImTextCharToUtf8(result.ellipsis, ImGui::GetFont()->EllipsisChar);
+    const float ellipsis_width = ImGui::CalcTextSize(result.ellipsis).x;
+    const char* start = text.data();
+    while (start < end && ellipsis_width + result.width > maximum_width)
+    {
+        const char* const next = start + ImTextCountUtf8BytesFromChar(start, end);
+        result.width -= ImGui::CalcTextSize(start, next).x;
+        start = next;
+    }
+    result.start = static_cast<std::size_t>(start - text.data());
+    result.width += ellipsis_width;
+    return result;
+}
+} // namespace
+
+float BadgeWidth(std::string_view label)
+{
+    return ElideStart(label, FontPx(kBadgeMaxTextWidth)).width + FontPx(7.0f) * 2.0f;
+}
+
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,
     std::size_t dimmed_prefix)
 {
-    const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
+    const StartElidedText elided = ElideStart(label, FontPx(kBadgeMaxTextWidth));
+    const float text_height = ImGui::GetTextLineHeight();
     const float pad_x = FontPx(7.0f);
     const float pad_top = FontPx(3.0f);
     const float pad_bottom = pad_top;
-    const ImVec2 minimum(cursor.x, center_y - text_size.y * 0.5f - pad_top);
-    const ImVec2 maximum(cursor.x + text_size.x + pad_x * 2.0f, center_y + text_size.y * 0.5f + pad_bottom);
+    const ImVec2 minimum(cursor.x, center_y - text_height * 0.5f - pad_top);
+    const ImVec2 maximum(cursor.x + elided.width + pad_x * 2.0f, center_y + text_height * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
     ImVec2 text(minimum.x + pad_x, minimum.y + pad_top);
-    if (dimmed_prefix != 0)
+    if (elided.start != 0)
     {
-        draw->AddText(text, kBadgeTextMuted, label.data(), label.data() + dimmed_prefix);
-        text.x += ImGui::CalcTextSize(label.data(), label.data() + dimmed_prefix).x;
+        draw->AddText(text, kBadgeTextMuted, elided.ellipsis);
+        text.x += ImGui::CalcTextSize(elided.ellipsis).x;
     }
-    draw->AddText(text, IM_COL32_WHITE, label.data() + dimmed_prefix, label.data() + label.size());
+    const std::size_t dimmed_end = std::max(dimmed_prefix, elided.start);
+    if (dimmed_end != elided.start)
+    {
+        draw->AddText(text, kBadgeTextMuted, label.data() + elided.start, label.data() + dimmed_end);
+        text.x += ImGui::CalcTextSize(label.data() + elided.start, label.data() + dimmed_end).x;
+    }
+    draw->AddText(text, IM_COL32_WHITE, label.data() + dimmed_end, label.data() + label.size());
     cursor.x = maximum.x + FontPx(6.0f);
 }
 

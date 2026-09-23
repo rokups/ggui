@@ -2262,6 +2262,39 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
     };
 
+    test = IM_REGISTER_TEST(engine, "Presentation", "HistoryBadgesElideLongNames");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        const std::string bookmark = "feature/" + std::string(80, 'x') + "-tail";
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.refs.push_back({bookmark, {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
+        application.SetSnapshotForTest(std::move(snapshot));
+        context->Yield(3);
+
+        ImGuiTestItemList items;
+        context->GatherItems(&items, "//History", -1);
+        // Debug labels are truncated, so match the recorded prefix.
+        const auto badge = [&](const std::string& label) -> const ImGuiTestItemInfo* {
+            for (int index = 0; index < items.GetSize(); ++index)
+            {
+                const std::string_view debug_label = items.GetByIndex(index)->DebugLabel;
+                if (debug_label.size() >= std::min<std::size_t>(label.size(), 16) && label.starts_with(debug_label))
+                    return items.GetByIndex(index);
+            }
+            return nullptr;
+        };
+        const ImGuiTestItemInfo* long_badge = badge(bookmark);
+        const ImGuiTestItemInfo* short_badge = badge("coverage-bookmark");
+        IM_CHECK(long_badge != nullptr && short_badge != nullptr);
+        const float scale = ImGui::GetFontSize() / 16.0f;
+        // Badge rects include the spacing that follows each badge.
+        const float decoration = (7.0f * 2.0f + 6.0f) * scale;
+        IM_CHECK_LE(long_badge->RectFull.GetWidth(), 160.0f * scale + decoration + 1.0f);
+        IM_CHECK_LT(long_badge->RectFull.GetWidth(), ImGui::CalcTextSize(bookmark.c_str()).x);
+        IM_CHECK_EQ(short_badge->RectFull.GetWidth(),
+            ImGui::CalcTextSize("coverage-bookmark").x + decoration);
+    };
+
     test = IM_REGISTER_TEST(engine, "Presentation", "ListElisionTooltips");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

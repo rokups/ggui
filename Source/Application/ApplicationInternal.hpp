@@ -47,6 +47,7 @@ inline constexpr float kRowHeight = 34.0f;
 inline constexpr float kLaneWidth = 12.0f;
 inline constexpr float kDotRadius = 5.0f;
 inline constexpr float kGraphPadding = 12.0f;
+inline constexpr float kBadgeMaxTextWidth = 160.0f;
 
 inline float HistoryLaneWidth(float, int)
 {
@@ -166,6 +167,8 @@ const Remote* DefaultRemote(const RepoSnapshot& snapshot);
 const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revision);
 std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark);
 std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name, gg_named_ref_kind kind);
+// Badge text wider than kBadgeMaxTextWidth keeps its end and elides its start.
+float BadgeWidth(std::string_view label);
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,
     std::size_t dimmed_prefix = 0);
 void DrawElidedText(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view text, ImU32 color);
