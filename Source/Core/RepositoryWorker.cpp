@@ -271,6 +271,70 @@ VisibleHeads ResolveVisibleHeads(git_repository* repository, const References& r
         if (!ancestors.contains(OidString(candidate))) result.values.push_back(candidate);
     return result;
 }
+
+// What decides whether a manually created branch is shown: the local
+// bookmarks on its own commits, and whether it is built on top of @.
+struct BranchOwner
+{
+    bool descends_from_working = false;
+    std::vector<std::string> bookmarks;
+};
+
+// Walks a branch from its tip to where it joins the history of any other
+// head, and reports the bookmark closest to the tip on that stretch. A
+// bookmark at the divergence point belongs to the shared history, so it does
+// not own the branch. Both walks are bounded to keep large repositories fast.
+BranchOwner ResolveBranchOwner(git_repository* repository, const git_oid& tip, const std::optional<git_oid>& working,
+    const std::vector<git_oid>& other_heads, const std::unordered_multimap<std::string, std::string>& bookmarks)
+{
+    constexpr std::size_t kBranchWalkLimit = 256;
+    BranchOwner result;
+    // Heads in the tip's recent ancestry are on this branch. Hiding them
+    // would end the walk before the bookmarks that own it.
+    std::unordered_set<std::string> ancestry;
+    std::deque<git_oid> pending{tip};
+    while (!pending.empty() && ancestry.size() < kBranchWalkLimit)
+    {
+        const git_oid oid = pending.front();
+        pending.pop_front();
+        if (!ancestry.insert(OidString(oid)).second) continue;
+        git_commit* raw_commit = nullptr;
+        const int lookup = git_commit_lookup(&raw_commit, repository, &oid);
+        if (lookup == GIT_ENOTFOUND)
+        {
+            git_error_clear();
+            continue;
+        }
+        Check(lookup, "inspect manual branch ancestry");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+        for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
+            pending.push_back(*git_commit_parent_id(commit.get(), index));
+    }
+    result.descends_from_working = working.has_value() && ancestry.contains(OidString(*working));
+
+    git_revwalk* raw_walk = nullptr;
+    Check(git_revwalk_new(&raw_walk, repository), "create manual branch walk");
+    std::unique_ptr<git_revwalk, decltype(&git_revwalk_free)> walk(raw_walk, git_revwalk_free);
+    Check(git_revwalk_sorting(walk.get(), GIT_SORT_TOPOLOGICAL), "sort manual branch walk");
+    Check(git_revwalk_push(walk.get(), &tip), "walk manual branch");
+    for (const git_oid& head : other_heads)
+        if (git_oid_equal(&head, &tip) == 0 && !ancestry.contains(OidString(head))
+            && git_revwalk_hide(walk.get(), &head) < 0)
+            git_error_clear();
+    git_oid oid{};
+    int next = GIT_OK;
+    for (std::size_t walked = 0; walked < kBranchWalkLimit
+         && (next = git_revwalk_next(&oid, walk.get())) == GIT_OK; ++walked)
+    {
+        const auto [first, last] = bookmarks.equal_range(OidString(oid));
+        if (first == last) continue;
+        for (auto bookmark = first; bookmark != last; ++bookmark)
+            result.bookmarks.push_back(bookmark->second);
+        break;
+    }
+    if (next != GIT_OK && next != GIT_ITEROVER) Check(next, "walk manual branch");
+    return result;
+}
 } // namespace
 
 RepositoryEngine::Impl::BackgroundActivityGuard::BackgroundActivityGuard(Impl& owner, std::string name)
@@ -485,6 +549,7 @@ void RepositoryEngine::Impl::RunHistory()
     std::unique_ptr<References> cached_references;
     std::unique_ptr<Workspaces> cached_workspaces;
     std::unique_ptr<VisibleHeads> cached_visible_heads;
+    std::unordered_map<std::string, BranchOwner> cached_branch_owners;
     std::vector<git_oid> cached_collapsed_materialized;
     RepositoryReadContext context;
     while (true)
@@ -512,6 +577,7 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_references.reset();
                 cached_workspaces.reset();
                 cached_visible_heads.reset();
+                cached_branch_owners.clear();
                 cached_collapsed_materialized.clear();
                 continue;
             }
@@ -552,6 +618,7 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_references.reset();
                 cached_workspaces.reset();
                 cached_visible_heads.reset();
+                cached_branch_owners.clear();
                 cached_collapsed_materialized.clear();
             }
 
@@ -623,12 +690,14 @@ void RepositoryEngine::Impl::RunHistory()
                 return result;
             };
             git_oid working{};
+            std::optional<git_oid> working_head;
             std::string working_copy;
             TraceStage head_selection_stage(trace, "head-selection");
             if (gg_repository_working_copy(&working, history_gg.get()) == GIT_OK)
             {
                 add(heads, working);
                 add(primary_heads, working);
+                working_head = working;
                 working_copy = OidString(working);
             }
             git_reference* raw_head = nullptr;
@@ -639,6 +708,8 @@ void RepositoryEngine::Impl::RunHistory()
                 {
                     add(heads, *target);
                     add(primary_heads, *target);
+                    // Like CurrentCommit, @ is HEAD until gg records a working copy.
+                    if (!working_head.has_value()) working_head = *target;
                 }
             }
             for (std::size_t index = 0; index < named.value.count; ++index)
@@ -691,6 +762,9 @@ void RepositoryEngine::Impl::RunHistory()
             // unnamed changes. Resolve their actual DAG heads so switching the
             // working copy cannot make a sibling head disappear. Tags are not
             // visible heads and remain governed by their panel selection.
+            // Such manually created branches are always visible unless a local
+            // bookmark on their own commits is hidden, and changes on top of @
+            // are always visible.
             TraceStage visible_heads_stage(trace, "visible-head-resolution");
             std::unordered_set<std::string> unnamed_targets;
             for (std::size_t index = 0; index < references.value.count; ++index)
@@ -706,13 +780,41 @@ void RepositoryEngine::Impl::RunHistory()
             if (cached_visible_heads == nullptr)
                 cached_visible_heads = std::make_unique<VisibleHeads>(
                     ResolveVisibleHeads(repository.get(), references));
+            std::vector<git_oid> manual_heads;
             for (const git_oid& candidate : cached_visible_heads->values)
+                if (unnamed_targets.contains(OidString(candidate)))
+                    manual_heads.push_back(candidate);
+            std::vector<git_oid> other_heads;
+            std::unordered_multimap<std::string, std::string> bookmark_names;
+            const bool owners_cached = std::ranges::all_of(manual_heads, [&](const git_oid& candidate) {
+                return cached_branch_owners.contains(OidString(candidate));
+            });
+            if (!owners_cached)
             {
-                if (!unnamed_targets.contains(OidString(candidate))) continue;
-                const BoundedReachability unselected_result = descends_from_any(candidate, unselected_bookmarks);
-                const bool claimed = unselected_result.matched
-                    || (!unselected_result.complete && !unselected_bookmarks.empty());
-                if (!claimed) add(heads, candidate);
+                other_heads = primary_heads;
+                for (const git_oid& oid : remote_tips) add(other_heads, oid);
+                for (const git_oid& oid : manual_heads) add(other_heads, oid);
+                for (std::size_t index = 0; index < named.value.count; ++index)
+                {
+                    const gg_named_ref& ref = named.value.items[index];
+                    if (ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK || ref.name == nullptr) continue;
+                    add(other_heads, ref.target);
+                    bookmark_names.emplace(OidString(ref.target), ref.name);
+                }
+            }
+            for (const git_oid& candidate : manual_heads)
+            {
+                const std::string id = OidString(candidate);
+                auto owner = cached_branch_owners.find(id);
+                if (owner == cached_branch_owners.end())
+                    owner = cached_branch_owners.emplace(id, ResolveBranchOwner(repository.get(), candidate,
+                        working_head, other_heads, bookmark_names)).first;
+                const bool visible = owner->second.descends_from_working || request.query.bookmarks.empty()
+                    || owner->second.bookmarks.empty()
+                    || std::ranges::any_of(owner->second.bookmarks, [&](const std::string& name) {
+                           return selected(request.query.bookmarks, name);
+                       });
+                if (visible) add(heads, candidate);
             }
             if (visible_heads_stage.Enabled())
                 visible_heads_stage.Complete("cache="

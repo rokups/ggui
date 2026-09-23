@@ -1010,6 +1010,49 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ClearSnapshotForTest();
     };
 
+    test = IM_REGISTER_TEST(engine, "Navigation", "ManualBranchVisibility");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        UiRepository repository;
+        const std::string base = repository.RevisionId("HEAD");
+        const std::string main_tip = NavigationCommit(repository, "Main tip", {base});
+        // Forks at base, where the unselected "ancient" bookmark is shared history.
+        const std::string manual = NavigationCommit(repository, "Manual branch", {base});
+        const std::string parked = NavigationCommit(repository, "Parked", {main_tip});
+        const std::string at = NavigationCommit(repository, "At", {parked});
+        const std::string at_child = NavigationCommit(repository, "Child of @", {at});
+        const std::string feature_tip = NavigationCommit(repository, "Feature tip", {main_tip});
+        const std::string feature_child = NavigationCommit(repository, "Feature child", {feature_tip});
+        repository.Git("update-ref refs/heads/ancient " + base);
+        repository.Git("update-ref refs/heads/main " + main_tip);
+        repository.Git("update-ref refs/heads/parked " + parked);
+        repository.Git("update-ref refs/heads/feature " + feature_tip);
+        repository.Git("checkout --detach " + at);
+        for (const std::string& head : {manual, at_child, feature_child})
+            repository.Git("update-ref refs/gg/visible-heads/" + head + " " + head);
+        IM_CHECK(OpenNavigationRepository(context, repository));
+        const auto wait_for_history = [&](std::vector<std::string> expected) {
+            std::ranges::sort(expected);
+            return WaitNavigation(context, [&] {
+                auto actual = application.VisibleHistoryRevisionsForTest();
+                std::ranges::sort(actual);
+                return !application.HistoryLoadPendingForTest() && actual == expected;
+            });
+        };
+        FocusWindow(context, "Bookmarks");
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/main");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"main"});
+        // The manual branch has no bookmark of its own and the child of @ is
+        // built on @, so both stay visible. The feature branch is hidden with
+        // its bookmark.
+        IM_CHECK(wait_for_history({base, main_tip, manual, parked, at, at_child}));
+        context->ItemClick("**/feature");
+        IM_CHECK(wait_for_history({base, main_tip, manual, parked, at, at_child, feature_tip, feature_child}));
+        application.ClearSnapshotForTest();
+    };
+
     test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBookmarkBranches");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
