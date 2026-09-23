@@ -59,7 +59,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
             },
             [&](const Edit& value) {
                 Mutate("edit change", [&](auto* out, auto* operation) {
-                    return gg_repository_edit(out, gg, value.revision.c_str(), operation);
+                    return gg_repository_edit_worktree(out, gg, value.revision.c_str(), operation);
                 });
             },
             [&](const MoveChange& value) {
@@ -73,13 +73,14 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const Commit& value) {
-                gg_commit_options options = GG_COMMIT_OPTIONS_INIT;
-                const StringArray filesets(value.filesets);
-                options.filesets = filesets.Get();
-                options.message = value.message.c_str();
-                options.message_provided = 1;
-                Mutate("commit change", [&](auto* out, auto* operation) {
-                    return gg_repository_commit(out, gg, &options, operation);
+                CaptureWorktree("commit working tree", [&](auto* out, auto* operation) {
+                    return gg_repository_commit_worktree(out, gg, value.message.c_str(), operation);
+                });
+            },
+            [&](const Amend& value) {
+                CaptureWorktree("amend commit", [&](auto* out, auto* operation) {
+                    return gg_repository_amend_worktree(out, gg, value.revision.c_str(),
+                        value.message.empty() ? nullptr : value.message.c_str(), operation);
                 });
             },
             [&](const Rebase& value) {
@@ -223,12 +224,14 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                             gg_operation_options operation = OperationOptions();
                             Check(gg_repository_squash_ex(&mutation.value, gg, &options, true, &operation),
                                 "squash descendants");
-                            PublishSnapshot(true, true);
+                            InvalidateWorktreeStatus();
+                            PublishSnapshot(false, true);
                         }
                     }
                     catch (...)
                     {
-                        PublishSnapshot(true, true);
+                        InvalidateWorktreeStatus();
+                        PublishSnapshot(false, true);
                         throw;
                     }
                     return;
@@ -292,6 +295,12 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 });
             },
             [&](const MoveFiles& value) {
+                if (std::string_view(value.source).starts_with("working-tree:")
+                    || std::string_view(value.destination).starts_with("working-tree:"))
+                {
+                    MoveWorkingTreeFile(value);
+                    return;
+                }
                 gg_move_files_options options = GG_MOVE_FILES_OPTIONS_INIT;
                 const StringArray filesets(value.filesets);
                 options.source = value.source.c_str();
@@ -427,13 +436,13 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 const StringArray paths(value.filesets);
                 Mutate("track paths", [&](auto* out, auto* operation) {
                     return gg_repository_track_paths(out, gg, paths.Get(), value.include_ignored, operation);
-                }, true);
+                });
             },
             [&](const UntrackPaths& value) {
                 const StringArray paths(value.filesets);
                 Mutate("untrack paths", [&](auto* out, auto* operation) {
                     return gg_repository_untrack_paths(out, gg, paths.Get(), operation);
-                }, true);
+                });
             },
             [&](const ChmodPaths& value) {
                 const StringArray paths(value.filesets);
@@ -467,6 +476,7 @@ std::string CommandName(const Command& command)
             [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
             [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },
             [](const Commit&) { return "commit"; },
+            [](const Amend&) { return "amend"; },
             [](const Rebase&) { return "rebase"; }, [](const Duplicate&) { return "duplicate"; },
             [](const Reorder&) { return "reorder"; },
             [](const Split&) { return "split"; }, [](const Squash&) { return "squash"; },

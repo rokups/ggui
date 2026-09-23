@@ -39,6 +39,8 @@ void Application::ApplyEvent(Event event)
                     const std::string old_current = _snapshot == nullptr ? "" : CurrentCommit(*_snapshot);
                     const std::string old_selection = _selected_revision;
                     const std::string old_compare_to = _compare_to;
+                    const std::vector<StatusEntry> old_status = _snapshot == nullptr
+                        ? std::vector<StatusEntry>{} : _snapshot->status;
                     _snapshot = std::move(value.snapshot);
                     _history_refs_by_revision.clear();
                     for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
@@ -70,9 +72,12 @@ void Application::ApplyEvent(Event event)
                         _history_anchor.clear();
                         _history_expansion_pending.clear();
                         RestoreRepositorySelections(_snapshot->root);
-                        _selected_revision = CurrentCommit(*_snapshot);
-                        _selected_revisions = _selected_revision.empty() ? std::vector<std::string>{}
-                                                                        : std::vector{_selected_revision};
+                        _selected_revision = _snapshot->has_worktree
+                            ? MakeWorkingTreeHistoryItem(
+                                  _snapshot->repository_generation, CurrentCommit(*_snapshot)).id
+                            : CurrentCommit(*_snapshot);
+                        _selected_revisions = _selected_revision.empty()
+                            ? std::vector<std::string>{} : std::vector{_selected_revision};
                         _preferred_file.clear();
                         _compare_to.clear();
                         _file_comparison = false;
@@ -86,20 +91,57 @@ void Application::ApplyEvent(Event event)
                             _selected_revisions = current.empty() ? std::vector<std::string>{}
                                                                  : std::vector{current};
                         }
+                        else if (IsWorkingTreeRevision(old_selection) && _snapshot->has_worktree)
+                        {
+                            const std::string working_tree = MakeWorkingTreeHistoryItem(
+                                _snapshot->repository_generation, CurrentCommit(*_snapshot)).id;
+                            _selected_revision = working_tree;
+                            _selected_revisions = {working_tree};
+                        }
+                        else if (IsWorkingTreeRevision(old_selection))
+                        {
+                            _selected_revision = CurrentCommit(*_snapshot);
+                            _selected_revisions = _selected_revision.empty()
+                                ? std::vector<std::string>{} : std::vector{_selected_revision};
+                        }
                     }
                     SDL_SetWindowTitle(_window, (RepositoryName(_snapshot->root) + " - ggui").c_str());
                     RememberRepository(_snapshot->root);
                     UpdateGraphBuild();
                     if (!_compare_to.empty())
                     {
-                        if (_snapshot->working_copy.empty() || _selected_revision == _snapshot->working_copy)
+                        if (CurrentCommit(*_snapshot).empty() || _selected_revision == CurrentCommit(*_snapshot))
                         {
                             _compare_to.clear();
                             _file_comparison = false;
                         }
-                        else _compare_to = _snapshot->working_copy;
+                        else _compare_to = CurrentCommit(*_snapshot);
                     }
-                    if (repository_changed || old_selection != _selected_revision || old_compare_to != _compare_to)
+                    if (IsWorkingTreeRevision(_selected_revision))
+                    {
+                        // Working-tree diffs scan the filesystem, so snapshots
+                        // never start one for a tree that is unscanned or stale,
+                        // and a regenerated virtual ID keeps the loaded diff.
+                        // Explicit selection and foreground operations reload it.
+                        if (!repository_changed && IsWorkingTreeRevision(old_selection))
+                        {
+                            if (old_selection != _selected_revision || old_status != _snapshot->status)
+                                _working_tree_diff_outdated = true;
+                            if (IsWorkingTreeRevision(_diff.revision)) _diff.revision = _selected_revision;
+                            if (IsWorkingTreeRevision(_pending_revision)) _pending_revision = _selected_revision;
+                        }
+                        else if (_snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready)
+                            RequestDiff(true);
+                        else
+                        {
+                            _selected_file.clear();
+                            _pending_revision.clear();
+                            _diff = {};
+                            _diff_loading = false;
+                        }
+                    }
+                    else if (repository_changed || old_selection != _selected_revision
+                        || old_compare_to != _compare_to)
                         RequestDiff(true);
                     if (repository_changed)
                     {
@@ -120,7 +162,27 @@ void Application::ApplyEvent(Event event)
                         || value.view->request < _history_applied_request)
                         return;
                     _history_applied_request = value.view->request;
-                    _history_view = std::move(value.view);
+                    auto history_view = std::make_shared<HistoryView>(*value.view);
+                    const std::string active_commit = CurrentCommit(*_snapshot);
+                    if (_snapshot->has_worktree)
+                    {
+                        const auto working_tree = std::ranges::find_if(history_view->items,
+                            [](const HistoryItem& item) { return item.kind == HistoryItemKind::WorkingTree; });
+                        if (working_tree == history_view->items.end())
+                        {
+                            const auto active = std::ranges::find_if(history_view->items,
+                                [&](const HistoryItem& item) {
+                                    return item.kind == HistoryItemKind::Commit && item.revision.oid == active_commit;
+                                });
+                            history_view->items.insert(
+                                active == history_view->items.end() ? history_view->items.begin() : active,
+                                MakeWorkingTreeHistoryItem(_snapshot->repository_generation, active_commit));
+                        }
+                    }
+                    const std::string preferred_tip = _snapshot->has_worktree
+                        ? MakeWorkingTreeHistoryItem(_snapshot->repository_generation, active_commit).id
+                        : active_commit;
+                    _history_view = std::move(history_view);
                     _history_hovered_track = -1;
                     _history_hovered_commit_row = -1;
                     if (!_history_view->skeleton && !_history_expansion_pending.empty())
@@ -139,7 +201,7 @@ void Application::ApplyEvent(Event event)
                         }
                         else _visible_revisions.push_back(-1);
                     }
-                    try { _graph_rows = BuildGraphLayout(nodes, _snapshot->working_copy); }
+                    try { _graph_rows = BuildGraphLayout(nodes, preferred_tip); }
                     catch (const std::exception& error)
                     {
                         _error_message = error.what();
@@ -173,7 +235,7 @@ void Application::ApplyEvent(Event event)
                     _selected_revisions = std::move(selections);
                     _compare_to = current_id(_compare_to);
                     if (!_compare_to.empty()
-                        && (_selected_revision == _snapshot->working_copy || _selected_revision == _compare_to))
+                        && (_selected_revision == CurrentCommit(*_snapshot) || _selected_revision == _compare_to))
                     {
                         _compare_to.clear();
                         _file_comparison = false;
@@ -216,7 +278,7 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, ChangedFilesReady>)
                 {
-                    if (value.revision != _selected_revision || value.compare_to != _compare_to
+                    if (!SameDiffRevision(value.revision, _selected_revision) || value.compare_to != _compare_to
                         || value.file_comparison != _file_comparison
                         || value.options.whitespace_mode != _diff_whitespace_mode
                         || value.options.context_lines != _diff_context_lines)
@@ -231,11 +293,13 @@ void Application::ApplyEvent(Event event)
                 }
                 else if constexpr (std::is_same_v<T, DiffReady>)
                 {
-                    if (value.diff.revision != _selected_revision || value.diff.compare_to != _compare_to
+                    if (!SameDiffRevision(value.diff.revision, _selected_revision)
+                        || value.diff.compare_to != _compare_to
                         || value.diff.file_comparison != _file_comparison
                         || value.diff.options.whitespace_mode != _diff_whitespace_mode
                         || value.diff.options.context_lines != _diff_context_lines)
                         return;
+                    value.diff.revision = _selected_revision;
                     if (value.diff.revision == _pending_revision || _selected_file.empty())
                     {
                         _selected_file = value.diff.path;
@@ -293,6 +357,10 @@ void Application::ApplyEvent(Event event)
                         _status_message = value.name + " completed";
                     _active_operation.clear();
                     _progress_phase.clear();
+                    if (_snapshot != nullptr && IsWorkingTreeRevision(_selected_revision)
+                        && _snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready
+                        && (value.name == "refresh" || _working_tree_diff_outdated))
+                        RequestDiff(true);
                 }
                 else if constexpr (std::is_same_v<T, ErrorEvent>)
                 {

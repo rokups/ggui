@@ -418,6 +418,8 @@ private:
     DiffWhitespaceMode _diff_whitespace_mode = DiffWhitespaceMode::Normal;
     int _diff_context_lines = 3;
     bool _diff_loading = false;
+    // A snapshot changed the selected working tree after its diff loaded.
+    bool _working_tree_diff_outdated = false;
     bool _blame_loading = false;
     std::string _blame_revision;
     std::string _blame_path;

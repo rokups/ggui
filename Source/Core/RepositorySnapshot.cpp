@@ -96,22 +96,12 @@ void ReadHeadReflog(RepoSnapshot& destination, git_repository* repository)
 
 } // namespace
 
-bool RepositoryEngine::Impl::Sync(bool report_progress, const std::vector<std::string>& paths)
+void RepositoryEngine::Impl::Sync(bool report_progress)
 {
     if (gg == nullptr)
-        return false;
+        return;
     gg_operation_options options = OperationOptions(report_progress);
     Check(gg_repository_adopt_git_history_ex(gg, false, &options), "adopt external Git history");
-    int changed = 0;
-    if (paths.empty())
-        Check(gg_repository_snapshot_working_copy(&changed, gg, &options), "snapshot working copy");
-    else
-    {
-        StringArray selected(paths);
-        Check(gg_repository_snapshot_working_copy_paths(&changed, gg, selected.Get(), &options),
-            "snapshot working copy paths");
-    }
-    return changed != 0;
 }
 
 std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
@@ -120,6 +110,7 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
     auto result = std::make_shared<RepoSnapshot>();
     result->generation = ++generation;
     const char* workdir = git_repository_workdir(git.get());
+    result->has_worktree = workdir != nullptr;
     result->root = workdir == nullptr ? git_repository_path(git.get()) : workdir;
 
     git_oid working{};
@@ -161,51 +152,57 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
         remote.desync_known = git_graph_ahead_behind(
             &remote.local_commits, &remote.remote_commits, git.get(), &local_oid, &remote_oid) == GIT_OK;
     }
-    result->worktree_state = include_worktree || worktree_ready
-        ? RepoSnapshot::WorktreeState::Ready
-        : RepoSnapshot::WorktreeState::Unscanned;
+    result->worktree_state = !worktree_ready ? RepoSnapshot::WorktreeState::Unscanned
+        : worktree_status_stale ? RepoSnapshot::WorktreeState::Stale
+                                : RepoSnapshot::WorktreeState::Ready;
     if (include_worktree)
     {
         gg_status_options status_options = GG_STATUS_OPTIONS_INIT;
-        const bool incremental_status = worktree_ready && !status_paths.empty();
+        const bool incremental_status = worktree_ready && !worktree_status_stale && !status_paths.empty();
+        const bool defer_partial_status = !status_paths.empty() && !incremental_status;
         StringArray selected_status_paths(status_paths);
         if (incremental_status)
             status_options.filesets = selected_status_paths.Get();
-        Status status;
-        Check(gg_repository_status(&status.value, gg, &status_options), "load status");
-        std::vector<StatusEntry> updated;
-        updated.reserve(status.value.entry_count);
-        for (size_t index = 0; index < status.value.entry_count; ++index)
+        if (!defer_partial_status)
         {
-            const gg_status_entry& source = status.value.entries[index];
-            updated.push_back({source.old_path == nullptr ? "" : source.old_path,
-                source.new_path == nullptr ? "" : source.new_path, source.status, source.conflicted != 0});
-        }
-        if (!incremental_status)
-            cached_status = std::move(updated);
-        else
-        {
-            // Watcher paths are individual files (directory changes request a
-            // full scan). Remove stale entries for those paths, then overlay
-            // the path-filtered result. Keep both old and new names so a
-            // rename event cannot leave a ghost entry in the cache.
-            const auto touched = [&](const StatusEntry& entry) {
-                const auto selected = [&](const std::string& candidate, const std::string& path) {
-                    return candidate == path
-                        || (candidate.size() > path.size()
-                            && candidate.compare(0, path.size(), path) == 0
-                            && candidate[path.size()] == '/');
+            Status status;
+            Check(gg_repository_worktree_status(&status.value, gg, &status_options), "load working-tree status");
+            std::vector<StatusEntry> updated;
+            updated.reserve(status.value.entry_count);
+            for (size_t index = 0; index < status.value.entry_count; ++index)
+            {
+                const gg_status_entry& source = status.value.entries[index];
+                updated.push_back({source.old_path == nullptr ? "" : source.old_path,
+                    source.new_path == nullptr ? "" : source.new_path, source.status, source.conflicted != 0});
+            }
+            if (!incremental_status)
+                cached_status = std::move(updated);
+            else
+            {
+                // Watcher paths are individual files. Replace only the cached
+                // entries touching those paths, including both sides of a rename.
+                const auto touched = [&](const StatusEntry& entry) {
+                    const auto selected = [&](const std::string& candidate, const std::string& path) {
+                        return candidate == path
+                            || (candidate.size() > path.size()
+                                && candidate.compare(0, path.size(), path) == 0
+                                && candidate[path.size()] == '/');
+                    };
+                    return std::ranges::any_of(status_paths, [&](const std::string& path) {
+                        return selected(entry.path, path) || selected(entry.old_path, path);
+                    });
                 };
-                return std::ranges::any_of(status_paths, [&](const std::string& path) {
-                    return selected(entry.path, path) || selected(entry.old_path, path);
-                });
-            };
-            std::erase_if(cached_status, touched);
-            cached_status.insert(cached_status.end(),
-                std::make_move_iterator(updated.begin()), std::make_move_iterator(updated.end()));
+                std::erase_if(cached_status, touched);
+                cached_status.insert(cached_status.end(),
+                    std::make_move_iterator(updated.begin()), std::make_move_iterator(updated.end()));
+            }
+            worktree_ready = true;
+            worktree_status_stale = false;
         }
         result->status = cached_status;
-        worktree_ready = true;
+        result->worktree_state = !worktree_ready ? RepoSnapshot::WorktreeState::Unscanned
+            : worktree_status_stale ? RepoSnapshot::WorktreeState::Stale
+                                    : RepoSnapshot::WorktreeState::Ready;
     }
     else if (worktree_ready)
         result->status = cached_status;
@@ -289,6 +286,28 @@ void RepositoryEngine::Impl::PublishSnapshot(
         // its persisted head selections after observing this generation.
         Post(SnapshotReady{std::move(snapshot)});
     }
+}
+
+void RepositoryEngine::Impl::InvalidateWorktreeStatus()
+{
+    cached_status.clear();
+    worktree_ready = false;
+    worktree_status_stale = false;
+}
+
+void RepositoryEngine::Impl::MarkWorktreeStatusStale()
+{
+    if (worktree_ready)
+        worktree_status_stale = true;
+}
+
+void RepositoryEngine::Impl::PublishWorktreeChanges(
+    const std::vector<std::string>& paths, bool history_changed)
+{
+    if (!paths.empty() && worktree_ready && !worktree_status_stale)
+        PublishSnapshot(true, history_changed, paths);
+    else
+        PublishSnapshot(false, history_changed);
 }
 
 } // namespace Ggui

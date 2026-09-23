@@ -193,6 +193,34 @@ struct TemporaryRepository
     std::filesystem::path path;
 };
 
+struct TemporaryEmptyRepository
+{
+    TemporaryEmptyRepository()
+    {
+        static std::atomic_uint counter = 0;
+        path = std::filesystem::temp_directory_path() /
+            ("ggui-empty-test-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())
+                + "-" + std::to_string(++counter));
+        if (git_libgit2_init() <= 0)
+            throw std::runtime_error("could not initialize libgit2");
+        git_repository* raw_repository = nullptr;
+        CheckGit(git_repository_init(&raw_repository, path.string().c_str(), 0));
+        std::unique_ptr<git_repository, decltype(&git_repository_free)> repository(raw_repository, git_repository_free);
+        CheckGit(git_repository_set_head(repository.get(), "refs/heads/main"));
+        git_config* raw_config = nullptr;
+        CheckGit(git_repository_config(&raw_config, repository.get()));
+        std::unique_ptr<git_config, decltype(&git_config_free)> config(raw_config, git_config_free);
+        CheckGit(git_config_set_string(config.get(), "user.name", "ggui test"));
+        CheckGit(git_config_set_string(config.get(), "user.email", "ggui@example.test"));
+        repository.reset();
+        git_libgit2_shutdown();
+    }
+
+    ~TemporaryEmptyRepository() { std::filesystem::remove_all(path); }
+
+    std::filesystem::path path;
+};
+
 struct RemovePath
 {
     ~RemovePath() { std::filesystem::remove_all(path); }
@@ -253,7 +281,9 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
 {
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     std::shared_ptr<const RepoSnapshot> last_snapshot;
+    std::vector<Revision> history_revisions;
     std::uint64_t requested_topology = 0;
+    std::uint64_t history_ready_topology = 0;
     while (std::chrono::steady_clock::now() < deadline)
     {
         for (const Event& event : engine.PollEvents())
@@ -271,16 +301,28 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
                 if (requested_topology != ready->snapshot->repository_generation)
                 {
                     requested_topology = ready->snapshot->repository_generation;
+                    history_revisions.clear();
+                    history_ready_topology = 0;
                     engine.Enqueue(RebuildHistory{HistoryQuery{{}, {}, {}, {}, requested_topology}});
+                }
+                if (history_ready_topology == ready->snapshot->repository_generation)
+                {
+                    auto combined = std::make_shared<RepoSnapshot>(*last_snapshot);
+                    combined->revisions = history_revisions;
+                    last_snapshot = std::move(combined);
+                    if (predicate(*last_snapshot)) return last_snapshot;
                 }
             }
             if (const auto* ready = std::get_if<HistoryReady>(&event);
                 ready != nullptr && !ready->view->skeleton && last_snapshot != nullptr
                 && ready->view->repository_generation == last_snapshot->repository_generation)
             {
-                auto combined = std::make_shared<RepoSnapshot>(*last_snapshot);
+                history_revisions.clear();
                 for (const HistoryItem& item : ready->view->items)
-                    if (item.kind == HistoryItemKind::Commit) combined->revisions.push_back(item.revision);
+                    if (item.kind == HistoryItemKind::Commit) history_revisions.push_back(item.revision);
+                history_ready_topology = ready->view->repository_generation;
+                auto combined = std::make_shared<RepoSnapshot>(*last_snapshot);
+                combined->revisions = history_revisions;
                 last_snapshot = combined;
                 if (predicate(*combined)) return combined;
             }
@@ -290,6 +332,34 @@ std::shared_ptr<const RepoSnapshot> WaitForSnapshot(
     ADD_FAILURE() << "timed out waiting for repository snapshot; last generation="
                   << (last_snapshot == nullptr ? 0 : last_snapshot->generation)
                   << ", revisions=" << (last_snapshot == nullptr ? 0 : last_snapshot->revisions.size())
+                  << ", status=" << (last_snapshot == nullptr ? 0 : last_snapshot->status.size());
+    return {};
+}
+
+std::shared_ptr<const RepoSnapshot> WaitForRawSnapshot(
+    RepositoryEngine& engine, const std::function<bool(const RepoSnapshot&)>& predicate)
+{
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    std::shared_ptr<const RepoSnapshot> last_snapshot;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        for (const Event& event : engine.PollEvents())
+        {
+            if (const auto* error = std::get_if<ErrorEvent>(&event))
+            {
+                ADD_FAILURE() << error->operation << ": " << error->message;
+                return {};
+            }
+            if (const auto* ready = std::get_if<SnapshotReady>(&event))
+            {
+                last_snapshot = ready->snapshot;
+                if (predicate(*last_snapshot)) return last_snapshot;
+            }
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    ADD_FAILURE() << "timed out waiting for raw repository snapshot; last generation="
+                  << (last_snapshot == nullptr ? 0 : last_snapshot->generation)
                   << ", status=" << (last_snapshot == nullptr ? 0 : last_snapshot->status.size());
     return {};
 }
@@ -522,6 +592,20 @@ TEST(GraphLayout, HandlesLinearAndArbitraryParentGraphs)
         EXPECT_EQ(rows[row].tracks_after, rows[row + 1].tracks_before);
 }
 
+TEST(GraphLayout, ConnectsVirtualWorkingTreeToActiveCommit)
+{
+    const HistoryItem working_tree = MakeWorkingTreeHistoryItem(42, "active");
+    EXPECT_EQ(working_tree.kind, HistoryItemKind::WorkingTree);
+    EXPECT_EQ(working_tree.id, "working-tree:42");
+    EXPECT_TRUE(working_tree.revision.oid.empty());
+    EXPECT_EQ(working_tree.parents, (std::vector<std::string>{"active"}));
+    const std::vector<GraphRow> rows = BuildGraphLayout(
+        {{working_tree.id, working_tree.parents}, {"active", {"base"}}, {"base", {}}}, working_tree.id);
+    ASSERT_EQ(rows.size(), 3U);
+    EXPECT_EQ(rows.front().parent_tracks, (std::vector<int>{rows[1].track}));
+    EXPECT_EQ(rows.front().tracks_after, rows[1].tracks_before);
+}
+
 TEST(GraphLayout, MaintainsUniqueContinuousLanesAcrossComplexDag)
 {
     const std::vector<GraphNode> nodes{{"merge", {"a", "b", "c"}}, {"a", {"d", "e"}},
@@ -672,70 +756,50 @@ TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
     EXPECT_TRUE(revisions.front().pushed);
 }
 
-TEST(RepositoryEngine, OpensAndAutomaticallyRefreshesARepository)
+TEST(RepositoryEngine, OpensWithoutScanningAndRefreshesOnRequest)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
     ASSERT_NE(opened, nullptr);
-    EXPECT_EQ(opened->revisions.back().description, "base");
+    EXPECT_TRUE(opened->has_worktree);
+    EXPECT_EQ(opened->worktree_state, RepoSnapshot::WorktreeState::Unscanned);
+    EXPECT_TRUE(opened->status.empty());
     EXPECT_TRUE(opened->working_copy.empty());
-    EXPECT_EQ(opened->head, opened->revisions.back().oid);
-    EXPECT_EQ(opened->revisions.back().author_email, "ggui@example.test");
+    EXPECT_FALSE(opened->head.empty());
+    EXPECT_TRUE(opened->revisions.empty());
+    std::this_thread::sleep_for(100ms);
+    const auto open_events = engine.PollEvents();
+    EXPECT_TRUE(std::ranges::none_of(open_events, [](const Event& event) {
+        return std::holds_alternative<DiffReady>(event);
+    }));
     ASSERT_EQ(opened->remotes.size(), 1U);
     EXPECT_EQ(opened->remotes.front().name, "origin");
     EXPECT_EQ(opened->remotes.front().fetch_url, "https://example.test/repository.git");
     EXPECT_TRUE(opened->can_undo);
     EXPECT_FALSE(opened->can_redo);
-    std::this_thread::sleep_for(1200ms);
-    const auto idle_events = engine.PollEvents();
-    EXPECT_TRUE(std::none_of(idle_events.begin(), idle_events.end(),
-        [](const Event& event) { return std::holds_alternative<SnapshotReady>(event); }));
-
-    NewChange create;
-    create.message = "work";
-    engine.Enqueue(std::move(create));
-    const auto working = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.working_copy.empty();
-    });
-    ASSERT_NE(working, nullptr);
-    const auto empty_change = std::ranges::find(working->revisions, working->working_copy, &Revision::oid);
-    ASSERT_NE(empty_change, working->revisions.end());
-    EXPECT_TRUE(empty_change->empty);
-
-    engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
-    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > working->generation && snapshot.working_copy != working->working_copy;
-    });
-    ASSERT_NE(child, nullptr);
-    engine.Enqueue(Abandon{{working->working_copy}, true, false, {}});
-    const auto replacement = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > child->generation
-            && std::ranges::none_of(snapshot.revisions,
-                [&](const Revision& revision) { return revision.oid == working->working_copy; });
-    });
-    ASSERT_NE(replacement, nullptr);
-    EXPECT_GT(replacement->repository_generation, child->repository_generation);
-    EXPECT_EQ(replacement->revisions.size(), working->revisions.size());
-    const auto replacement_change =
-        std::ranges::find(replacement->revisions, replacement->working_copy, &Revision::oid);
-    ASSERT_NE(replacement_change, replacement->revisions.end());
-    EXPECT_TRUE(replacement_change->empty);
-    EXPECT_EQ(replacement_change->parents, empty_change->parents);
-
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
-    bool automatic_progress = false;
-    const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > replacement->generation && !snapshot.status.empty();
-    }, &automatic_progress);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto refreshed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
     ASSERT_NE(refreshed, nullptr);
-    EXPECT_FALSE(automatic_progress);
-    const auto nonempty_change = std::ranges::find(refreshed->revisions, refreshed->working_copy, &Revision::oid);
-    ASSERT_NE(nonempty_change, refreshed->revisions.end());
-    EXPECT_FALSE(nonempty_change->empty);
+    ASSERT_EQ(refreshed->status.size(), 1U);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
+    EXPECT_EQ(refreshed->head, opened->head);
+    EXPECT_TRUE(refreshed->working_copy.empty());
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(refreshed->repository_generation,
+                                refreshed->head).id,
+        "tracked.txt"});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    EXPECT_EQ(diff->before, "base\n");
+    EXPECT_EQ(diff->after, "changed\n");
+    std::ifstream tracked(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), {}), "changed\n");
 }
 
 TEST(RepositoryEngine, IncrementalRefreshUpdatesOnlyTouchedStatusPaths)
@@ -746,17 +810,25 @@ TEST(RepositoryEngine, IncrementalRefreshUpdatesOnlyTouchedStatusPaths)
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return snapshot.status.size() == 2;
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty();
     });
     ASSERT_NE(opened, nullptr);
-    ASSERT_NE(std::ranges::find(opened->status, "tracked.txt", &StatusEntry::path), opened->status.end());
-    ASSERT_NE(std::ranges::find(opened->status, "untracked.txt", &StatusEntry::path), opened->status.end());
+    EXPECT_EQ(opened->worktree_state, RepoSnapshot::WorktreeState::Unscanned);
+    EXPECT_TRUE(opened->status.empty());
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto scanned = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.status.size() == 2
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(scanned, nullptr);
+    ASSERT_NE(std::ranges::find(scanned->status, "tracked.txt", &StatusEntry::path), scanned->status.end());
+    ASSERT_NE(std::ranges::find(scanned->status, "untracked.txt", &StatusEntry::path), scanned->status.end());
 
     std::filesystem::remove(repository.path / "untracked.txt");
     engine.Enqueue(Refresh{true, {"untracked.txt"}});
-    const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > opened->generation && snapshot.status.size() == 1;
+    const auto refreshed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > scanned->generation && snapshot.status.size() == 1;
     });
     ASSERT_NE(refreshed, nullptr);
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
@@ -765,34 +837,46 @@ TEST(RepositoryEngine, IncrementalRefreshUpdatesOnlyTouchedStatusPaths)
     std::filesystem::create_directories(repository.path / "untracked-dir");
     std::ofstream(repository.path / "untracked-dir" / "nested.txt") << "new again\n";
     engine.Enqueue(Refresh{true, {"untracked-dir"}});
-    const auto added = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+    const auto added = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > refreshed->generation && snapshot.status.size() == 2;
     });
     ASSERT_NE(added, nullptr);
     EXPECT_NE(std::ranges::find(added->status, "untracked-dir/nested.txt", &StatusEntry::path), added->status.end());
 }
 
-TEST(RepositoryEngine, WatchesNewTopLevelDirectoriesAfterOpening)
+TEST(RepositoryEngine, MarksNewTopLevelDirectoriesStaleUntilExplicitRefresh)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Unscanned;
     });
     ASSERT_NE(opened, nullptr);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto scanned = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(scanned, nullptr);
 
     std::filesystem::create_directories(repository.path / "new-directory");
     std::ofstream(repository.path / "new-directory" / "file.txt") << "new\n";
-    const auto refreshed = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
-            return entry.path == "new-directory/file.txt";
-        });
+    const auto stale = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > scanned->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Stale;
+    });
+    ASSERT_NE(stale, nullptr);
+    EXPECT_TRUE(stale->status.empty());
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto refreshed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > stale->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
     });
     ASSERT_NE(refreshed, nullptr);
     const auto file = std::ranges::find(refreshed->status, "new-directory/file.txt", &StatusEntry::path);
     ASSERT_NE(file, refreshed->status.end());
-    EXPECT_EQ(file->status, GIT_DELTA_ADDED);
+    EXPECT_EQ(file->status, GIT_DELTA_UNTRACKED);
 }
 
 TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)
@@ -1273,11 +1357,8 @@ TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)
     std::uint64_t topology = 0;
     bool saw_detail = false;
     bool saw_scan_activity = false;
-    bool finished_scan_activity = false;
-    std::uint64_t scan_activity = 0;
     const auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (std::chrono::steady_clock::now() < deadline
-        && (!saw_detail || !finished_scan_activity))
+    while (std::chrono::steady_clock::now() < deadline && !saw_detail)
     {
         for (const Event& event : engine.PollEvents())
         {
@@ -1294,20 +1375,13 @@ TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)
                 saw_detail = true;
             else if (const auto* started = std::get_if<BackgroundActivityStarted>(&event);
                 started != nullptr && started->name == "Scanning working copy")
-            {
                 saw_scan_activity = true;
-                scan_activity = started->id;
-            }
-            else if (const auto* finished = std::get_if<BackgroundActivityFinished>(&event);
-                finished != nullptr && saw_scan_activity && finished->id == scan_activity)
-                finished_scan_activity = true;
         }
         std::this_thread::sleep_for(10ms);
     }
     ASSERT_NE(topology, 0U);
     EXPECT_TRUE(saw_detail);
-    EXPECT_TRUE(saw_scan_activity);
-    EXPECT_TRUE(finished_scan_activity);
+    EXPECT_FALSE(saw_scan_activity);
 
     engine.Enqueue(Refresh{false, {}});
     bool metadata_started = false;
@@ -1370,50 +1444,71 @@ TEST(RepositoryEngine, OpensRepositoryWithTagPointingToTree)
         [](const NamedRef& reference) { return reference.name == "tree-only"; }));
 }
 
-TEST(RepositoryEngine, SnapshotsPendingFilesBeforeCreatingAChange)
+TEST(RepositoryEngine, CommitsWholeWorkingTreeWithoutLosingDiskContents)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
-
-    engine.Enqueue(NewChange{});
-    const auto first = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.working_copy.empty();
-    });
-    ASSERT_NE(first, nullptr);
-    const auto first_revision = std::ranges::find(first->revisions, first->working_copy, &Revision::oid);
-    ASSERT_NE(first_revision, first->revisions.end());
-    ASSERT_TRUE(first_revision->empty);
-
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
+    ASSERT_NE(opened, nullptr);
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
-    engine.Enqueue(NewChange{{}, {"@"}, {}, {}, false});
-    const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        const auto working = std::ranges::find(snapshot.revisions, snapshot.working_copy, &Revision::oid);
-        if (snapshot.generation <= first->generation || snapshot.working_copy == first->working_copy
-            || working == snapshot.revisions.end() || !working->empty || working->parents.size() != 1)
-            return false;
-        const auto parent = std::ranges::find(snapshot.revisions, working->parents.front(), &Revision::oid);
-        return parent != snapshot.revisions.end() && !parent->empty;
+    std::ofstream(repository.path / "untracked.txt") << "new\n";
+    engine.Enqueue(Commit{"whole working tree"});
+    const auto committed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.head != opened->head;
     });
-    ASSERT_NE(child, nullptr);
-    const auto child_revision = std::ranges::find(child->revisions, child->working_copy, &Revision::oid);
-    ASSERT_NE(child_revision, child->revisions.end());
-    ASSERT_TRUE(child_revision->empty);
-    ASSERT_EQ(child_revision->parents.size(), 1U);
+    ASSERT_NE(committed, nullptr);
+    EXPECT_EQ(committed->head, committed->working_copy);
+    EXPECT_EQ(committed->worktree_state, RepoSnapshot::WorktreeState::Ready);
+    EXPECT_TRUE(committed->status.empty());
+    std::ifstream tracked(repository.path / "tracked.txt");
+    std::ifstream untracked(repository.path / "untracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), {}), "changed\n");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(untracked), {}), "new\n");
 
-    const auto parent = std::ranges::find(child->revisions, child_revision->parents.front(), &Revision::oid);
-    ASSERT_NE(parent, child->revisions.end());
-    EXPECT_FALSE(parent->empty);
-
-    engine.Enqueue(LoadDiff{parent->oid, "tracked.txt"});
+    engine.Enqueue(LoadDiff{committed->working_copy, {}, true});
     const auto diff = WaitForDiff(engine);
     ASSERT_TRUE(diff.has_value());
-    EXPECT_EQ(diff->before, "base\n");
-    EXPECT_EQ(diff->after, "changed\n");
+    EXPECT_NE(std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path), diff->files.end());
+    EXPECT_NE(std::ranges::find(diff->files, "untracked.txt", &StatusEntry::path), diff->files.end());
 }
 
-TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
+TEST(RepositoryEngine, CommitsUnbornWorkingTreeWithoutLosingDiskContents)
+{
+    TemporaryEmptyRepository repository;
+    std::ofstream(repository.path / "first.txt") << "initial contents\n";
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
+    ASSERT_NE(opened, nullptr);
+    EXPECT_TRUE(opened->head.empty());
+    EXPECT_TRUE(opened->working_copy.empty());
+    EXPECT_TRUE(opened->status.empty());
+    EXPECT_EQ(opened->worktree_state, RepoSnapshot::WorktreeState::Unscanned);
+    const HistoryItem working_tree = MakeWorkingTreeHistoryItem(opened->repository_generation, opened->head);
+    EXPECT_EQ(working_tree.kind, HistoryItemKind::WorkingTree);
+    EXPECT_TRUE(working_tree.parents.empty());
+
+    engine.Enqueue(LoadDiff{working_tree.id, "first.txt"});
+    const auto worktree_diff = WaitForDiff(engine);
+    ASSERT_TRUE(worktree_diff.has_value());
+    EXPECT_EQ(worktree_diff->after, "initial contents\n");
+
+    engine.Enqueue(Commit{"initial commit"});
+    const auto committed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.head.empty();
+    });
+    ASSERT_NE(committed, nullptr);
+    EXPECT_FALSE(committed->working_copy.empty());
+    std::ifstream file(repository.path / "first.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "initial contents\n");
+    engine.Enqueue(LoadDiff{committed->working_copy, "first.txt"});
+    const auto commit_diff = WaitForDiff(engine);
+    ASSERT_TRUE(commit_diff.has_value());
+    EXPECT_EQ(commit_diff->after, "initial contents\n");
+}
+
+TEST(RepositoryEngine, LeavesDirtyGitWorkingTreeUnscannedUntilRequested)
 {
     TemporaryRepository repository;
     std::ofstream(repository.path / "tracked.txt") << "modified\n";
@@ -1421,22 +1516,41 @@ TEST(RepositoryEngine, ImportsDirtyGitWorkingTreeOnOpen)
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.working_copy.empty() && snapshot.status.size() == 2;
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Unscanned;
     });
     ASSERT_NE(opened, nullptr);
-    const auto modified = std::ranges::find(opened->status, "tracked.txt", &StatusEntry::path);
-    const auto added = std::ranges::find(opened->status, "untracked.txt", &StatusEntry::path);
-    ASSERT_NE(modified, opened->status.end());
-    ASSERT_NE(added, opened->status.end());
-    EXPECT_EQ(modified->status, GIT_DELTA_MODIFIED);
-    EXPECT_EQ(added->status, GIT_DELTA_ADDED);
+    EXPECT_TRUE(opened->status.empty());
+    const std::string original_working_copy = opened->working_copy;
+    const std::string original_head = opened->head;
+    ASSERT_FALSE(original_head.empty());
 
-    engine.Enqueue(LoadDiff{opened->working_copy, {}, true});
-    const auto diff = WaitForDiff(engine);
-    ASSERT_TRUE(diff.has_value());
-    EXPECT_NE(std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path), diff->files.end());
-    EXPECT_NE(std::ranges::find(diff->files, "untracked.txt", &StatusEntry::path), diff->files.end());
+    const std::string working_tree_id = MakeWorkingTreeHistoryItem(
+        opened->repository_generation, opened->working_copy.empty() ? opened->head : opened->working_copy).id;
+    engine.Enqueue(LoadDiff{working_tree_id, {}, true});
+    const auto worktree_diff = WaitForDiff(engine);
+    ASSERT_TRUE(worktree_diff.has_value());
+    EXPECT_NE(std::ranges::find(worktree_diff->files, "tracked.txt", &StatusEntry::path), worktree_diff->files.end());
+    EXPECT_NE(std::ranges::find(worktree_diff->files, "untracked.txt", &StatusEntry::path), worktree_diff->files.end());
+
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto refreshed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.status.size() == 2
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(refreshed, nullptr);
+    EXPECT_EQ(refreshed->working_copy, original_working_copy);
+    EXPECT_EQ(refreshed->head, original_head);
+    const auto modified = std::ranges::find(refreshed->status, "tracked.txt", &StatusEntry::path);
+    const auto added = std::ranges::find(refreshed->status, "untracked.txt", &StatusEntry::path);
+    ASSERT_NE(modified, refreshed->status.end());
+    ASSERT_NE(added, refreshed->status.end());
+    EXPECT_EQ(modified->status, GIT_DELTA_MODIFIED);
+    EXPECT_EQ(added->status, GIT_DELTA_UNTRACKED);
+    std::ifstream tracked(repository.path / "tracked.txt");
+    std::ifstream untracked(repository.path / "untracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), {}), "modified\n");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(untracked), {}), "new\n");
 }
 
 TEST(RepositoryEngine, ShowsAndExplicitlyTracksOversizedFiles)
@@ -1448,22 +1562,29 @@ TEST(RepositoryEngine, ShowsAndExplicitlyTracksOversizedFiles)
         0);
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
-    engine.Enqueue(NewChange{});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); });
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
     ASSERT_NE(opened, nullptr);
+    engine.Enqueue(NewChange{});
+    const auto working = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.working_copy.empty();
+    });
+    ASSERT_NE(working, nullptr);
 
     std::ofstream(repository.path / "oversized.txt") << "xx";
-    engine.Enqueue(Refresh{});
-    const auto untracked_snapshot = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > opened->generation
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto untracked_snapshot = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > working->generation
             && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
                    return entry.path == "oversized.txt" && entry.status == GIT_DELTA_UNTRACKED;
                });
     });
     ASSERT_NE(untracked_snapshot, nullptr);
 
-    engine.Enqueue(LoadDiff{untracked_snapshot->working_copy, "oversized.txt"});
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(untracked_snapshot->repository_generation,
+                                untracked_snapshot->working_copy.empty() ? untracked_snapshot->head
+                                                                         : untracked_snapshot->working_copy)
+                                .id,
+        "oversized.txt"});
     const auto diff = WaitForDiff(engine);
     ASSERT_TRUE(diff.has_value());
     const auto untracked = std::ranges::find(diff->files, "oversized.txt", &StatusEntry::path);
@@ -1471,39 +1592,163 @@ TEST(RepositoryEngine, ShowsAndExplicitlyTracksOversizedFiles)
     EXPECT_EQ(untracked->status, GIT_DELTA_UNTRACKED);
 
     engine.Enqueue(TrackPaths{{"oversized.txt"}});
-    const auto tracked = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > untracked_snapshot->generation
-            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
-                   return entry.path == "oversized.txt" && entry.status == GIT_DELTA_ADDED;
-               });
+    const auto tracked = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > untracked_snapshot->generation;
     });
     ASSERT_NE(tracked, nullptr);
+    EXPECT_TRUE(tracked->status.empty());
+    ASSERT_FALSE(tracked->working_copy.empty());
+    engine.Enqueue(Commit{"capture oversized file"});
+    const auto committed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > tracked->generation && snapshot.working_copy != tracked->working_copy;
+    });
+    ASSERT_NE(committed, nullptr);
+    engine.Enqueue(LoadDiff{committed->working_copy, "oversized.txt"});
+    const auto captured = WaitForDiff(engine);
+    ASSERT_TRUE(captured.has_value());
+    ASSERT_EQ(captured->files.size(), 1U);
+    EXPECT_EQ(captured->files.front().status, GIT_DELTA_ADDED);
+    EXPECT_EQ(captured->after, "xx");
+    std::ifstream file(repository.path / "oversized.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(file), {}), "xx");
 }
 
-TEST(RepositoryEngine, ShowsRenamedFilesAsSingleChange)
+TEST(RepositoryEngine, KeepsRenamedWorktreeFileAsDeletionAndUntrackedFile)
 {
     TemporaryRepository repository;
     std::filesystem::rename(repository.path / "tracked.txt", repository.path / "renamed.txt");
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.working_copy.empty()
-            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
-                return entry.status == GIT_DELTA_RENAMED;
-            });
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Unscanned;
     });
     ASSERT_NE(opened, nullptr);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto scanned = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(scanned, nullptr);
 
-    engine.Enqueue(LoadDiff{opened->working_copy, "renamed.txt"});
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(scanned->repository_generation,
+                                scanned->working_copy.empty() ? scanned->head : scanned->working_copy)
+                                .id,
+        "renamed.txt"});
     const auto diff = WaitForDiff(engine);
     ASSERT_TRUE(diff.has_value());
-    ASSERT_EQ(diff->files.size(), 1U);
-    EXPECT_EQ(diff->files.front().status, GIT_DELTA_RENAMED);
-    EXPECT_EQ(diff->files.front().old_path, "tracked.txt");
-    EXPECT_EQ(diff->files.front().path, "renamed.txt");
-    EXPECT_EQ(diff->before, "base\n");
+    ASSERT_EQ(diff->files.size(), 2U);
+    const auto removed = std::ranges::find(diff->files, "tracked.txt", &StatusEntry::path);
+    const auto added = std::ranges::find(diff->files, "renamed.txt", &StatusEntry::path);
+    ASSERT_NE(removed, diff->files.end());
+    ASSERT_NE(added, diff->files.end());
+    EXPECT_EQ(removed->status, GIT_DELTA_DELETED);
+    EXPECT_EQ(added->status, GIT_DELTA_UNTRACKED);
     EXPECT_EQ(diff->after, "base\n");
+}
+
+TEST(RepositoryEngine, MovesOnlySelectedWorkingTreeFileAcrossActiveCommit)
+{
+    TemporaryRepository repository;
+    repository.AppendEmptyCommits(1);
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
+    ASSERT_NE(opened, nullptr);
+    ASSERT_FALSE(opened->head.empty());
+    std::ofstream(repository.path / "tracked.txt") << "changed\n";
+    std::ofstream(repository.path / "other.txt") << "keep pending\n";
+    const std::string working_tree_id = MakeWorkingTreeHistoryItem(opened->repository_generation, opened->head).id;
+
+    engine.Enqueue(MoveFiles{working_tree_id, opened->head, {"tracked.txt"}});
+    const auto moved = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.head != opened->head;
+    });
+    ASSERT_NE(moved, nullptr);
+    const std::string active = moved->working_copy.empty() ? moved->head : moved->working_copy;
+    engine.Enqueue(LoadDiff{active, "tracked.txt"});
+    const auto commit_diff = WaitForDiff(engine);
+    ASSERT_TRUE(commit_diff.has_value());
+    EXPECT_EQ(commit_diff->before, "base\n");
+    EXPECT_EQ(commit_diff->after, "changed\n");
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(moved->repository_generation, active).id, {}, true});
+    const auto worktree_diff = WaitForDiff(engine);
+    ASSERT_TRUE(worktree_diff.has_value());
+    EXPECT_EQ(std::ranges::find(worktree_diff->files, "tracked.txt", &StatusEntry::path),
+        worktree_diff->files.end());
+    EXPECT_NE(std::ranges::find(worktree_diff->files, "other.txt", &StatusEntry::path),
+        worktree_diff->files.end());
+
+    engine.Enqueue(MoveFiles{active, MakeWorkingTreeHistoryItem(moved->repository_generation, active).id,
+        {"tracked.txt"}});
+    const auto restored = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > moved->generation && snapshot.head != moved->head;
+    });
+    ASSERT_NE(restored, nullptr);
+    const std::string restored_active = restored->working_copy.empty() ? restored->head : restored->working_copy;
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(restored->repository_generation, restored_active).id,
+        "tracked.txt"});
+    const auto restored_diff = WaitForDiff(engine);
+    ASSERT_TRUE(restored_diff.has_value());
+    EXPECT_EQ(restored_diff->before, "base\n");
+    EXPECT_EQ(restored_diff->after, "changed\n");
+    std::ifstream tracked(repository.path / "tracked.txt");
+    std::ifstream other(repository.path / "other.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), {}), "changed\n");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(other), {}), "keep pending\n");
+}
+
+TEST(RepositoryEngine, MovesOnlySelectedWorkingTreeLinesAcrossActiveCommit)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
+    ASSERT_NE(opened, nullptr);
+    ASSERT_FALSE(opened->head.empty());
+    std::ofstream(repository.path / "tracked.txt") << "base\nfirst\nsecond\n";
+    const std::string working_tree_id = MakeWorkingTreeHistoryItem(opened->repository_generation, opened->head).id;
+    engine.Enqueue(LoadDiff{working_tree_id, "tracked.txt"});
+    const auto initial_diff = WaitForDiff(engine);
+    ASSERT_TRUE(initial_diff.has_value());
+    const auto selected = std::ranges::find_if(initial_diff->lines,
+        [](const DiffLine& line) { return line.kind == DiffLineKind::Addition && line.new_line == 1; });
+    ASSERT_NE(selected, initial_diff->lines.end());
+
+    engine.Enqueue(MoveDiffLines{working_tree_id, opened->head, "tracked.txt", {*selected}});
+    const auto moved = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && snapshot.head != opened->head;
+    });
+    ASSERT_NE(moved, nullptr);
+    const std::string active = moved->working_copy.empty() ? moved->head : moved->working_copy;
+    engine.Enqueue(LoadDiff{active, "tracked.txt"});
+    const auto commit_diff = WaitForDiff(engine);
+    ASSERT_TRUE(commit_diff.has_value());
+    EXPECT_EQ(commit_diff->after, "base\nfirst\n");
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(moved->repository_generation, active).id, "tracked.txt"});
+    const auto remaining_diff = WaitForDiff(engine);
+    ASSERT_TRUE(remaining_diff.has_value());
+    EXPECT_EQ(remaining_diff->before, "base\nfirst\n");
+    EXPECT_EQ(remaining_diff->after, "base\nfirst\nsecond\n");
+
+    const auto moved_line = std::ranges::find_if(commit_diff->lines,
+        [](const DiffLine& line) { return line.kind == DiffLineKind::Addition && line.new_line == 1; });
+    ASSERT_NE(moved_line, commit_diff->lines.end());
+    engine.Enqueue(MoveDiffLines{active, MakeWorkingTreeHistoryItem(moved->repository_generation, active).id,
+        "tracked.txt", {*moved_line}});
+    const auto restored = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > moved->generation && snapshot.head != moved->head;
+    });
+    ASSERT_NE(restored, nullptr);
+    const std::string restored_active = restored->working_copy.empty() ? restored->head : restored->working_copy;
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(restored->repository_generation, restored_active).id,
+        "tracked.txt"});
+    const auto restored_diff = WaitForDiff(engine);
+    ASSERT_TRUE(restored_diff.has_value());
+    EXPECT_EQ(restored_diff->before, "base\n");
+    EXPECT_EQ(restored_diff->after, "base\nfirst\nsecond\n");
+    std::ifstream tracked(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(tracked), {}), "base\nfirst\nsecond\n");
 }
 
 TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
@@ -1889,16 +2134,22 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     });
     ASSERT_NE(alternate, nullptr);
     std::ofstream(repository.path / "tracked.txt") << "alternate\n";
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Refresh{true, {}, true});
     const auto alternate_changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > alternate->generation && !snapshot.status.empty();
     });
     ASSERT_NE(alternate_changed, nullptr);
-    const std::string alternate_id = alternate_changed->working_copy;
+    engine.Enqueue(Amend{"@", {}});
+    const auto alternate_committed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > alternate_changed->generation
+            && snapshot.working_copy != alternate_changed->working_copy;
+    });
+    ASSERT_NE(alternate_committed, nullptr);
+    const std::string alternate_id = alternate_committed->working_copy;
 
     engine.Enqueue(Edit{conflicted_source});
     const auto conflict_checked_out = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        if (snapshot.generation <= alternate_changed->generation)
+        if (snapshot.generation <= alternate_committed->generation)
             return false;
         const auto revision = FindRevision(snapshot, conflicted_source);
         return revision != snapshot.revisions.end() && revision->conflicted
@@ -1912,7 +2163,7 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     ASSERT_NE(markers.find("<<<<<<< Conflict"), std::string::npos);
     std::ofstream(repository.path / "tracked.txt", std::ios::binary | std::ios::trunc)
         << "partial resolution\n" << markers;
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Refresh{true, {}, true});
     const auto marker_retained = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > conflict_checked_out->generation
             && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
@@ -1931,13 +2182,29 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     });
     ASSERT_NE(graph_preserved, nullptr);
 
+    // Rewriting the active commit's tree would discard the uncommitted
+    // partial resolution, so the rebase is refused until it is undone.
     engine.Enqueue(Rebase{conflicted_source, alternate_id});
-    const auto conflict_rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+    const TerminalEvent dirty_rebase = WaitForTerminal(engine, "rebase");
+    EXPECT_FALSE(dirty_rebase.finished);
+    EXPECT_NE(dirty_rebase.message.find("uncommitted changes"), std::string::npos) << dirty_rebase.message;
+    std::ofstream(repository.path / "tracked.txt", std::ios::binary | std::ios::trunc) << markers;
+    engine.Enqueue(Rebase{conflicted_source, alternate_id});
+    const auto rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         if (snapshot.generation <= graph_preserved->generation)
             return false;
         const auto revision = FindRevision(snapshot, conflicted_source);
         return revision != snapshot.revisions.end() && revision->conflicted
-            && snapshot.working_copy == revision->oid
+            && snapshot.working_copy == revision->oid;
+    });
+    ASSERT_NE(rebased, nullptr);
+    // Mutations leave Working tree status unscanned until an explicit Refresh.
+    EXPECT_EQ(rebased->worktree_state, RepoSnapshot::WorktreeState::Unscanned);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto conflict_rebased = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > rebased->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready
+            && snapshot.working_copy == rebased->working_copy
             && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
                    return entry.path == "tracked.txt" && entry.conflicted;
                });
@@ -1973,10 +2240,7 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
         if (snapshot.generation <= resolution_child->generation)
             return false;
         const auto revision = FindRevision(snapshot, rebased_source_id);
-        return revision != snapshot.revisions.end() && revision->conflicted
-            && std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) {
-                   return entry.path == "tracked.txt" && entry.conflicted;
-               });
+        return revision != snapshot.revisions.end() && revision->conflicted;
     });
     ASSERT_NE(partial_resolution, nullptr);
     engine.Enqueue(LoadDiff{rebased_source_id, "tracked.txt"});
@@ -1989,10 +2253,16 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
         if (snapshot.generation <= resolution_child->generation)
             return false;
         const auto revision = FindRevision(snapshot, rebased_source_id);
-        return revision != snapshot.revisions.end() && !revision->conflicted
-            && std::ranges::none_of(snapshot.status, [](const StatusEntry& entry) { return entry.conflicted; });
+        return revision != snapshot.revisions.end() && !revision->conflicted;
     });
     ASSERT_NE(resolved, nullptr);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto resolved_status = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > resolved->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(resolved_status, nullptr);
+    EXPECT_TRUE(std::ranges::none_of(resolved_status->status, [](const StatusEntry& entry) { return entry.conflicted; }));
     std::ifstream resolved_file(repository.path / "tracked.txt", std::ios::binary);
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(resolved_file), std::istreambuf_iterator<char>()),
         "resolved\n");
@@ -2085,14 +2355,12 @@ TEST(RepositoryEngine, ReopensCurrentWorkspaceWhenRemovalIsRefused)
     ASSERT_NE(current, opened->workspaces.end());
     ASSERT_NE(primary, opened->workspaces.end());
 
-    std::ofstream(worktree.path / "keep.txt") << "keep\n";
-    engine.Enqueue(UntrackPaths{{"keep.txt"}});
-    ASSERT_TRUE(WaitForTerminal(engine, "untrack paths").finished);
+    std::ofstream(worktree.path / "tracked.txt") << "keep\n";
     engine.Enqueue(WorkspaceRemove{current->name, current->root, primary->root, true});
     const TerminalEvent refused = WaitForTerminal(engine, "remove workspace");
     EXPECT_FALSE(refused.finished);
     EXPECT_FALSE(refused.message.empty());
-    EXPECT_TRUE(std::filesystem::exists(worktree.path / "keep.txt"));
+    EXPECT_TRUE(std::filesystem::exists(worktree.path / "tracked.txt"));
 }
 
 TEST(RepositoryEngine, ClonesThroughATemporaryDestination)
@@ -2310,15 +2578,18 @@ TEST(RepositoryEngine, ClosesAndReopensWithoutWatcherEvents)
     }));
 
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto reopened = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
-        return !value.working_copy.empty() && !value.status.empty();
+    const auto reopened = WaitForRawSnapshot(engine, [](const RepoSnapshot& value) {
+        return !value.root.empty() && value.worktree_state == RepoSnapshot::WorktreeState::Unscanned;
     });
     ASSERT_NE(reopened, nullptr);
     EXPECT_EQ(std::filesystem::weakly_canonical(reopened->root), std::filesystem::weakly_canonical(repository.path));
-    engine.Enqueue(LoadDiff{reopened->working_copy, "tracked.txt"});
+    EXPECT_TRUE(reopened->status.empty());
+    const std::string active = reopened->working_copy.empty() ? reopened->head : reopened->working_copy;
+    engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(reopened->repository_generation, active).id, "tracked.txt"});
     const auto reopened_diff = WaitForDiff(engine);
     ASSERT_TRUE(reopened_diff.has_value());
-    EXPECT_EQ(reopened_diff->revision, reopened->working_copy);
+    EXPECT_EQ(reopened_diff->revision,
+        MakeWorkingTreeHistoryItem(reopened->repository_generation, active).id);
     EXPECT_EQ(reopened_diff->after, "changed while closed\n");
 }
 
@@ -2402,13 +2673,14 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForSnapshot(engine,
-        [](const RepoSnapshot& snapshot) {
-            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
-        });
+    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.root.empty(); });
     ASSERT_NE(opened, nullptr);
+    ASSERT_FALSE(opened->head.empty());
+    const std::string active = opened->working_copy.empty() ? opened->head : opened->working_copy;
+    const std::string working_tree_id =
+        MakeWorkingTreeHistoryItem(opened->repository_generation, active).id;
 
-    engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
+    engine.Enqueue(LoadDiff{working_tree_id, "tracked.txt", false,
         DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}});
     const auto normal = WaitForDiff(engine);
     ASSERT_TRUE(normal.has_value());
@@ -2425,26 +2697,23 @@ TEST(RepositoryEngine, HonorsDiffWhitespaceAndContextOptions)
     EXPECT_EQ(normal->lines[2].old_line, 7);
     EXPECT_EQ(normal->lines[3].new_line, 7);
 
-    engine.Enqueue(LoadDiff{opened->working_copy, "tracked.txt", false,
+    engine.Enqueue(LoadDiff{working_tree_id, "tracked.txt", false,
         DiffOptions{.whitespace_mode = DiffWhitespaceMode::IgnoreAllWhitespace, .context_lines = 0}});
     const auto filtered = WaitForDiff(engine);
     ASSERT_TRUE(filtered.has_value());
     EXPECT_EQ(filtered->before, "line03\n");
     EXPECT_EQ(filtered->after, "changed\n");
 
-    const auto working_copy = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
-    ASSERT_NE(working_copy, opened->revisions.end());
-    ASSERT_EQ(working_copy->parents.size(), 1U);
-    engine.Enqueue(LoadDiff{working_copy->parents.front(), "tracked.txt", false,
-        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}, opened->working_copy, true});
+    engine.Enqueue(LoadDiff{working_tree_id, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = 0}, active, true});
     const auto compared = WaitForDiff(engine);
     ASSERT_TRUE(compared.has_value());
     EXPECT_TRUE(compared->file_comparison);
     EXPECT_EQ(compared->before, "line03\nline08\n");
     EXPECT_EQ(compared->after, "changed\nline 08\n");
 
-    engine.Enqueue(LoadDiff{working_copy->parents.front(), "tracked.txt", false,
-        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}, opened->working_copy, true});
+    engine.Enqueue(LoadDiff{working_tree_id, "tracked.txt", false,
+        DiffOptions{.whitespace_mode = DiffWhitespaceMode::Normal, .context_lines = -1}, active, true});
     const auto full = WaitForDiff(engine);
     ASSERT_TRUE(full.has_value());
     EXPECT_EQ(full->before,
@@ -2463,6 +2732,7 @@ TEST(RepositoryEngine, MovesLinesOnlyIntoChosenChildAndUndoesAtomically)
     std::ofstream(repository.path / "tracked.txt") << "ONE\ntwo\nTHREE\n";
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"source lines"});
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return !snapshot.working_copy.empty();
     });
@@ -2544,6 +2814,7 @@ TEST(RepositoryEngine, MovesPartialReplacementToParentWithoutReplayingSource)
     std::ofstream(repository.path / "tracked.txt") << "ONE\ntwo";
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"source replacement"});
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return !snapshot.working_copy.empty();
     });
@@ -2579,6 +2850,7 @@ TEST(RepositoryEngine, RevertsOneInsertionWhilePreservingAnotherAtItsOriginalPos
     std::ofstream(repository.path / "tracked.txt") << "one\nA\ntwo\nB\nthree";
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"insertions"});
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return !snapshot.working_copy.empty();
     });
@@ -2603,6 +2875,7 @@ TEST(RepositoryEngine, MovesFileIntoChildThatAlreadyEditsItWithoutLosingContent)
     std::ofstream(repository.path / "tracked.txt") << "source\n";
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"source file"});
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return !snapshot.working_copy.empty();
     });
@@ -2614,7 +2887,7 @@ TEST(RepositoryEngine, MovesFileIntoChildThatAlreadyEditsItWithoutLosingContent)
     });
     ASSERT_NE(child, nullptr);
     std::ofstream(repository.path / "tracked.txt") << "destination\n";
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Amend{"@", {}});
     const auto edited = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > child->generation;
     });
@@ -2647,6 +2920,7 @@ TEST(RepositoryEngine, MovesBothSidesOfRenamedFileIntoChild)
     std::filesystem::rename(repository.path / "tracked.txt", repository.path / "renamed.txt");
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"rename source"});
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return !snapshot.working_copy.empty();
     });
@@ -2688,6 +2962,7 @@ TEST(RepositoryEngine, MovesFileIntoMergeChildThroughEitherParentWithoutLosingRe
         std::ofstream(repository.path / "tracked.txt") << "source\n";
         RepositoryEngine engine;
         engine.Enqueue(OpenRepository{repository.path.string()});
+        engine.Enqueue(Commit{"merge source"});
         const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
             return !snapshot.working_copy.empty();
         });
@@ -2734,7 +3009,7 @@ TEST(RepositoryEngine, MovesFileIntoMergeChildThroughEitherParentWithoutLosingRe
         });
         ASSERT_NE(child, nullptr);
         std::ofstream(repository.path / "tracked.txt") << "resolved destination\n";
-        engine.Enqueue(Refresh{});
+        engine.Enqueue(Amend{"@", {}});
         const auto edited = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
             return snapshot.generation > child->generation && snapshot.working_copy != child->working_copy;
         });
@@ -2778,6 +3053,7 @@ TEST(RepositoryEngine, RejectsStaleLineSelectionsWhenNewContentUsesTheSameCoordi
         std::ofstream(repository.path / "tracked.txt") << "displayed\n";
         RepositoryEngine engine;
         engine.Enqueue(OpenRepository{repository.path.string()});
+        engine.Enqueue(Commit{"displayed content"});
         const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
             return !snapshot.working_copy.empty();
         });
@@ -2789,8 +3065,14 @@ TEST(RepositoryEngine, RejectsStaleLineSelectionsWhenNewContentUsesTheSameCoordi
         const std::vector<DiffLine> selected{
             {DiffLineKind::Deletion, 0, -1, 0}, {DiffLineKind::Addition, -1, 0, 0}};
         // The displayed diff and this newer diff have exactly the same line
-        // kinds and positions; only the bytes have changed.
+        // kinds and positions; only the bytes have changed. Amend rewrites
+        // the displayed commit, leaving its old ID as an alias.
         std::ofstream(repository.path / "tracked.txt") << "new unseen contents\n";
+        engine.Enqueue(Amend{"@", {}});
+        const auto amended = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+            return snapshot.generation > opened->generation && snapshot.working_copy != source->oid;
+        });
+        ASSERT_NE(amended, nullptr);
         std::string operation;
         if (action == 0)
         {
@@ -2813,11 +3095,13 @@ TEST(RepositoryEngine, RejectsStaleLineSelectionsWhenNewContentUsesTheSameCoordi
         std::ifstream file(repository.path / "tracked.txt");
         const std::string contents{std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         EXPECT_EQ(contents, "new unseen contents\n");
-        engine.Enqueue(Refresh{});
+        engine.Enqueue(Refresh{true, {}, true});
         const auto refreshed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-            return snapshot.generation > opened->generation;
+            return snapshot.generation > amended->generation;
         });
         ASSERT_NE(refreshed, nullptr);
+        EXPECT_EQ(refreshed->working_copy, amended->working_copy);
+        EXPECT_TRUE(refreshed->status.empty());
         const auto current = FindRevision(*refreshed, refreshed->working_copy);
         ASSERT_NE(current, refreshed->revisions.end());
         EXPECT_EQ(current->parents, std::vector<std::string>{parent});
@@ -2841,9 +3125,10 @@ TEST(RepositoryEngine, MovesSelectedDiffLinesBetweenAdjacentChanges)
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"source lines"});
     const auto opened = WaitForSnapshot(engine,
         [](const RepoSnapshot& snapshot) {
-            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
+            return !snapshot.working_copy.empty() && !snapshot.revisions.empty();
         });
     ASSERT_NE(opened, nullptr);
     const auto source = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
@@ -3070,9 +3355,10 @@ TEST(RepositoryEngine, RevertsSelectedWorkingCopyDiffLines)
 
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
+    engine.Enqueue(Commit{"working lines"});
     const auto opened = WaitForSnapshot(engine,
         [](const RepoSnapshot& snapshot) {
-            return !snapshot.working_copy.empty() && !snapshot.status.empty() && !snapshot.revisions.empty();
+            return !snapshot.working_copy.empty() && !snapshot.revisions.empty();
         });
     ASSERT_NE(opened, nullptr);
     const auto working = std::ranges::find(opened->revisions, opened->working_copy, &Revision::oid);
@@ -3141,9 +3427,10 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     ASSERT_NE(selected, nullptr);
     std::ofstream(repository.path / "tracked.txt") << "ONE\n2\n3\n4\n5\n6\n7\n8\n9\nten\n";
     std::filesystem::rename(repository.path / "old.txt", repository.path / "new.txt");
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Amend{"@", {}});
     const auto changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > selected->generation && snapshot.status.size() == 2;
+        return snapshot.generation > selected->generation
+            && snapshot.working_copy != selected->working_copy;
     });
     ASSERT_NE(changed, nullptr);
     const auto source = std::ranges::find(changed->revisions, changed->working_copy, &Revision::oid);
@@ -3156,7 +3443,7 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     });
     ASSERT_NE(child, nullptr);
     std::ofstream(repository.path / "tracked.txt") << "ONE\n2\n3\n4\n5\n6\n7\n8\n9\nTEN\n";
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Refresh{true, {}, true});
     const auto later = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > child->generation && !snapshot.status.empty();
     });
@@ -3184,6 +3471,44 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     EXPECT_FALSE(std::filesystem::exists(repository.path / "new.txt"));
 }
 
+TEST(RepositoryEngine, AdoptsExternalGitCommitBeforeEditingTheWorkingTree)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    std::ofstream(repository.path / "tracked.txt") << "committed in ggui\n";
+    engine.Enqueue(Commit{"ggui commit"});
+    const auto committed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.working_copy.empty()
+            && snapshot.working_copy == snapshot.head;
+    });
+    ASSERT_NE(committed, nullptr);
+
+    // A terminal commit moves HEAD without gg recording an operation.
+    std::ofstream(repository.path / "tracked.txt") << "committed by git\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " commit -qam external >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto adopted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > committed->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready
+            && snapshot.head != committed->head;
+    });
+    ASSERT_NE(adopted, nullptr);
+    EXPECT_EQ(adopted->working_copy, adopted->head);
+    EXPECT_TRUE(adopted->status.empty());
+    std::ifstream external(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(external), {}), "committed by git\n");
+
+    engine.Enqueue(Edit{committed->working_copy});
+    const TerminalEvent edited = WaitForTerminal(engine, "edit");
+    EXPECT_TRUE(edited.finished) << edited.message;
+    std::ifstream restored(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(restored), {}), "committed in ggui\n");
+}
+
 TEST(RepositoryEngine, RevertsSelectedHunksOntoWorkingCopy)
 {
     TemporaryRepository repository;
@@ -3207,9 +3532,10 @@ TEST(RepositoryEngine, RevertsSelectedHunksOntoWorkingCopy)
     });
     ASSERT_NE(selected, nullptr);
     std::ofstream(repository.path / "tracked.txt") << contents("ONE", "FIVE");
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Amend{"@", {}});
     const auto changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > selected->generation && !snapshot.status.empty();
+        return snapshot.generation > selected->generation
+            && snapshot.working_copy != selected->working_copy;
     });
     ASSERT_NE(changed, nullptr);
     const std::string source = changed->working_copy;
@@ -3259,6 +3585,8 @@ TEST(RepositoryEngine, DeletesWorkingCopyFiles)
     EXPECT_FALSE(WaitForTerminal(engine, "delete file").finished);
 
     engine.Enqueue(DeleteFile{"tracked.txt"});
+    ASSERT_TRUE(WaitForTerminal(engine, "delete file").finished);
+    engine.Enqueue(Refresh{true, {}, true});
     const auto deleted = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > opened->generation
             && std::ranges::any_of(snapshot.status, [](const StatusEntry& file) {
@@ -3275,8 +3603,9 @@ TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)
     std::ofstream(repository.path / "untracked.txt") << "new\n";
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    ASSERT_NE(
-        WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); }), nullptr);
+    ASSERT_NE(WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty();
+    }), nullptr);
 
     const std::string first_patch =
         "diff --git a/tracked.txt b/tracked.txt\n--- a/tracked.txt\n+++ b/tracked.txt\n@@ -1 +1 @@\n-base\n+patched\n";
@@ -3352,7 +3681,7 @@ TEST(RepositoryEngine, InitializesAndReportsFilesystemErrors)
 #endif
 }
 
-TEST(RepositoryEngine, UndoAndRedoSnapshotPendingWorkingCopyEdits)
+TEST(RepositoryEngine, UndoRefusesDirtyWorkingTreeWithoutLosingFiles)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
@@ -3361,26 +3690,16 @@ TEST(RepositoryEngine, UndoAndRedoSnapshotPendingWorkingCopyEdits)
     engine.Enqueue(NewChange{"working", {}, {}, {}, false});
     ASSERT_TRUE(WaitForTerminal(engine, "new").finished);
 
-    // Do not refresh: Undo must capture edits that the watcher has not seen.
     std::ofstream(repository.path / "tracked.txt") << "pending before undo\n";
     engine.Enqueue(Undo{});
-    ASSERT_TRUE(WaitForTerminal(engine, "undo").finished);
-    engine.Enqueue(Redo{});
-    ASSERT_TRUE(WaitForTerminal(engine, "redo").finished);
+    const TerminalEvent rejected = WaitForTerminal(engine, "undo");
+    EXPECT_FALSE(rejected.finished);
+    EXPECT_NE(rejected.message.find("uncommitted changes"), std::string::npos);
     const auto contents = [&] {
         std::ifstream file(repository.path / "tracked.txt");
         return std::string(std::istreambuf_iterator<char>(file), {});
     };
     EXPECT_EQ(contents(), "pending before undo\n");
-
-    engine.Enqueue(Undo{});
-    ASSERT_TRUE(WaitForTerminal(engine, "undo").finished);
-    std::ofstream(repository.path / "tracked.txt") << "pending before redo\n";
-    engine.Enqueue(Redo{});
-    const auto rejected = WaitForTerminal(engine, "redo");
-    EXPECT_FALSE(rejected.finished);
-    EXPECT_NE(rejected.message.find("nothing to redo"), std::string::npos);
-    EXPECT_EQ(contents(), "pending before redo\n");
 }
 
 TEST(RepositoryEngine, MetadataCanClearDescriptionAndPreserveItForAuthorOnlyEdits)
@@ -3422,12 +3741,18 @@ TEST(RepositoryEngine, RestoreWithoutSourceUsesSelectedChangesParent)
     engine.Enqueue(NewChange{"restore target", {}, {}, {}, false});
     ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); }), nullptr);
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
-    engine.Enqueue(Refresh{});
+    engine.Enqueue(Refresh{true, {}, true});
     const auto changed = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
         return std::ranges::any_of(snapshot.status, [](const StatusEntry& entry) { return entry.path == "tracked.txt"; });
     });
     ASSERT_NE(changed, nullptr);
-    engine.Enqueue(Restore{{}, changed->working_copy, {"tracked.txt"}});
+    // Restore rewrites commits, so the Working tree edit must be amended first.
+    engine.Enqueue(Amend{"@", {}});
+    const auto amended = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > changed->generation && snapshot.working_copy != changed->working_copy;
+    });
+    ASSERT_NE(amended, nullptr);
+    engine.Enqueue(Restore{{}, amended->working_copy, {"tracked.txt"}});
     ASSERT_TRUE(WaitForTerminal(engine, "restore").finished);
     std::ifstream restored(repository.path / "tracked.txt");
     EXPECT_EQ(std::string(std::istreambuf_iterator<char>(restored), {}), "base\n");
@@ -3449,7 +3774,8 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Metaedit{"missing", "description", "Author <author@example.test>"}, "metaedit"},
         {Edit{"missing"}, "edit"},
         {MoveChange{GG_MOVE_PREVIOUS, 1, true, true}, "move"},
-        {Commit{"commit", {"tracked.txt"}}, "commit"},
+        {Commit{"commit"}, "commit"},
+        {Amend{"missing", "amended"}, "amend"},
         {TrackPaths{{"untracked.txt"}, true}, "track paths"},
         {ChmodPaths{{"tracked.txt"}, true}, "chmod"},
         {UntrackPaths{{"tracked.txt"}}, "untrack paths"},

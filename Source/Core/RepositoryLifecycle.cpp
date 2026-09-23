@@ -76,6 +76,7 @@ void RepositoryEngine::Impl::Close()
     git.reset();
     cached_status.clear();
     worktree_ready = false;
+    worktree_status_stale = false;
     ++history_request_version;
     {
         std::lock_guard lock(history_mutex);
@@ -226,15 +227,6 @@ void RepositoryEngine::Impl::Attach(GitRepositoryPtr repository)
 
         auto initial = ReadSnapshot(false);
         Post(SnapshotReady{std::move(initial)});
-        {
-            std::lock_guard lock(queue_mutex);
-            const std::uint64_t task = ++diagnostic_task;
-            const auto queued = DiagnosticNow();
-            const std::uint64_t repository_generation = topology_generation.load();
-            commands.push_back({Refresh{true, {}}, task, repository_generation, queued});
-            TraceTaskQueued(task, "refresh", 0, repository_generation);
-        }
-        queue_cv.notify_one();
     }
     catch (...)
     {

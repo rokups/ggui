@@ -543,7 +543,7 @@ void Application::RenderWorkspaces()
             if (workspace.working_copy.empty())
                 ImGui::TextDisabled("No commit checked out");
             else
-                TextLabelledId(workspace.managed ? "Working copy: " : "Git HEAD: ",
+                TextLabelledId(workspace.managed ? "Active commit: " : "Git HEAD: ",
                     workspace.working_copy, RevisionPrefix(workspace.working_copy),
                     CommitIdColor(workspace.working_copy == _snapshot->working_copy));
             ImGui::EndTooltip();

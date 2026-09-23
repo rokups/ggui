@@ -20,9 +20,9 @@ struct InitRepository { std::string path; };
 struct CloneRepository { std::string url; std::string path; };
 struct Refresh
 {
-    bool snapshot_working_copy = true;
-    // Empty means a full reconciliation. Watcher-originated refreshes carry
-    // coalesced repository-relative paths.
+    bool inspect_working_tree = true;
+    // Empty means a complete status read. Watcher-originated refreshes carry
+    // coalesced repository-relative paths. Refreshes never create commits.
     std::vector<std::string> paths;
     // Explicit refreshes participate in the foreground operation lifecycle;
     // watcher refreshes remain unobtrusive background reconciliation.
@@ -98,7 +98,8 @@ struct MoveChange
     bool edit = false;
     bool conflict = false;
 };
-struct Commit { std::string message; std::vector<std::string> filesets; };
+struct Commit { std::string message; };
+struct Amend { std::string revision; std::string message; };
 struct Rebase { std::string source; std::string destination; bool entire_branch = false; };
 struct Duplicate { std::string revision; bool descendants = false; };
 struct Reorder
@@ -185,7 +186,7 @@ struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, RebuildHistory,
     ExpandHistoryRegion, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, LoadFileContent, LoadBlame, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
-    Describe, Metaedit, Edit, MoveChange, Commit, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
+    Describe, Metaedit, Edit, MoveChange, Commit, Amend, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, WorkspaceRemove, TrackPaths, UntrackPaths, ChmodPaths>;
 

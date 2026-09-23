@@ -9,6 +9,9 @@
 #endif
 
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <ranges>
@@ -21,6 +24,47 @@ namespace Ggui
 {
 using namespace RepositoryInternal;
 
+namespace
+{
+constexpr std::string_view WorkingTreeRevisionPrefix = "working-tree:";
+
+bool IsWorkingTreeRevision(std::string_view revision)
+{
+    return revision.starts_with(WorkingTreeRevisionPrefix);
+}
+
+std::filesystem::path WorktreePath(git_repository* repository, const std::string& path)
+{
+    const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+    if (relative.empty() || relative.is_absolute()
+        || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+        throw std::runtime_error("working-tree path must be repository-relative");
+    const char* workdir = git_repository_workdir(repository);
+    if (workdir == nullptr)
+        throw std::runtime_error("repository has no working directory");
+    return std::filesystem::path(workdir) / relative;
+}
+
+std::string ReadWorktreeFile(git_repository* repository, const std::string& path, bool& binary)
+{
+    const std::filesystem::path full_path = WorktreePath(repository, path);
+    std::error_code error;
+    if (std::filesystem::is_symlink(std::filesystem::symlink_status(full_path, error)))
+    {
+        const std::filesystem::path target = std::filesystem::read_symlink(full_path, error);
+        if (error)
+            throw std::runtime_error("could not read working-tree symlink");
+        return target.string();
+    }
+    std::ifstream input(full_path, std::ios::binary);
+    if (!input)
+        return {};
+    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    binary = contents.find('\0') != std::string::npos;
+    return contents;
+}
+} // namespace
+
 void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
 {
     LoadFile(command, git.get(), gg, inspector_request.load(), session.load());
@@ -29,6 +73,14 @@ void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
 void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command, git_repository* repository,
     gg_repository* gg_repository, std::uint64_t request_generation, std::uint64_t request_session)
 {
+    if (IsWorkingTreeRevision(command.revision))
+    {
+        bool binary = false;
+        std::string contents = ReadWorktreeFile(repository, command.path, binary);
+        if (request_session == session.load() && request_generation == inspector_request.load())
+            Post(FileContentReady{command.revision, command.path, std::move(contents)});
+        return;
+    }
     git_oid oid{};
     Check(gg_repository_resolve(&oid, gg_repository, command.revision.c_str()), "resolve file revision");
     git_commit* raw_commit = nullptr;
@@ -67,26 +119,55 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
     std::uint64_t request_session)
 {
     git_oid oid{};
-    Check(gg_repository_resolve(&oid, gg_repository, command.revision.c_str()), "resolve diff revision");
-    git_commit* raw_commit = nullptr;
-    Check(git_commit_lookup(&raw_commit, repository, &oid), "load diff revision");
-    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
-    git_tree* raw_new_tree = nullptr;
-    Check(git_commit_tree(&raw_new_tree, commit.get()), "load revision tree");
-    std::unique_ptr<git_tree, decltype(&git_tree_free)> new_tree(raw_new_tree, git_tree_free);
+    const bool working_tree = IsWorkingTreeRevision(command.revision);
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(nullptr, git_commit_free);
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> new_tree(nullptr, git_tree_free);
     git_tree* raw_old_tree = nullptr;
-    if (git_commit_parentcount(commit.get()) != 0)
+    if (working_tree)
     {
-        git_commit* raw_parent = nullptr;
-        Check(git_commit_parent(&raw_parent, commit.get(), 0), "load revision parent");
-        std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
-        Check(git_commit_tree(&raw_old_tree, parent.get()), "load parent tree");
+        if (gg_repository_working_copy(&oid, gg_repository) != GIT_OK)
+        {
+            git_error_clear();
+            git_reference* raw_head = nullptr;
+            if (git_repository_head(&raw_head, repository) == GIT_OK)
+            {
+                std::unique_ptr<git_reference, decltype(&git_reference_free)> head(raw_head, git_reference_free);
+                if (const git_oid* target = git_reference_target(head.get()); target != nullptr)
+                    oid = *target;
+            }
+            else
+                git_error_clear();
+        }
+        if (!git_oid_is_zero(&oid))
+        {
+            git_commit* raw_base = nullptr;
+            Check(git_commit_lookup(&raw_base, repository, &oid), "load working-tree base commit");
+            std::unique_ptr<git_commit, decltype(&git_commit_free)> base(raw_base, git_commit_free);
+            Check(git_commit_tree(&raw_old_tree, base.get()), "load working-tree base tree");
+        }
+    }
+    else
+    {
+        Check(gg_repository_resolve(&oid, gg_repository, command.revision.c_str()), "resolve diff revision");
+        git_commit* raw_commit = nullptr;
+        Check(git_commit_lookup(&raw_commit, repository, &oid), "load diff revision");
+        commit.reset(raw_commit);
+        git_tree* raw_new_tree = nullptr;
+        Check(git_commit_tree(&raw_new_tree, commit.get()), "load revision tree");
+        new_tree.reset(raw_new_tree);
+        if (git_commit_parentcount(commit.get()) != 0)
+        {
+            git_commit* raw_parent = nullptr;
+            Check(git_commit_parent(&raw_parent, commit.get(), 0), "load revision parent");
+            std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+            Check(git_commit_tree(&raw_old_tree, parent.get()), "load parent tree");
+        }
     }
     std::unique_ptr<git_tree, decltype(&git_tree_free)> old_tree(raw_old_tree, git_tree_free);
     std::unique_ptr<git_tree, decltype(&git_tree_free)> comparison_tree(nullptr, git_tree_free);
     git_tree* content_old_tree = old_tree.get();
     git_tree* content_new_tree = new_tree.get();
-    if (!command.compare_to.empty())
+    if (!working_tree && !command.compare_to.empty())
     {
         git_oid compare_oid{};
         Check(gg_repository_resolve(&compare_oid, gg_repository, command.compare_to.c_str()), "resolve comparison revision");
@@ -110,13 +191,27 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
         Check(git_diff_find_similar(value.get(), &find_options), "find renamed files");
         return value;
     };
-    std::unique_ptr<git_diff, decltype(&git_diff_free)> diff =
-        create_diff(content_old_tree, content_new_tree);
+    const auto create_worktree_diff = [&](const git_diff_options* options) {
+        git_diff_options worktree_options = GIT_DIFF_OPTIONS_INIT;
+        if (options != nullptr)
+            worktree_options = *options;
+        worktree_options.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS
+            | GIT_DIFF_SHOW_UNTRACKED_CONTENT | GIT_DIFF_INCLUDE_TYPECHANGE;
+        git_diff* raw_diff = nullptr;
+        Check(git_diff_tree_to_workdir(&raw_diff, repository, old_tree.get(), &worktree_options),
+            "create working-tree diff");
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> value(raw_diff, git_diff_free);
+        Check(git_diff_find_similar(value.get(), &find_options), "find working-tree renames");
+        return value;
+    };
+    std::unique_ptr<git_diff, decltype(&git_diff_free)> diff = working_tree
+        ? create_worktree_diff(nullptr)
+        : create_diff(content_old_tree, content_new_tree);
     std::unique_ptr<git_diff, decltype(&git_diff_free)> status_diff(nullptr, git_diff_free);
     git_diff* files_diff = diff.get();
     if (command.file_comparison)
     {
-        status_diff = create_diff(old_tree.get(), new_tree.get());
+        status_diff = working_tree ? create_worktree_diff(nullptr) : create_diff(old_tree.get(), new_tree.get());
         files_diff = status_diff.get();
     }
     DiffResult result{snapshot_generation, command.revision, command.path, {}, {}, false, {}, command.compare_to,
@@ -129,7 +224,7 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
         const char* new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
         result.files.push_back({old_path, new_path, delta->status, false});
     }
-    if (command.compare_to.empty() && !command.file_comparison)
+    if (!working_tree && command.compare_to.empty() && !command.file_comparison)
     {
         Conflicts conflicts;
         Check(gg_repository_conflicts(&conflicts.value, gg_repository, &oid), "load revision conflicts");
@@ -148,36 +243,6 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
                 result.files.push_back({std::string(path), std::string(path), GIT_DELTA_CONFLICTED, true});
             if (result.path == path)
                 result.selected_status = GIT_DELTA_CONFLICTED;
-        }
-    }
-    git_oid working_copy{};
-    if (command.compare_to.empty() && !command.file_comparison
-        && gg_repository_working_copy(&working_copy, gg_repository) == GIT_OK
-        && git_oid_equal(&oid, &working_copy) != 0)
-    {
-        gg_status_options options = GG_STATUS_OPTIONS_INIT;
-        Status status;
-        Check(gg_repository_status(&status.value, gg_repository, &options), "load working-copy status");
-        for (size_t index = 0; index < status.value.entry_count; ++index)
-        {
-            const gg_status_entry& entry = status.value.entries[index];
-            const std::string_view path = entry.new_path == nullptr ? "" : entry.new_path;
-            if (path.empty())
-                continue;
-            const auto file = std::ranges::find_if(result.files, [&](const StatusEntry& value) {
-                return value.path == path || value.old_path == path;
-            });
-            if (file != result.files.end())
-            {
-                file->conflicted = entry.conflicted != 0;
-                continue;
-            }
-            if (entry.status != GIT_DELTA_UNTRACKED && entry.conflicted == 0)
-                continue;
-            result.files.push_back({entry.old_path == nullptr ? "" : entry.old_path,
-                std::string(path), entry.status, entry.conflicted != 0});
-            if (result.path == path)
-                result.selected_status = entry.status;
         }
     }
     if (command.file_comparison)
@@ -213,7 +278,10 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
             ? result.path.c_str()
             : selected_delta->new_file.path;
         result.before = BlobText(repository, content_old_tree, old_path, result.binary);
-        result.after = BlobText(repository, content_new_tree, new_path, result.binary);
+        if (working_tree)
+            result.after = ReadWorktreeFile(repository, new_path, result.binary);
+        else
+            result.after = BlobText(repository, content_new_tree, new_path, result.binary);
         if (selected_delta != nullptr)
         {
             result.selected_status = selected_delta->status;
@@ -247,10 +315,15 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
             else if (command.options.whitespace_mode == DiffWhitespaceMode::IgnoreAllWhitespace)
                 options.flags |= GIT_DIFF_IGNORE_WHITESPACE;
             git_diff* raw_filtered = nullptr;
-            Check(git_diff_tree_to_tree(&raw_filtered, repository, content_old_tree, content_new_tree, &options),
-                "create filtered diff");
-            filtered_diff.reset(raw_filtered);
-            Check(git_diff_find_similar(filtered_diff.get(), &find_options), "find filtered renamed files");
+            if (working_tree)
+                filtered_diff = create_worktree_diff(&options);
+            else
+            {
+                Check(git_diff_tree_to_tree(&raw_filtered, repository, content_old_tree, content_new_tree, &options),
+                    "create filtered diff");
+                filtered_diff.reset(raw_filtered);
+                Check(git_diff_find_similar(filtered_diff.get(), &find_options), "find filtered renamed files");
+            }
             display_diff = filtered_diff.get();
         }
 

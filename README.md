@@ -108,10 +108,16 @@ failure paths; compiler-attributed brace-only lines are ignored.
 Open, initialize, or clone a repository, then use the graph, changes, diff,
 operation log, bookmarks, tags, workspaces, and sparse-checkout panels. The
 Change menu exposes gg's local change operations. A newly opened plain Git
-repository needs **New** before it has a gg working-copy change.
+repository needs **New** before it has an active gg change.
+
+History includes a virtual **Working tree** row for filesystem changes relative
+to the active commit (`@`). Select that row and choose **Commit** to commit the
+whole working tree; select the active commit and choose **Amend** to update it
+with the whole working tree. Status is inspected when requested, including on
+**Refresh** (F5); filesystem changes are not adopted automatically.
 
 The **Compare with @** checkbox in Changes compares the selected change's
-entire tree with the current working-copy snapshot (`@`); the matching checkbox
+entire tree with the active commit (`@`); the matching checkbox
 in Diff compares only the selected file while leaving the normal changed-file
 list intact. Comparisons follow rewritten changes and the latest `@`, keep the
 preferred file selected when possible, and support the same patch export and
@@ -119,8 +125,8 @@ external-diff actions as a normal change diff. File mutations and patch
 application stay disabled until comparison mode is exited. The Diff context
 selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
-the current working-copy change while preserving later edits where the patch
-applies. Working-copy file menus can also delete the file from disk.
+the active gg change while preserving later edits where the patch
+applies. Working-tree file menus can also delete the file from disk.
 Changed-file and diff context menus can open the line-level **Blame** panel;
 the header identifies the exact file version (commit, author, date, and
 summary). The source is shown in a conventional three-column blame table:
@@ -146,7 +152,7 @@ the containing hunk to an adjacent parent or child change; unavailable targets
 and unsupported diff contexts remain disabled. Unified and side-by-side views
 both support character-level text selection and expose **Copy** in the diff
 context menu. A hunk can be reverted from any selected
-change onto `@`; files in the working-copy change additionally offer line-level
+change onto `@`; files in the active commit additionally offer line-level
 revert.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
@@ -169,7 +175,7 @@ and conflicts; deleting the worktree directory itself is not undoable.
 The Bookmarks panel controls which branches are visible in History: click to
 add or remove a branch, or Ctrl-click to show only that branch. At least one
 bookmark stays selected whenever bookmarks exist.
-Local unnamed heads are always included, so switching the working-copy change
+Local unnamed heads are always included, so switching the active gg change
 does not hide another unbookmarked line of work.
 No tags are selected by default. Select tags in the Tags panel to ensure their
 tagged history is found and revealed, or Ctrl-click to surface only one.
@@ -201,9 +207,9 @@ branch onto the fetched remote tip. Reconciliation remains undoable and any
 logical conflicts use the existing conflict workflow before the next push.
 
 Repository and libgit2 handles stay on one worker thread. The UI exchanges
-typed commands and immutable snapshots with that worker. External Git and
-working-tree changes are adopted automatically from native filesystem
-notifications. Clone credentials are requested on demand and are never persisted.
+typed commands and immutable snapshots with that worker. Refresh explicitly
+inspects Git status and the working tree. Clone credentials are requested on
+demand and are never persisted.
 
 Common shortcuts: **Ctrl+O** open repository, **Ctrl+W** close repository,
 **Ctrl+N** new change, **Ctrl+Z/Ctrl+Y** undo/redo, **F5** refresh,

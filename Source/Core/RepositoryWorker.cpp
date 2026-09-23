@@ -304,7 +304,7 @@ void RepositoryEngine::Impl::Execute(
     if (refresh != nullptr && !refresh->foreground)
     {
         background_activity.emplace(*this,
-            refresh->snapshot_working_copy ? "Scanning working copy" : "Refreshing repository metadata");
+            refresh->inspect_working_tree ? "Checking working tree" : "Refreshing repository metadata");
         background_scheduling.emplace();
     }
     if (!std::holds_alternative<LoadDiff>(command) && !std::holds_alternative<LoadFileContent>(command)
@@ -357,28 +357,27 @@ void RepositoryEngine::Impl::Execute(
             ClonePath(*value);
         else if (const auto* value = std::get_if<Refresh>(&command))
         {
-            const bool initial_reconciliation = value->snapshot_working_copy && !worktree_ready;
-            if (value->snapshot_working_copy)
-                Sync(false, value->paths);
-            // A watcher refresh already tells us which files changed. Reuse
-            // the cached status for metadata-only refreshes and update only
-            // those paths for incremental worktree refreshes. An empty path
-            // list deliberately retains the full scan for F5 and directory
-            // events that the watcher could not narrow down.
-            PublishSnapshot(value->snapshot_working_copy, false, value->paths);
-            if (initial_reconciliation)
+            // Git metadata adoption does not inspect the filesystem. An
+            // explicit refresh may build a complete status baseline; watcher
+            // events update known paths and mark broad/unknown changes stale.
+            if (!value->inspect_working_tree)
             {
-                // Drain delayed notifications caused by our own initial index,
-                // object, and gg-ref writes. The watcher was intentionally
-                // armed first, so real worktree events remain represented by
-                // the just-completed reconciliation.
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                const RepositoryWatcher::Changes replay = watcher.ConsumeChanges();
-                if (replay.worktree && Sync(false, replay.full_scan ? std::vector<std::string>{} : replay.paths))
-                {
-                    PublishSnapshot(true, false, replay.full_scan ? std::vector<std::string>{}
-                                                                    : replay.paths);
-                }
+                Sync(false);
+                PublishSnapshot(false, false);
+            }
+            else if (value->foreground)
+            {
+                // Follow Git commands run outside gg before reading status.
+                Sync();
+                PublishSnapshot(true, false, value->paths);
+            }
+            else if (!value->paths.empty() && worktree_ready && !worktree_status_stale)
+                PublishSnapshot(true, false, value->paths);
+            else
+            {
+                if (value->paths.empty())
+                    MarkWorktreeStatusStale();
+                PublishSnapshot(false, false);
             }
         }
         else if (std::holds_alternative<RebuildHistory>(command)

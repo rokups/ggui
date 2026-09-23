@@ -100,13 +100,13 @@ bool RepositoryEngine::Enqueue(Command command)
         {
             if (auto* queued = std::get_if<Refresh>(&_impl->commands.back().command))
             {
-                const bool queued_full = queued->snapshot_working_copy && queued->paths.empty();
-                const bool incoming_full = refresh->snapshot_working_copy && refresh->paths.empty();
-                queued->snapshot_working_copy = queued->snapshot_working_copy || refresh->snapshot_working_copy;
+                const bool queued_full = queued->inspect_working_tree && queued->paths.empty();
+                const bool incoming_full = refresh->inspect_working_tree && refresh->paths.empty();
+                queued->inspect_working_tree = queued->inspect_working_tree || refresh->inspect_working_tree;
                 queued->foreground = queued->foreground || refresh->foreground;
                 if (queued_full || incoming_full)
                     queued->paths.clear();
-                else if (refresh->snapshot_working_copy)
+                else if (refresh->inspect_working_tree)
                 {
                     for (const std::string& path : refresh->paths)
                         if (std::ranges::find(queued->paths, path) == queued->paths.end())

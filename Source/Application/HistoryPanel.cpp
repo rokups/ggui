@@ -172,6 +172,10 @@ void Application::RenderHistory()
     const bool usable = _history_view != nullptr
         && _history_view->items.size() == _graph_rows.size()
         && _history_view->items.size() == _visible_revisions.size();
+    const bool working_tree_selected = usable && std::ranges::any_of(_history_view->items,
+        [this](const HistoryItem& item) {
+            return item.kind == HistoryItemKind::WorkingTree && item.id == _selected_revision;
+        });
     if (!_reveal_revision.empty() && usable)
     {
         const auto found = std::ranges::find_if(_history_view->items, [this](const HistoryItem& item) {
@@ -190,7 +194,8 @@ void Application::RenderHistory()
     const ImGuiIO& io = ImGui::GetIO();
     const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     const bool action_hotkeys = usable && focused && _dialog == Dialog::None
-        && _active_operation.empty() && !_selected_revision.empty() && !io.WantTextInput
+        && _active_operation.empty() && !_selected_revision.empty() && !working_tree_selected
+        && !io.WantTextInput
         && !io.KeyCtrl && !io.KeySuper;
     if (action_hotkeys)
     {
@@ -214,14 +219,14 @@ void Application::RenderHistory()
         const int direction = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : -1;
         int current = -1;
         for (int index = 0; index < static_cast<int>(_history_view->items.size()); ++index)
-            if (_history_view->items[static_cast<std::size_t>(index)].kind == HistoryItemKind::Commit
-                && _history_view->items[static_cast<std::size_t>(index)].revision.oid == _selected_revision)
+            if (_history_view->items[static_cast<std::size_t>(index)].kind != HistoryItemKind::CollapsedRegion
+                && _history_view->items[static_cast<std::size_t>(index)].id == _selected_revision)
                 current = index;
         for (int index = current + direction; index >= 0
             && index < static_cast<int>(_history_view->items.size()); index += direction)
-            if (_history_view->items[static_cast<std::size_t>(index)].kind == HistoryItemKind::Commit)
+            if (_history_view->items[static_cast<std::size_t>(index)].kind != HistoryItemKind::CollapsedRegion)
             {
-                SelectRevision(_history_view->items[static_cast<std::size_t>(index)].revision.oid);
+                SelectRevision(_history_view->items[static_cast<std::size_t>(index)].id);
                 ImGui::SetScrollY(std::max(0.0f, index * kRowHeight - ImGui::GetContentRegionAvail().y * 0.5f));
                 break;
             }
@@ -255,10 +260,11 @@ void Application::RenderHistory()
             ImGui::PushID(item.id.c_str());
             const float width = std::max(1.0f, ImGui::GetContentRegionAvail().x);
             const bool region = item.kind == HistoryItemKind::CollapsedRegion;
+            const bool working_tree = item.kind == HistoryItemKind::WorkingTree;
             if (region)
                 ImGui::Dummy(ImVec2(width, kRowHeight));
             else
-                ImGui::InvisibleButton("row", ImVec2(width, kRowHeight),
+                ImGui::InvisibleButton(working_tree ? "working tree" : "row", ImVec2(width, kRowHeight),
                     ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
             const ImVec2 minimum = ImGui::GetItemRectMin();
             const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -271,7 +277,7 @@ void Application::RenderHistory()
             const bool clicked = !region && ImGui::IsItemClicked();
             const bool region_clicked = region && hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
             const bool selected = !region
-                && std::ranges::find(_selected_revisions, item.revision.oid) != _selected_revisions.end();
+                && std::ranges::find(_selected_revisions, item.id) != _selected_revisions.end();
             const ImU32 background = selected ? kRowSelected : hovered ? kRowHover : kRowBackground;
             draw->AddRectFilled(minimum, maximum, background, 5.0f);
             if (item.search_match) draw->AddRect(minimum, maximum, IM_COL32(220, 170, 70, 255), 5.0f, 0, 2.0f);
@@ -395,6 +401,26 @@ void Application::RenderHistory()
             }
 
             const float content_x = row_content_x;
+            if (working_tree)
+            {
+                if (clicked) SelectRevision(item.id);
+                const float dot_radius = std::min(kDotRadius, lane_width * 0.35f);
+                draw->AddCircle({dot_x, center}, dot_radius,
+                    ImGui::GetColorU32(ImGuiCol_Text), 0, 2.0f);
+                const ImVec2 label_position{content_x, center - ImGui::GetTextLineHeight() * 0.5f};
+                // RenderText draws like AddText and also reaches ImGui's text log.
+                ImGui::RenderText(label_position, "Working tree");
+                if (hovered)
+                {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(item.parents.empty()
+                        ? "Working tree changes before the first commit"
+                        : "Working tree changes relative to @");
+                    ImGui::EndTooltip();
+                }
+                ImGui::PopID();
+                continue;
+            }
             if (region)
             {
                 draw->AddCircleFilled({dot_x, center}, std::min(3.0f, lane_width * 0.3f), kTextMuted);

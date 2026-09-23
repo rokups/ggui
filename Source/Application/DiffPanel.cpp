@@ -197,13 +197,14 @@ void Application::RenderDiff()
             ImGui::SameLine();
         }
         bool comparing = !_compare_to.empty() && _file_comparison;
-        ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
-            || (_compare_to.empty() && _selected_revision == _snapshot->working_copy));
+        ImGui::BeginDisabled(_selected_revision.empty() || IsWorkingTreeRevision(_selected_revision)
+            || CurrentCommit(*_snapshot).empty()
+            || (_compare_to.empty() && _selected_revision == CurrentCommit(*_snapshot)));
         if (ImGui::Checkbox("Compare with @", &comparing))
             ToggleComparison(true);
         ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Compare only the selected file with the working copy.");
+            ImGui::SetTooltip("Compare only the selected file with the active commit (@).");
         if (!_diff_loading && comparing && _diff.selected_status == GIT_DELTA_UNMODIFIED)
         {
             ImGui::SameLine();
@@ -283,7 +284,7 @@ void Application::RenderDiff()
         _open_save_patch = true;
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(_snapshot == nullptr);
+    ImGui::BeginDisabled(_snapshot == nullptr || IsWorkingTreeRevision(_diff.revision));
     if (ActionButton(ICON_MS_OPEN_IN_NEW, "External Diff"))
         OpenExternalDiff(_diff.path, _compare_to);
     ImGui::EndDisabled();
@@ -424,12 +425,18 @@ void Application::RenderDiff()
     static std::string context_path;
 
     const auto [parent, child] = AdjacentRevisions(_diff.revision);
+    const bool working_tree_diff = _snapshot != nullptr && IsWorkingTreeRevision(_diff.revision);
+    const bool active_commit_diff = _snapshot != nullptr && _diff.revision == CurrentCommit(*_snapshot);
+    const std::string move_parent = working_tree_diff && _snapshot != nullptr
+        ? CurrentCommit(*_snapshot) : parent;
+    const std::string move_child = active_commit_diff
+        ? "working-tree:" + std::to_string(_snapshot->repository_generation) : child;
     const auto source_revision = std::ranges::find(_history_revisions, _diff.revision, &Revision::oid);
     const auto child_revision = std::ranges::find(_history_revisions, child, &Revision::oid);
-    const bool linear_source = source_revision != _history_revisions.end()
-        && source_revision->parents.size() == 1;
-    const bool linear_child = child_revision != _history_revisions.end()
-        && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision;
+    const bool linear_source = working_tree_diff || active_commit_diff
+        || (source_revision != _history_revisions.end() && source_revision->parents.size() == 1);
+    const bool linear_child = active_commit_diff || (child_revision != _history_revisions.end()
+        && child_revision->parents.size() == 1 && child_revision->parents.front() == _diff.revision);
     const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
         return file.path == _diff.path && file.conflicted;
     });
@@ -442,7 +449,8 @@ void Application::RenderDiff()
         || (!plain && !diff.HasMappedLineNumbers());
 
     diff.SetChangeControlsCallback(
-        [this, parent, child, linear_source, linear_child, unsupported_diff](int first, int end,
+        [this, move_parent, move_child, working_tree_diff, active_commit_diff,
+            linear_source, linear_child, unsupported_diff](int first, int end,
             const ImVec2& control_size, float right_control_x) {
         const bool mapped = diff.HasMappedLineNumbers() && first >= 0 && first < end
             && end <= static_cast<int>(viewer_lines.size())
@@ -488,11 +496,13 @@ void Application::RenderDiff()
         };
         // Narrow overlays sit inside the middle gutter without changing either pane's width.
         const ImVec2 position = ImGui::GetCursorScreenPos();
-        move_change("Move change to parent", ImGuiDir_Right, parent, !parent.empty(),
-            "Move this change to the parent revision.");
+        move_change("Move change to parent", ImGuiDir_Right, move_parent, !move_parent.empty(),
+            working_tree_diff ? "Move this change to the active commit."
+                              : "Move this change to the parent revision.");
         ImGui::SetCursorScreenPos(ImVec2(right_control_x, position.y));
-        move_change("Move change to child", ImGuiDir_Left, child, linear_child,
-            "Move this change to the child revision.");
+        move_change("Move change to child", ImGuiDir_Left, move_child, linear_child,
+            active_commit_diff ? "Move this change to the Working tree."
+                               : "Move this change to the child revision.");
     });
 
     // Diff line and hunk context menu
@@ -584,7 +594,7 @@ void Application::RenderDiff()
         const bool blame_available = !stale && !unsupported && _diff.selected_status != GIT_DELTA_ADDED
             && _diff.selected_status != GIT_DELTA_DELETED
             && _diff.selected_status != GIT_DELTA_UNTRACKED
-            && !_diff.revision.empty() && !_diff.path.empty();
+            && !_diff.revision.empty() && !IsWorkingTreeRevision(_diff.revision) && !_diff.path.empty();
         ImGui::BeginDisabled(!blame_available);
         if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))
             RequestBlame(_diff.revision, _diff.path);
@@ -622,31 +632,38 @@ void Application::RenderDiff()
             ImGui::EndDisabled();
         };
         const auto& move_lines = context_has_selection ? context_region : context_line;
-        move(ICON_MS_ARROW_UPWARD, context_has_selection ? "Move lines to child" : "Move line to child",
-            child, move_lines, linear_child);
-        move(ICON_MS_ARROW_DOWNWARD, context_has_selection ? "Move lines to parent" : "Move line to parent",
-            parent, move_lines, !parent.empty());
+        move(ICON_MS_ARROW_UPWARD, active_commit_diff ? (context_has_selection
+                ? "Move lines to Working tree" : "Move line to Working tree")
+            : (context_has_selection ? "Move lines to child" : "Move line to child"),
+            move_child, move_lines, linear_child);
+        move(ICON_MS_ARROW_DOWNWARD, working_tree_diff ? (context_has_selection
+                ? "Move lines to active commit" : "Move line to active commit")
+            : (context_has_selection ? "Move lines to parent" : "Move line to parent"),
+            move_parent, move_lines, !move_parent.empty());
         if (!context_has_selection)
         {
             ImGui::Separator();
-            move(ICON_MS_ARROW_UPWARD, "Move hunk to child", child, context_region, linear_child);
-            move(ICON_MS_ARROW_DOWNWARD, "Move hunk to parent", parent, context_region, !parent.empty());
+            move(ICON_MS_ARROW_UPWARD, active_commit_diff ? "Move hunk to Working tree" : "Move hunk to child",
+                move_child, context_region, linear_child);
+            move(ICON_MS_ARROW_DOWNWARD, working_tree_diff ? "Move hunk to active commit" : "Move hunk to parent",
+                move_parent, context_region, !move_parent.empty());
         }
         if (!stale && _snapshot != nullptr)
         {
             ImGui::Separator();
-            if (_diff.revision == _snapshot->working_copy)
+            if (_diff.revision == CurrentCommit(*_snapshot))
             {
                 ImGui::BeginDisabled(unsupported || context_line.empty());
                 if (ActionMenuItem(ICON_MS_RESTORE, "Revert line"))
                     QueueCommands({RevertDiffLines{_diff.revision, _diff.path, context_line}}, {_diff.revision},
-                        "Reverting these lines will rewrite the locked working-copy commit.");
+                        "Reverting these lines will rewrite the locked active commit.");
                 ImGui::EndDisabled();
             }
-            ImGui::BeginDisabled(unsupported || context_hunk.empty() || _snapshot->working_copy.empty());
+            ImGui::BeginDisabled(unsupported || context_hunk.empty() || CurrentCommit(*_snapshot).empty()
+                || IsWorkingTreeRevision(_diff.revision));
             if (ActionMenuItem(ICON_MS_RESTORE, "Revert hunk"))
                 QueueCommands({RevertFile{_diff.revision, _diff.path, _diff.path, context_hunk}}, {"@"},
-                    "Reverting this hunk will rewrite the locked working-copy commit.");
+                    "Reverting this hunk will rewrite the locked active commit.");
             ImGui::EndDisabled();
         }
         ImGui::EndPopup();

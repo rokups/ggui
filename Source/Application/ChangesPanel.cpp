@@ -27,13 +27,14 @@ void Application::RenderChanges()
     const bool actions_locked = !_active_operation.empty();
     const bool comparison_active = !_compare_to.empty();
     bool comparing = comparison_active && !_file_comparison;
-    ImGui::BeginDisabled(_selected_revision.empty() || _snapshot->working_copy.empty()
-        || (!comparison_active && _selected_revision == _snapshot->working_copy));
+    ImGui::BeginDisabled(_selected_revision.empty() || IsWorkingTreeRevision(_selected_revision)
+        || CurrentCommit(*_snapshot).empty()
+        || (!comparison_active && _selected_revision == CurrentCommit(*_snapshot)));
     if (ImGui::Checkbox("Compare with @", &comparing))
         ToggleComparison(false);
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Compare the entire selected change with the working copy.");
+        ImGui::SetTooltip("Compare the entire selected change with the active commit (@).");
     if (comparing)
     {
         ImGui::SameLine();
@@ -41,8 +42,15 @@ void Application::RenderChanges()
     }
     ImGui::SameLine();
     const auto [parent, child] = AdjacentRevisions(_diff.revision);
+    const bool working_tree_diff = IsWorkingTreeRevision(_diff.revision);
+    const bool active_commit_diff = _diff.revision == CurrentCommit(*_snapshot);
+    const std::string move_parent = working_tree_diff ? CurrentCommit(*_snapshot) : parent;
+    const std::string move_child = active_commit_diff
+        ? "working-tree:" + std::to_string(_snapshot->repository_generation) : child;
     if (_diff_loading && !_pending_revision.empty())
         ImGui::TextDisabled("Loading selected change...");
+    else if (IsWorkingTreeRevision(_selected_revision) && !working_tree_diff && !_diff_loading)
+        ImGui::TextDisabled("Working tree not scanned. Refresh (F5) to load its changes.");
     else if (_diff.files.empty())
         ImGui::TextDisabled(comparing ? "The comparison has no differences." : "Selected change is empty.");
     else
@@ -117,7 +125,8 @@ void Application::RenderChanges()
         }
 
         // File drag source
-        if (!actions_locked && !comparison_active && ImGui::BeginDragDropSource())
+        if (!actions_locked && !comparison_active && !IsWorkingTreeRevision(_diff.revision)
+            && ImGui::BeginDragDropSource())
         {
             std::string payload = _diff.revision;
             payload.push_back('\0');
@@ -164,7 +173,7 @@ void Application::RenderChanges()
             {
                 if (ActionMenuItem(ICON_MS_MERGE, "Resolve with merge tool"))
                     OpenConflictInMergeTool(file.path);
-                ImGui::BeginDisabled(_selected_revision != _snapshot->working_copy);
+                ImGui::BeginDisabled(_selected_revision != CurrentCommit(*_snapshot));
                 if (ActionMenuItem(ICON_MS_CHECK, "Mark current file resolved"))
                     MarkConflictResolved(file.path);
                 ImGui::EndDisabled();
@@ -184,7 +193,8 @@ void Application::RenderChanges()
             // deleted, and untracked entries only exist on one side of the
             // comparison and would otherwise produce a noisy repository-read
             // error from libgit2.
-            const bool blame_available = !_diff.revision.empty() && !file.path.empty()
+            const bool blame_available = !_diff.revision.empty() && !IsWorkingTreeRevision(_diff.revision)
+                && !file.path.empty()
                 && file.status != GIT_DELTA_ADDED && file.status != GIT_DELTA_DELETED
                 && file.status != GIT_DELTA_UNTRACKED && file.status != GIT_DELTA_TYPECHANGE
                 && !file.conflicted;
@@ -193,11 +203,11 @@ void Application::RenderChanges()
                 RequestBlame(_diff.revision, file.path);
             ImGui::EndDisabled();
             const std::string external_diff_label = IconLabel(ICON_MS_OPEN_IN_NEW, "External diff");
-            if (ImGui::BeginMenu(external_diff_label.c_str()))
+            if (ImGui::BeginMenu(external_diff_label.c_str(), !IsWorkingTreeRevision(_diff.revision)))
             {
-                ImGui::BeginDisabled(_diff.revision == _snapshot->working_copy || _snapshot->working_copy.empty());
+                ImGui::BeginDisabled(_diff.revision == CurrentCommit(*_snapshot) || CurrentCommit(*_snapshot).empty());
                 if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "vs @"))
-                    OpenExternalDiff(file.path, _snapshot->working_copy);
+                    OpenExternalDiff(file.path, CurrentCommit(*_snapshot));
                 ImGui::EndDisabled();
                 ImGui::BeginDisabled(parent.empty());
                 if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "vs parent"))
@@ -207,42 +217,39 @@ void Application::RenderChanges()
             }
             ImGui::Separator();
             ImGui::BeginDisabled(
-                actions_locked || comparison_active || _diff_loading || _snapshot->working_copy.empty());
+                actions_locked || comparison_active || _diff_loading || CurrentCommit(*_snapshot).empty()
+                    || IsWorkingTreeRevision(_diff.revision));
             if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
                 QueueCommands({RevertFile{_diff.revision, file.old_path, file.path, {}}}, {"@"},
-                    "Reverting this file will rewrite the locked working-copy commit.");
+                    "Reverting this file will rewrite the locked active commit.");
             ImGui::EndDisabled();
             ImGui::Separator();
-            ImGui::BeginDisabled(actions_locked || comparison_active || child.empty());
-            if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move to child"))
-                QueueCommands({MoveFiles{_diff.revision, child, {file.path}}}, {_diff.revision, child},
+            ImGui::BeginDisabled(actions_locked || comparison_active || move_child.empty());
+            if (ActionMenuItem(ICON_MS_ARROW_UPWARD,
+                    active_commit_diff ? "Move to Working tree" : "Move to child"))
+                QueueCommands({MoveFiles{_diff.revision, move_child, {file.path}}}, {_diff.revision, move_child},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
-            ImGui::BeginDisabled(actions_locked || comparison_active || parent.empty());
-            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move to parent"))
-                QueueCommands({MoveFiles{_diff.revision, parent, {file.path}}}, {_diff.revision, parent},
+            ImGui::BeginDisabled(actions_locked || comparison_active || move_parent.empty());
+            if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD,
+                    working_tree_diff ? "Move to active commit" : "Move to parent"))
+                QueueCommands({MoveFiles{_diff.revision, move_parent, {file.path}}}, {_diff.revision, move_parent},
                     "Moving this file will rewrite a locked source or destination commit.");
             ImGui::EndDisabled();
-            if (_selected_revision == _snapshot->working_copy)
+            if (_selected_revision == CurrentCommit(*_snapshot) || IsWorkingTreeRevision(_selected_revision))
             {
                 ImGui::Separator();
                 ImGui::BeginDisabled(actions_locked || comparison_active);
-                if (ActionMenuItem(ICON_MS_COMMIT, "Commit only this file"))
-                {
-                    _selected_file = file.path;
-                    OpenDialog(Dialog::Commit);
-                    _input_filesets = file.path;
-                }
                 if (ActionMenuItem(ICON_MS_ADD, "Track"))
                     QueueCommands({TrackPaths{{file.path}}}, {"@"},
-                        "Tracking this file will rewrite the locked working-copy commit.");
+                        "Tracking this file will rewrite the locked active commit.");
                 if (ActionMenuItem(ICON_MS_DELETE, "Untrack"))
                     QueueCommands({UntrackPaths{{file.path}}}, {"@"},
-                        "Untracking this file will rewrite the locked working-copy commit.");
+                        "Untracking this file will rewrite the locked active commit.");
                 ImGui::Separator();
                 if (ActionMenuItem(ICON_MS_DELETE, "Delete file", nullptr, file_exists))
                     QueueCommands({DeleteFile{file.path}}, {"@"},
-                        "Deleting this file will rewrite the locked working-copy commit.");
+                        "Deleting this file will rewrite the locked active commit.");
                 ImGui::EndDisabled();
             }
             ImGui::EndPopup();

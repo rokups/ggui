@@ -243,6 +243,7 @@ struct RepositoryEngine::Impl
     std::shared_ptr<RepoSnapshot> latest_snapshot;
     std::vector<StatusEntry> cached_status;
     bool worktree_ready = false;
+    bool worktree_status_stale = false;
 
     struct BackgroundActivityGuard
     {
@@ -275,11 +276,14 @@ struct RepositoryEngine::Impl
     void FetchRemote(const Fetch& command);
     void PushBookmark(const Push& command);
     void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish);
-    bool Sync(bool report_progress = true, const std::vector<std::string>& paths = {});
-    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = true, bool history_changed = false,
+    void Sync(bool report_progress = true);
+    std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = false, bool history_changed = false,
         const std::vector<std::string>& status_paths = {});
-    void PublishSnapshot(bool include_worktree = true, bool history_changed = false,
+    void PublishSnapshot(bool include_worktree = false, bool history_changed = false,
         const std::vector<std::string>& status_paths = {});
+    void InvalidateWorktreeStatus();
+    void MarkWorktreeStatusStale();
+    void PublishWorktreeChanges(const std::vector<std::string>& paths, bool history_changed = true);
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);
     void LoadPatch(const LoadDiff& command, git_repository* repository, gg_repository* gg_repository,
@@ -292,16 +296,27 @@ struct RepositoryEngine::Impl
     void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);
     void DeleteWorkingFile(const DeleteFile& command);
+    void MoveWorkingTreeFile(const MoveFiles& command);
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false);
-    template <class Function> void Mutate(std::string_view action, Function function, bool snapshot_after = false)
+    template <class Function> void Mutate(std::string_view action, Function function)
     {
         Sync();
         RepositoryInternal::Mutation mutation;
         gg_operation_options options = OperationOptions();
         RepositoryInternal::Check(function(&mutation.value, &options), action);
-        if (snapshot_after)
-            Sync();
-        PublishSnapshot(true, true);
+        InvalidateWorktreeStatus();
+        PublishSnapshot(false, true);
+    }
+    template <class Function> void CaptureWorktree(std::string_view action, Function function)
+    {
+        Sync();
+        RepositoryInternal::Mutation mutation;
+        gg_operation_options options = OperationOptions();
+        RepositoryInternal::Check(function(&mutation.value, &options), action);
+        cached_status.clear();
+        worktree_ready = true;
+        worktree_status_stale = false;
+        PublishSnapshot(false, true);
     }
     void DispatchMutation(const Command& command);
     void Execute(const Command& command, std::uint64_t task,

@@ -138,12 +138,20 @@ bool OpenNavigationRepository(ImGuiTestContext* context, const UiRepository& rep
 {
     Application& application = Application::Instance();
     application.OpenTestRepository(repository.Path().string());
+    bool refreshed = false;
     return WaitNavigation(context, [&] {
         const auto snapshot = application.SnapshotForTest();
-        return snapshot != nullptr && std::filesystem::weakly_canonical(snapshot->root)
+        const bool opened = snapshot != nullptr && std::filesystem::weakly_canonical(snapshot->root)
                 == std::filesystem::weakly_canonical(repository.Path())
-            && snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready
-            && application.ActiveOperationForTest().empty()
+            && application.ActiveOperationForTest().empty();
+        // Opening never scans the working tree; request its status explicitly.
+        if (opened && !refreshed)
+        {
+            application.RefreshForTest();
+            refreshed = true;
+            return false;
+        }
+        return opened && snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready
             && !application.HistoryLoadPendingForTest()
             && !application.VisibleHistoryRevisionsForTest().empty();
     });
@@ -533,8 +541,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             });
         IM_CHECK_NE(advanced_bookmark, Application::Instance().SnapshotForTest()->refs.end());
         IM_CHECK_EQ(advanced_bookmark->target, empty_working_copy);
+        // The virtual Working tree stays selected across the new active commit.
         IM_CHECK_EQ(Application::Instance().SelectedRevisionsForTest(),
-            std::vector<std::string>{empty_working_copy});
+            std::vector<std::string>{MakeWorkingTreeHistoryItem(
+                Application::Instance().SnapshotForTest()->repository_generation, empty_working_copy).id});
         Application::Instance().CreateChangeForTest("@");
         std::shared_ptr<const RepoSnapshot> replacement;
         for (int attempt = 0; attempt < 1000 && replacement == nullptr; ++attempt)
@@ -584,6 +594,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("Apply from Clipboard"));
         IM_CHECK(context->ItemExists("Apply from File"));
         context->ItemClick("Cancel");
+        // Opening selects the virtual Working tree, which only offers Commit.
+        OpenAndCancel(context, "//##MainMenuBar/Change/Commit...");
+        const auto opened = Application::Instance().SnapshotForTest();
+        Application::Instance().SelectRevisionForTest(
+            opened->working_copy.empty() ? opened->head : opened->working_copy);
+        context->Yield();
         for (const char* action : {"Commit...", "Rebase...", "Squash...",
                  "Split...", "Restore...", "Abandon..."})
         {
@@ -846,8 +862,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
-        for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
-                 "Revert", "Track", "Untrack"})
+        for (const char* action : {"Move to parent", "Move to child", "Revert", "Track", "Untrack"})
         {
             const std::string item = std::string("**/") + action;
             IM_CHECK(!context->ItemExists(item.c_str())
@@ -944,6 +959,55 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.ApplyEventForTest(OperationFinished{"fetch"});
         application.ApplyEventForTest(BackgroundActivityFinished{42});
         context->Yield(2);
+    };
+
+    test = IM_REGISTER_TEST(engine, "Navigation", "WorkingTreeHistoryRow");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot = RichSnapshot();
+        snapshot.worktree_state = RepoSnapshot::WorktreeState::Unscanned;
+        snapshot.status.clear();
+        application.SetSnapshotForTest(snapshot);
+        auto view = std::make_shared<HistoryView>();
+        view->repository_generation = application.SnapshotForTest()->repository_generation;
+        view->request = 1000000;
+        HistoryItem active;
+        active.id = snapshot.working_copy;
+        active.revision = snapshot.revisions.front();
+        view->items.push_back(std::move(active));
+        application.ApplyEventForTest(HistoryReady{std::move(view)});
+        context->Yield(2);
+        context->SetRef("History");
+        IM_CHECK(context->ItemExists("**/working tree"));
+        IM_CHECK(RenderedTextContains(context, "Working tree"));
+        IM_CHECK_EQ(application.HistoryRevisionsForTest().size(), 1U);
+        context->ItemClick("**/working tree");
+        IM_CHECK_EQ(application.SelectedRevisionsForTest(),
+            (std::vector<std::string>{MakeWorkingTreeHistoryItem(
+                application.SnapshotForTest()->repository_generation, snapshot.working_copy).id}));
+        context->ItemClick("**/working tree", ImGuiMouseButton_Right);
+        IM_CHECK(!context->ItemExists("**/change context"));
+        application.ClearSnapshotForTest();
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "CommitFromUnbornHead");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        RepoSnapshot snapshot;
+        snapshot.root = "/tmp/unborn-repository";
+        snapshot.generation = 42;
+        snapshot.repository_generation = 42;
+        application.SetSnapshotForTest(std::move(snapshot));
+        application.SelectRevisionForTest(MakeWorkingTreeHistoryItem(42, "").id);
+        context->Yield(2);
+        context->SetRef("ggui dockspace");
+        context->ItemClick("Commit");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(RenderedTextContains(context, "Commit the whole working tree as a new commit"));
+        IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Cancel");
+        application.ClearSnapshotForTest();
     };
 
     test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBookmarkBranches");
@@ -1309,7 +1373,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndCommitScope");
+    test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
@@ -1340,11 +1404,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Commit only this file");
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        IM_CHECK_EQ(application.DialogFilesetsForTest(), std::vector<std::string>{"modified.txt"});
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        IM_CHECK(!context->ItemExists("**/Commit only this file"));
 
         FocusWindow(context, "Bookmarks");
         context->ItemClick("**/Create bookmark");
@@ -2033,10 +2093,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Commit only this file");
-        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
-        context->SetRef("ggui action");
-        context->ItemClick("Cancel");
+        IM_CHECK(!context->ItemExists("**/Commit only this file"));
         context->Yield(2);
 
         FocusWindow(context, "Operations");
@@ -2341,8 +2398,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         FocusWindow(context, "Changes");
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
-        for (const char* action : {"Move to parent", "Move to child", "Commit only this file",
-                 "Revert", "Track", "Untrack"})
+        for (const char* action : {"Move to parent", "Move to child", "Revert", "Track", "Untrack"})
         {
             const std::string item = std::string("**/") + action;
             IM_CHECK(!context->ItemExists(item.c_str())
@@ -2787,11 +2843,22 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
+        // The active commit is selected, so the dialog amends it.
+        ApplyOpenDialog(context, "//##MainMenuBar/Change/Commit...");
+        context->ItemInputValue("Description", "submitted amend");
+        context->ItemClick("Amend");
+        context->Yield(2);
+
+        const std::string active = application.SnapshotForTest()->working_copy;
+        application.SelectRevisionForTest(MakeWorkingTreeHistoryItem(
+            application.SnapshotForTest()->repository_generation, active).id);
+        context->Yield();
         ApplyOpenDialog(context, "//##MainMenuBar/Change/Commit...");
         context->ItemInputValue("Description", "submitted commit");
-        context->ItemInputValue("Filesets", " modified.txt, added.txt\n");
-        context->ItemClick("Apply");
+        context->ItemClick("Commit");
         context->Yield(2);
+        application.SelectRevisionForTest(active);
+        context->Yield();
 
         for (const char* action : {"Squash...", "Restore...", "Abandon..."})
         {
@@ -2883,7 +2950,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             if (std::ranges::any_of(opened_revisions, [](const Revision& revision) {
                     return revision.description.starts_with("locked empty parent"); })
                 && std::ranges::any_of(opened_revisions, [](const Revision& revision) {
-                    return revision.description.starts_with("existing child"); }))
+                    return revision.description.starts_with("existing child"); })
+                && std::ranges::any_of(opened_revisions, [](const Revision& revision) {
+                    return revision.parents.empty(); })
+                && !application.HistoryLoadPendingForTest())
                 break;
             context->Yield();
             std::this_thread::sleep_for(5ms);
@@ -2934,8 +3004,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             IM_CHECK_NE(preserved_parent, created_revisions.end());
             IM_CHECK_NE(preserved_child, created_revisions.end());
             IM_CHECK_NE(added, created_revisions.end());
-            IM_CHECK_EQ(preserved_child->parents, std::vector<std::string>{parent_oid});
-            IM_CHECK_EQ(added->parents, std::vector<std::string>{parent_oid});
+            if (preserved_child != created_revisions.end())
+            {
+                IM_CHECK_EQ(preserved_child->parents, std::vector<std::string>{parent_oid});
+            }
+            if (added != created_revisions.end())
+            {
+                IM_CHECK_EQ(added->parents, std::vector<std::string>{parent_oid});
+            }
         }
         // Drain the temporary repository's requests before destroying its files.
         context->MenuClick("//##MainMenuBar/Repository/Close repository");
@@ -3476,9 +3552,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK(context->ItemExists("**/Delete file"));
+        // The active commit's child for file transfers is the Working tree.
         IM_CHECK(context->ItemExists("**/Move to parent"));
-        IM_CHECK(context->ItemExists("**/Move to child"));
-        IM_CHECK_LT(context->ItemInfo("**/Move to child").RectFull.Min.y,
+        IM_CHECK(context->ItemExists("**/Move to Working tree"));
+        IM_CHECK_LT(context->ItemInfo("**/Move to Working tree").RectFull.Min.y,
             context->ItemInfo("**/Move to parent").RectFull.Min.y);
         context->KeyPress(ImGuiKey_Escape);
 

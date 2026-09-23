@@ -28,12 +28,13 @@ struct Revision
     std::string author_email{};
 };
 
-enum class HistoryItemKind { Commit, CollapsedRegion };
+enum class HistoryItemKind { Commit, CollapsedRegion, WorkingTree };
 
 struct HistoryItem
 {
     // Stable within a repository generation. Commit item IDs are their OIDs;
-    // collapsed IDs identify the ancestry interval they summarize.
+    // collapsed IDs identify the ancestry interval they summarize. Working
+    // tree IDs are virtual and must never be resolved as revisions.
     std::string id;
     HistoryItemKind kind = HistoryItemKind::Commit;
     Revision revision;
@@ -41,6 +42,16 @@ struct HistoryItem
     std::vector<std::string> parents;
     bool search_match = false;
 };
+
+inline HistoryItem MakeWorkingTreeHistoryItem(std::uint64_t repository_generation, std::string parent)
+{
+    HistoryItem item;
+    item.id = "working-tree:" + std::to_string(repository_generation);
+    item.kind = HistoryItemKind::WorkingTree;
+    if (!parent.empty())
+        item.parents.push_back(std::move(parent));
+    return item;
+}
 
 struct HistoryView
 {
@@ -79,6 +90,7 @@ struct StatusEntry
     std::string path;
     git_delta_t status = GIT_DELTA_UNMODIFIED;
     bool conflicted = false;
+    bool operator==(const StatusEntry&) const = default;
 };
 
 struct Operation
@@ -181,6 +193,9 @@ struct RepoSnapshot
     std::uint64_t generation = 0;
     std::uint64_t repository_generation = 0;
     std::string root;
+    // Synthetic UI snapshots default to a worktree; repository snapshots set
+    // this from git_repository_workdir() so views can guard filesystem actions.
+    bool has_worktree = true;
     std::string working_copy;
     std::string head;
     // Compatibility storage for synthetic snapshots injected by UI tests.

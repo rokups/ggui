@@ -21,9 +21,22 @@ void Application::OpenDialog(Dialog dialog)
 {
     if (!_active_operation.empty() && dialog != Dialog::Credentials)
         return;
+    if (dialog == Dialog::Commit)
+    {
+        if (_snapshot == nullptr || !_snapshot->has_worktree)
+            return;
+        const bool working_tree_selected = IsWorkingTreeRevision(_selected_revision)
+            && _selected_revision == MakeWorkingTreeHistoryItem(
+                _snapshot->repository_generation, CurrentCommit(*_snapshot)).id;
+        const bool active_commit_selected = !CurrentCommit(*_snapshot).empty()
+            && _selected_revision == CurrentCommit(*_snapshot);
+        if (!working_tree_selected && !active_commit_selected)
+            return;
+    }
     _dialog = dialog;
     _dialog_revision = dialog == Dialog::Commit && _snapshot != nullptr
-        ? CurrentCommit(*_snapshot) : _selected_revision;
+        ? (IsWorkingTreeRevision(_selected_revision) ? _selected_revision : CurrentCommit(*_snapshot))
+        : _selected_revision;
     _dialog_snapshot_generation = _snapshot == nullptr ? 0 : _snapshot->generation;
     _input_primary.clear();
     _input_secondary.clear();
@@ -32,7 +45,7 @@ void Application::OpenDialog(Dialog dialog)
     _input_flag = false;
     _input_flag_secondary = false;
     _input_flag_tertiary = false;
-    _input_mode = 0;
+    _input_mode = dialog == Dialog::Commit && !IsWorkingTreeRevision(_selected_revision) ? 1 : 0;
     if (dialog == Dialog::Abandon)
     {
         _abandon_revisions = {_dialog_revision};
@@ -132,7 +145,7 @@ void Application::RenderDialogs()
     static char patch_apply_path[512]{};
     if (ImGui::BeginPopupModal("Apply Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextWrapped("Apply a patch to the current working copy. Invalid or conflicting patches are rejected.");
+        ImGui::TextWrapped("Apply a patch to the current working tree. Invalid or conflicting patches are rejected.");
         if (ImGui::Button("Apply from Clipboard"))
         {
             const char* clipboard = ImGui::GetClipboardText();
@@ -159,7 +172,7 @@ void Application::RenderDialogs()
 
     // Repository action dialog window
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
-        "Commit change###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
+        "Commit or amend###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
         "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
         "Add workspace###ggui action", "Rename workspace###ggui action", "Remove workspace###ggui action",
@@ -205,10 +218,10 @@ void Application::RenderDialogs()
         if (ImGui::Button("Browse")) _input_secondary = PickFolder();
         break;
     case Dialog::Commit:
-        ImGui::TextUnformatted("Commit working change and create a new one");
+        ImGui::TextUnformatted(_input_mode == 0 ? "Commit the whole working tree as a new commit"
+                                                : "Amend the active commit with the whole working tree");
         DialogMultiline("Description", &_input_primary, 90.0f, focus_first);
-        DialogMultiline("Filesets", &_input_filesets, 70.0f);
-        ImGui::TextDisabled("Leave empty to commit all changed files.");
+        if (_input_mode == 1) ImGui::TextDisabled("Leave empty to keep the current commit message.");
         break;
     case Dialog::Metaedit:
         TextLabelledId("Edit metadata for ", _dialog_revision, RevisionPrefix(_dialog_revision),
@@ -277,7 +290,7 @@ void Application::RenderDialogs()
         ImGui::SameLine();
         ImGui::TextWrapped("and restack its descendants. Local history changes remain undoable.");
         if (_dialog_revision == _snapshot->working_copy)
-            ImGui::TextDisabled("A new empty working-copy change will be created at its parents.");
+            ImGui::TextDisabled("A new empty change will be created at its parents.");
         if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary))
         {
             if (_input_flag_tertiary)
@@ -489,7 +502,8 @@ void Application::RenderDialogs()
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
-    const char* submit_label = _dialog == Dialog::PushTo ? "Push"
+    const char* submit_label = _dialog == Dialog::Commit ? (_input_mode == 0 ? "Commit" : "Amend")
+        : _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::WorkspaceRemove ? "Remove"
         : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmBookmarkMove ? "Force move"
@@ -527,7 +541,10 @@ void Application::SubmitDialog()
     switch (_dialog)
     {
     case Dialog::Clone: EnqueueAction(CloneRepository{_input_primary, _input_secondary}); break;
-    case Dialog::Commit: EnqueueAction(Commit{_input_primary, SplitLines(_input_filesets)}); break;
+    case Dialog::Commit:
+        if (_input_mode == 0) EnqueueAction(Commit{_input_primary});
+        else EnqueueAction(Amend{_dialog_revision, _input_primary});
+        break;
     case Dialog::Metaedit: EnqueueAction(Metaedit{_dialog_revision, _input_primary, _input_secondary}); break;
     case Dialog::Rebase: EnqueueAction(Rebase{_input_secondary, _input_primary}); break;
     case Dialog::Squash:

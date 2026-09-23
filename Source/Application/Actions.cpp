@@ -261,7 +261,9 @@ std::string SquashDescription(
 
 void Application::SelectRevision(const std::string& oid, bool additive)
 {
-    if (_snapshot != nullptr && oid == _snapshot->working_copy)
+    if (IsWorkingTreeRevision(oid)) additive = false;
+    else if (additive && IsWorkingTreeRevision(_selected_revision)) _selected_revisions.clear();
+    if (_snapshot != nullptr && (oid == CurrentCommit(*_snapshot) || IsWorkingTreeRevision(oid)))
     {
         _compare_to.clear();
         _file_comparison = false;
@@ -288,6 +290,7 @@ void Application::SelectRevision(const std::string& oid, bool additive)
 
 void Application::RequestDiff(bool fallback_to_first)
 {
+    _working_tree_diff_outdated = false;
     if (_selected_revision.empty())
     {
         _selected_file.clear();
@@ -306,7 +309,7 @@ void Application::RequestDiff(bool fallback_to_first)
 
 void Application::RequestBlame(const std::string& revision, const std::string& path)
 {
-    if (_snapshot == nullptr || revision.empty() || path.empty())
+    if (_snapshot == nullptr || revision.empty() || IsWorkingTreeRevision(revision) || path.empty())
         return;
     _blame_revision = revision;
     _blame_path = path;
@@ -324,10 +327,11 @@ void Application::ToggleComparison(bool file_comparison)
         _compare_to.clear();
         _file_comparison = false;
     }
-    else if (_snapshot != nullptr && !_selected_revision.empty() && !_snapshot->working_copy.empty()
-        && _selected_revision != _snapshot->working_copy)
+    else if (_snapshot != nullptr && !_selected_revision.empty() && !IsWorkingTreeRevision(_selected_revision)
+        && !CurrentCommit(*_snapshot).empty()
+        && _selected_revision != CurrentCommit(*_snapshot))
     {
-        _compare_to = _snapshot->working_copy;
+        _compare_to = CurrentCommit(*_snapshot);
         _file_comparison = file_comparison;
     }
     RequestDiff(true);
@@ -377,7 +381,8 @@ std::vector<std::string> Application::SelectedParentRevisions() const
 
 void Application::CreateChange(const std::string& parent)
 {
-    if (!_active_operation.empty() || _snapshot == nullptr)
+    if (!_active_operation.empty() || _snapshot == nullptr || IsWorkingTreeRevision(parent)
+        || (parent.empty() && !CanCreateChange()))
         return;
     const std::string selected_revision = parent == "@" ? CurrentCommit(*_snapshot)
         : !parent.empty()                              ? parent
@@ -527,7 +532,7 @@ bool Application::DialogModifiesLockedCommit() const
         return false;
     switch (_dialog)
     {
-    case Dialog::Commit: return RewritesLockedCommit(_snapshot->working_copy);
+    case Dialog::Commit: return _input_mode == 1 && RewritesLockedCommit(_dialog_revision);
     case Dialog::Metaedit:
     {
         const Revision* revision = ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions);
@@ -728,7 +733,7 @@ std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(
 
 void Application::RequestAbandon(const std::string& revision, bool include_descendants)
 {
-    if (!_active_operation.empty() || revision.empty())
+    if (!_active_operation.empty() || revision.empty() || IsWorkingTreeRevision(revision))
         return;
     if (_selected_revision != revision)
         SelectRevision(revision);
@@ -754,7 +759,7 @@ void Application::RequestAbandon(const std::string& revision, bool include_desce
 
 void Application::RequestSquash(const std::string& revision, bool include_descendants)
 {
-    if (!_active_operation.empty() || revision.empty())
+    if (!_active_operation.empty() || revision.empty() || IsWorkingTreeRevision(revision))
         return;
     if (_selected_revision != revision)
         SelectRevision(revision);
@@ -771,9 +776,19 @@ void Application::RequestSquash(const std::string& revision, bool include_descen
 
 bool Application::CanSubmitDialog() const
 {
+    if (_dialog == Dialog::Commit)
+    {
+        if (_snapshot == nullptr || !_snapshot->has_worktree
+            || _snapshot->generation != _dialog_snapshot_generation)
+            return false;
+        if (_input_mode == 0)
+            return _dialog_revision == MakeWorkingTreeHistoryItem(
+                _snapshot->repository_generation, CurrentCommit(*_snapshot)).id;
+        return _input_mode == 1 && !_dialog_revision.empty()
+            && _dialog_revision == CurrentCommit(*_snapshot);
+    }
     switch (_dialog)
     {
-    case Dialog::Commit:
     case Dialog::Metaedit:
     case Dialog::Squash:
     case Dialog::Split:
@@ -907,6 +922,7 @@ void Application::ResetRepositoryState()
     _history_view.reset();
     _history_revisions.clear();
     _diff = {};
+    _working_tree_diff_outdated = false;
     _blame = {};
     _blame_revision.clear();
     _blame_path.clear();
@@ -1030,14 +1046,15 @@ void Application::OpenFileInEditor(const std::string& path)
 {
     if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
         return;
-    const auto current = std::ranges::find(_history_revisions, _snapshot->working_copy, &Revision::oid);
+    const auto current = std::ranges::find(_history_revisions, CurrentCommit(*_snapshot), &Revision::oid);
     const bool direct_parent = current != _history_revisions.end() && current->parents.size() == 1
         && current->parents.front() == _diff.revision;
     const bool changed_in_working_copy = std::ranges::any_of(_snapshot->status, [&](const StatusEntry& file) {
         return file.status != GIT_DELTA_UNMODIFIED && file.status != GIT_DELTA_IGNORED
             && (file.path == path || file.old_path == path);
     });
-    if (_diff.revision != _snapshot->working_copy && (!direct_parent || changed_in_working_copy))
+    if (!IsWorkingTreeRevision(_diff.revision) && _diff.revision != CurrentCommit(*_snapshot)
+        && (!direct_parent || changed_in_working_copy))
     {
         _pending_editor_revision = _diff.revision;
         _pending_editor_path = path;
@@ -1050,7 +1067,7 @@ void Application::OpenFileInEditor(const std::string& path)
     std::error_code error;
     if (!absolute.has_value() || !std::filesystem::is_regular_file(*absolute, error) || error)
     {
-        _error_message = "File is unavailable in the working copy";
+        _error_message = "File is unavailable in the working tree";
         return;
     }
     OpenEditorPath(*absolute);
@@ -1092,7 +1109,8 @@ void Application::OpenTemporaryFileInEditor(const FileContentReady& file)
 
 void Application::OpenConflictInMergeTool(const std::string& path)
 {
-    if (_snapshot == nullptr || _selected_revision.empty() || path.empty() || !_active_operation.empty())
+    if (_snapshot == nullptr || _selected_revision.empty() || IsWorkingTreeRevision(_selected_revision)
+        || path.empty() || !_active_operation.empty())
         return;
     if (_merge_process != nullptr || _open_merge_confirmation)
     {
@@ -1233,7 +1251,9 @@ void Application::PollMergeTool()
 
 void Application::MarkConflictResolved(const std::string& path)
 {
-    if (_snapshot == nullptr || _selected_revision != _snapshot->working_copy || path.empty())
+    if (_snapshot == nullptr
+        || (_selected_revision != CurrentCommit(*_snapshot) && !IsWorkingTreeRevision(_selected_revision))
+        || path.empty())
         return;
     const std::optional<std::filesystem::path> working_path = WorkingCopyPath(_snapshot->root, path);
     std::error_code error;
@@ -1241,7 +1261,7 @@ void Application::MarkConflictResolved(const std::string& path)
         || (std::filesystem::exists(*working_path, error) && !std::filesystem::is_regular_file(*working_path, error))
         || error)
     {
-        _error_message = "Resolved file is unavailable in the working copy";
+        _error_message = "Resolved file is unavailable in the working tree";
         return;
     }
     EnqueueAction(Refresh{true, {}, true});
@@ -1389,7 +1409,8 @@ void Application::OpenWorkspaceInNewWindow(const std::string& path)
 
 void Application::OpenExternalDiff(const std::string& path, const std::string& compare_to)
 {
-    if (_snapshot == nullptr || _diff.revision.empty() || path.empty())
+    if (_snapshot == nullptr || _diff.revision.empty() || IsWorkingTreeRevision(_diff.revision)
+        || path.empty())
         return;
     const bool conflicted = std::ranges::any_of(_diff.files, [&](const StatusEntry& file) {
         return file.conflicted && (file.path == path || file.old_path == path);
@@ -1400,7 +1421,7 @@ void Application::OpenExternalDiff(const std::string& path, const std::string& c
         return;
     }
     const std::string revision = _diff.revision
-        + (compare_to.empty() && _diff.revision == _snapshot->working_copy ? "^" : "^!");
+        + (compare_to.empty() && _diff.revision == CurrentCommit(*_snapshot) ? "^" : "^!");
     std::vector<const char*> arguments{"git", "-C", _snapshot->root.c_str(), "difftool", "--no-prompt",
         compare_to.empty() ? revision.c_str() : _diff.revision.c_str()};
     if (!compare_to.empty())

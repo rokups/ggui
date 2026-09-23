@@ -30,6 +30,17 @@ extern "C" const unsigned int ggui_diff_font_data_len;
 namespace ApplicationInternal
 {
 
+inline bool IsWorkingTreeRevision(std::string_view revision)
+{
+    return revision.starts_with("working-tree:");
+}
+
+// Working-tree IDs change with the repository generation but name one tree.
+inline bool SameDiffRevision(std::string_view left, std::string_view right)
+{
+    return left == right || (IsWorkingTreeRevision(left) && IsWorkingTreeRevision(right));
+}
+
 SDL_Rect FitWindowToDisplays(SDL_Rect window, std::span<const SDL_Rect> displays);
 
 inline constexpr float kRowHeight = 34.0f;

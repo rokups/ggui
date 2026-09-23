@@ -20,6 +20,13 @@ using namespace RepositoryInternal;
 
 namespace
 {
+constexpr std::string_view WorkingTreeRevisionPrefix = "working-tree:";
+
+bool IsWorkingTreeRevision(std::string_view revision)
+{
+    return revision.starts_with(WorkingTreeRevisionPrefix);
+}
+
 bool IsConflictMarkerLine(std::string_view line)
 {
     if (!line.empty() && line.back() == '\r')
@@ -68,6 +75,203 @@ void RequireCurrentLineSource(git_repository* repository, const std::string& req
         && git_oid_equal(&expected, &resolved) == 0)
         throw std::runtime_error("selected lines belong to an older snapshot; refresh the diff");
 }
+
+git_oid ResolveActiveCommit(git_repository* repository)
+{
+    git_oid oid{};
+    Check(git_reference_name_to_id(&oid, repository, "HEAD"), "resolve active commit");
+    return oid;
+}
+
+struct PartialFile
+{
+    std::string contents;
+    bool exists = false;
+    git_filemode_t mode = GIT_FILEMODE_BLOB;
+};
+
+PartialFile BuildPartialFile(std::string_view before, git_patch* patch, const std::vector<DiffLine>& selection,
+    bool keep_selected, git_filemode_t old_mode, git_filemode_t new_mode)
+{
+    const std::vector<std::string_view> before_lines = TextLines(before);
+    std::size_t before_index = 0;
+    std::size_t changed_count = 0;
+    std::size_t applied_count = 0;
+    std::string contents;
+    for (std::size_t hunk = 0; hunk < git_patch_num_hunks(patch); ++hunk)
+    {
+        const git_diff_hunk* raw_hunk = nullptr;
+        std::size_t count = 0;
+        Check(git_patch_get_hunk(&raw_hunk, &count, patch, hunk), "load selected transfer hunk");
+        const std::size_t hunk_start = raw_hunk->old_start > 0
+            ? static_cast<std::size_t>(raw_hunk->old_start - (raw_hunk->old_lines > 0 ? 1 : 0))
+            : 0;
+        while (before_index < hunk_start && before_index < before_lines.size())
+            contents.append(before_lines[before_index++]);
+        for (std::size_t line = 0; line < count; ++line)
+        {
+            const git_diff_line* raw_line = nullptr;
+            Check(git_patch_get_line_in_hunk(&raw_line, patch, hunk, line), "load selected transfer line");
+            if (raw_line->origin == GIT_DIFF_LINE_CONTEXT)
+            {
+                contents.append(raw_line->content, raw_line->content_len);
+                ++before_index;
+                continue;
+            }
+            if (raw_line->origin != GIT_DIFF_LINE_ADDITION && raw_line->origin != GIT_DIFF_LINE_DELETION)
+                continue;
+            ++changed_count;
+            const DiffLine actual = DiffLineFromRaw(*raw_line, static_cast<int>(hunk));
+            const bool is_selected = std::ranges::any_of(selection,
+                [&](const DiffLine& requested) { return SameChangedLine(requested, actual); });
+            const bool apply = keep_selected == is_selected;
+            applied_count += apply ? 1 : 0;
+            if (raw_line->origin == GIT_DIFF_LINE_DELETION)
+            {
+                if (!apply)
+                    contents.append(raw_line->content, raw_line->content_len);
+                ++before_index;
+            }
+            else if (apply)
+                contents.append(raw_line->content, raw_line->content_len);
+        }
+    }
+    while (before_index < before_lines.size())
+        contents.append(before_lines[before_index++]);
+
+    if (changed_count == 0 || std::ranges::any_of(selection, [&](const DiffLine& requested) {
+            for (std::size_t hunk = 0; hunk < git_patch_num_hunks(patch); ++hunk)
+            {
+                const git_diff_hunk* raw_hunk = nullptr;
+                std::size_t count = 0;
+                Check(git_patch_get_hunk(&raw_hunk, &count, patch, hunk), "validate selected transfer hunk");
+                for (std::size_t line = 0; line < count; ++line)
+                {
+                    const git_diff_line* raw_line = nullptr;
+                    Check(git_patch_get_line_in_hunk(&raw_line, patch, hunk, line),
+                        "validate selected transfer line");
+                    if ((raw_line->origin == GIT_DIFF_LINE_ADDITION || raw_line->origin == GIT_DIFF_LINE_DELETION)
+                        && SameChangedLine(requested, DiffLineFromRaw(*raw_line, static_cast<int>(hunk))))
+                        return false;
+                }
+            }
+            return true;
+        }))
+        throw std::runtime_error("selected lines no longer match the diff");
+
+    PartialFile result;
+    result.contents = std::move(contents);
+    result.exists = applied_count == 0 ? old_mode != 0
+        : applied_count == changed_count ? new_mode != 0
+                                         : true;
+    result.mode = static_cast<git_filemode_t>(applied_count == changed_count ? new_mode
+        : old_mode != 0 ? old_mode
+                        : new_mode);
+    return result;
+}
+
+void WriteTreePath(git_repository* repository, git_index* index, const std::string& path,
+    const PartialFile& file)
+{
+    if (!file.exists)
+    {
+        const int removed = git_index_remove_bypath(index, path.c_str());
+        if (removed != GIT_ENOTFOUND)
+            Check(removed, "remove transferred path");
+        return;
+    }
+    git_oid blob{};
+    Check(git_blob_create_from_buffer(&blob, repository, file.contents.data(), file.contents.size()),
+        "write transferred file contents");
+    git_index_entry entry{};
+    entry.mode = file.mode;
+    entry.id = blob;
+    entry.path = path.c_str();
+    Check(git_index_add(index, &entry), "update transferred path");
+}
+
+void WriteWorktreePath(git_repository* repository, git_index* index, const std::string& path)
+{
+    const char* workdir = git_repository_workdir(repository);
+    if (workdir == nullptr)
+        throw std::runtime_error("repository has no working directory");
+    const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+    if (relative.empty() || relative.is_absolute()
+        || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+        throw std::runtime_error("working-tree path must be repository-relative");
+    const std::filesystem::path full_path = std::filesystem::path(workdir) / relative;
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::symlink_status(full_path, error);
+    if (error == std::errc::no_such_file_or_directory || status.type() == std::filesystem::file_type::not_found)
+    {
+        const int removed = git_index_remove_bypath(index, path.c_str());
+        if (removed != GIT_ENOTFOUND)
+            Check(removed, "remove transferred working-tree path");
+        return;
+    }
+    if (error)
+        throw std::runtime_error("could not inspect working-tree path");
+    git_index_entry entry{};
+    entry.path = path.c_str();
+    if (std::filesystem::is_symlink(status))
+    {
+        const std::filesystem::path target = std::filesystem::read_symlink(full_path, error);
+        if (error)
+            throw std::runtime_error("could not read working-tree symlink");
+        const std::string value = target.string();
+        Check(git_blob_create_from_buffer(&entry.id, repository, value.data(), value.size()),
+            "write working-tree symlink");
+        entry.mode = GIT_FILEMODE_LINK;
+    }
+    else if (std::filesystem::is_regular_file(status))
+    {
+        Check(git_blob_create_fromworkdir(&entry.id, repository, path.c_str()), "write working-tree file");
+        const std::filesystem::perms permissions = std::filesystem::status(full_path, error).permissions();
+        entry.mode = !error && (permissions & std::filesystem::perms::owner_exec) != std::filesystem::perms::none
+            ? GIT_FILEMODE_BLOB_EXECUTABLE : GIT_FILEMODE_BLOB;
+    }
+    else
+        throw std::runtime_error("only files and symlinks can be transferred");
+    Check(git_index_add(index, &entry), "stage transferred working-tree path");
+}
+
+std::string ReadWorkingFile(git_repository* repository, const std::string& path, bool& binary)
+{
+    const char* workdir = git_repository_workdir(repository);
+    if (workdir == nullptr)
+        throw std::runtime_error("repository has no working directory");
+    const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+    if (relative.empty() || relative.is_absolute()
+        || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+        throw std::runtime_error("working-tree path must be repository-relative");
+    std::ifstream input(std::filesystem::path(workdir) / relative, std::ios::binary);
+    if (!input)
+        return {};
+    std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    binary = contents.find('\0') != std::string::npos;
+    return contents;
+}
+
+git_oid WriteAmendedTree(git_repository* repository, const git_oid& active_oid, const std::string& path,
+    const PartialFile& file)
+{
+    git_commit* raw_active = nullptr;
+    Check(git_commit_lookup(&raw_active, repository, &active_oid), "load active commit");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> active(raw_active, git_commit_free);
+    git_tree* raw_tree = nullptr;
+    Check(git_commit_tree(&raw_tree, active.get()), "load active commit tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
+    git_index* raw_index = nullptr;
+    git_index_options options = GIT_INDEX_OPTIONS_INIT;
+    options.oid_type = git_repository_oid_type(repository);
+    Check(git_index_new(&raw_index, &options), "create amendment index");
+    std::unique_ptr<git_index, decltype(&git_index_free)> index(raw_index, git_index_free);
+    Check(git_index_read_tree(index.get(), tree.get()), "prepare amendment tree");
+    WriteTreePath(repository, index.get(), path, file);
+    git_oid result{};
+    Check(git_index_write_tree_to(&result, index.get(), repository), "write amended commit tree");
+    return result;
+}
 } // namespace
 
 void RepositoryEngine::Impl::ApplyPatchText(const ApplyPatch& command)
@@ -87,9 +291,19 @@ void RepositoryEngine::Impl::ApplyPatchText(const ApplyPatch& command)
     git_diff* raw_patch = nullptr;
     Check(git_diff_from_buffer(&raw_patch, text.data(), text.size(), nullptr), "parse patch");
     std::unique_ptr<git_diff, decltype(&git_diff_free)> patch(raw_patch, git_diff_free);
+    std::vector<std::string> changed_paths;
+    for (std::size_t index = 0; index < git_diff_num_deltas(patch.get()); ++index)
+    {
+        const git_diff_delta* delta = git_diff_get_delta(patch.get(), index);
+        if (delta->old_file.path != nullptr)
+            changed_paths.emplace_back(delta->old_file.path);
+        if (delta->new_file.path != nullptr
+            && std::ranges::find(changed_paths, delta->new_file.path) == changed_paths.end())
+            changed_paths.emplace_back(delta->new_file.path);
+    }
     Check(git_apply(git.get(), patch.get(), GIT_APPLY_LOCATION_WORKDIR, nullptr), "apply patch");
     Sync();
-    PublishSnapshot();
+    PublishWorktreeChanges(changed_paths, false);
 }
 
 void RepositoryEngine::Impl::ResolveConflictFile(const ResolveConflict& command)
@@ -167,7 +381,7 @@ void RepositoryEngine::Impl::ResolveConflictFile(const ResolveConflict& command)
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
     Check(gg_repository_restore(&mutation.value, gg, &options, &operation), "restore conflict resolution");
-    PublishSnapshot();
+    PublishWorktreeChanges({command.path}, true);
 }
 
 void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
@@ -261,7 +475,7 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
               selected_hunks.empty() ? nullptr : &apply_options),
         "apply inverse file diff");
     Sync();
-    PublishSnapshot();
+    PublishWorktreeChanges(paths, false);
 }
 
 void RepositoryEngine::Impl::DeleteWorkingFile(const DeleteFile& command)
@@ -284,7 +498,83 @@ void RepositoryEngine::Impl::DeleteWorkingFile(const DeleteFile& command)
     if (!std::filesystem::remove(target, error) || error)
         throw std::runtime_error("could not delete working-copy file"); // GCOV_EXCL_LINE: filesystem race/failure
     Sync();
-    PublishSnapshot();
+    PublishWorktreeChanges({command.path}, false);
+}
+
+void RepositoryEngine::Impl::MoveWorkingTreeFile(const MoveFiles& command)
+{
+    Sync();
+    const bool from_worktree = IsWorkingTreeRevision(command.source);
+    const bool to_worktree = IsWorkingTreeRevision(command.destination);
+    if (from_worktree == to_worktree || command.filesets.size() != 1)
+        throw std::runtime_error("move one file between Working tree and its active commit");
+    const std::string& endpoint = from_worktree ? command.destination : command.source;
+    const git_oid active_oid = ResolveActiveCommit(git.get());
+    git_oid endpoint_oid{};
+    Check(gg_repository_resolve(&endpoint_oid, gg, endpoint.c_str()), "resolve transfer commit");
+    if (git_oid_equal(&active_oid, &endpoint_oid) == 0)
+        throw std::runtime_error("Working tree files can only move to or from its active commit");
+
+    const std::string& path = command.filesets.front();
+    const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+    if (relative.empty() || relative.is_absolute()
+        || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+        throw std::runtime_error("working-tree path must be repository-relative");
+
+    git_commit* raw_active = nullptr;
+    Check(git_commit_lookup(&raw_active, git.get(), &active_oid), "load active commit");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> active(raw_active, git_commit_free);
+    git_tree* raw_active_tree = nullptr;
+    Check(git_commit_tree(&raw_active_tree, active.get()), "load active commit tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> active_tree(raw_active_tree, git_tree_free);
+    git_index* raw_index = nullptr;
+    git_index_options index_options = GIT_INDEX_OPTIONS_INIT;
+    index_options.oid_type = git_repository_oid_type(git.get());
+    Check(git_index_new(&raw_index, &index_options), "create file transfer index");
+    std::unique_ptr<git_index, decltype(&git_index_free)> index(raw_index, git_index_free);
+    Check(git_index_read_tree(index.get(), active_tree.get()), "prepare file transfer tree");
+
+    if (from_worktree)
+        WriteWorktreePath(git.get(), index.get(), path);
+    else
+    {
+        git_tree* raw_parent_tree = nullptr;
+        if (git_commit_parentcount(active.get()) != 0)
+        {
+            git_commit* raw_parent = nullptr;
+            Check(git_commit_parent(&raw_parent, active.get(), 0), "load active commit parent");
+            std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+            Check(git_commit_tree(&raw_parent_tree, parent.get()), "load parent tree");
+        }
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> parent_tree(raw_parent_tree, git_tree_free);
+        git_tree_entry* raw_entry = nullptr;
+        const int found = parent_tree == nullptr ? GIT_ENOTFOUND
+            : git_tree_entry_bypath(&raw_entry, parent_tree.get(), path.c_str());
+        if (found == GIT_ENOTFOUND)
+        {
+            const int removed = git_index_remove_bypath(index.get(), path.c_str());
+            if (removed != GIT_ENOTFOUND)
+                Check(removed, "remove active path");
+        }
+        else
+        {
+            Check(found, "load parent path");
+            std::unique_ptr<git_tree_entry, decltype(&git_tree_entry_free)> entry(raw_entry, git_tree_entry_free);
+            git_index_entry restored{};
+            restored.id = *git_tree_entry_id(entry.get());
+            restored.mode = git_tree_entry_filemode(entry.get());
+            restored.path = path.c_str();
+            Check(git_index_add(index.get(), &restored), "restore parent path in active tree");
+        }
+    }
+
+    git_oid tree_oid{};
+    Check(git_index_write_tree_to(&tree_oid, index.get(), git.get()), "write file transfer tree");
+    Mutation mutation;
+    gg_operation_options operation = OperationOptions();
+    Check(gg_repository_amend_tree_worktree(&mutation.value, gg, OidString(active_oid).c_str(), &tree_oid, &operation),
+        "move file between Working tree and active commit");
+    PublishWorktreeChanges({path}, true);
 }
 
 void RepositoryEngine::Impl::MoveDiffSelection(const MoveDiffLines& command, bool revert)
@@ -292,6 +582,100 @@ void RepositoryEngine::Impl::MoveDiffSelection(const MoveDiffLines& command, boo
     Sync();
     if (command.path.empty() || command.lines.empty())
         throw std::runtime_error("no changed lines selected");
+
+    const bool source_is_worktree = IsWorkingTreeRevision(command.source);
+    const bool destination_is_worktree = IsWorkingTreeRevision(command.destination);
+    if (!revert && (source_is_worktree || destination_is_worktree))
+    {
+        if (source_is_worktree == destination_is_worktree)
+            throw std::runtime_error("move lines between Working tree and its active commit");
+        const std::string& endpoint = source_is_worktree ? command.destination : command.source;
+        const git_oid active_oid = ResolveActiveCommit(git.get());
+        git_oid endpoint_oid{};
+        Check(gg_repository_resolve(&endpoint_oid, gg, endpoint.c_str()), "resolve transfer commit");
+        RequireCurrentLineSource(git.get(), endpoint, endpoint_oid);
+        if (git_oid_equal(&active_oid, &endpoint_oid) == 0)
+            throw std::runtime_error("Working tree lines can only move to or from its active commit");
+
+        git_commit* raw_active = nullptr;
+        Check(git_commit_lookup(&raw_active, git.get(), &active_oid), "load active commit");
+        std::unique_ptr<git_commit, decltype(&git_commit_free)> active(raw_active, git_commit_free);
+        git_tree* raw_active_tree = nullptr;
+        Check(git_commit_tree(&raw_active_tree, active.get()), "load active commit tree");
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> active_tree(raw_active_tree, git_tree_free);
+        git_tree* raw_parent_tree = nullptr;
+        if (!source_is_worktree && git_commit_parentcount(active.get()) != 0)
+        {
+            git_commit* raw_parent = nullptr;
+            Check(git_commit_parent(&raw_parent, active.get(), 0), "load active commit parent");
+            std::unique_ptr<git_commit, decltype(&git_commit_free)> parent(raw_parent, git_commit_free);
+            Check(git_commit_tree(&raw_parent_tree, parent.get()), "load active commit parent tree");
+        }
+        std::unique_ptr<git_tree, decltype(&git_tree_free)> parent_tree(raw_parent_tree, git_tree_free);
+        git_tree* before_tree = source_is_worktree ? active_tree.get() : parent_tree.get();
+        git_tree* after_tree = source_is_worktree ? nullptr : active_tree.get();
+
+        std::string path = command.path;
+        char* path_value = path.data();
+        git_diff_options diff_options = GIT_DIFF_OPTIONS_INIT;
+        diff_options.context_lines = 0;
+        diff_options.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+        diff_options.pathspec = {&path_value, 1};
+        git_diff* raw_diff = nullptr;
+        if (source_is_worktree)
+        {
+            diff_options.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS
+                | GIT_DIFF_SHOW_UNTRACKED_CONTENT | GIT_DIFF_INCLUDE_TYPECHANGE;
+            Check(git_diff_tree_to_workdir(&raw_diff, git.get(), before_tree, &diff_options),
+                "create Working tree line diff");
+        }
+        else
+            Check(git_diff_tree_to_tree(&raw_diff, git.get(), before_tree, after_tree, &diff_options),
+                "create active commit line diff");
+        std::unique_ptr<git_diff, decltype(&git_diff_free)> diff(raw_diff, git_diff_free);
+        if (git_diff_num_deltas(diff.get()) != 1)
+            throw std::runtime_error("selected file no longer has one line diff");
+        const git_diff_delta* delta = git_diff_get_delta(diff.get(), 0);
+        const std::string_view old_path = delta->old_file.path == nullptr ? "" : delta->old_file.path;
+        const std::string_view new_path = delta->new_file.path == nullptr ? old_path : delta->new_file.path;
+        if (delta->status == GIT_DELTA_RENAMED || old_path != new_path || old_path != command.path)
+            throw std::runtime_error("line transfers require an unrenamed file");
+        const auto regular_mode = [](unsigned int mode) {
+            return mode == 0 || mode == GIT_FILEMODE_BLOB || mode == GIT_FILEMODE_BLOB_EXECUTABLE;
+        };
+        if (!regular_mode(delta->old_file.mode) || !regular_mode(delta->new_file.mode))
+            throw std::runtime_error("line transfers require a regular text file");
+        Conflicts conflicts;
+        Check(gg_repository_conflicts(&conflicts.value, gg, &active_oid), "load active commit conflicts");
+        for (std::size_t index = 0; index < conflicts.value.count; ++index)
+            if (conflicts.value.items[index].path != nullptr
+                && command.path == conflicts.value.items[index].path)
+                throw std::runtime_error("resolve the file conflict before moving lines");
+
+        bool binary = false;
+        const std::string before = BlobText(git.get(), before_tree, command.path.c_str(), binary);
+        std::string after;
+        if (source_is_worktree)
+            after = ReadWorkingFile(git.get(), command.path, binary);
+        else
+            after = BlobText(git.get(), after_tree, command.path.c_str(), binary);
+        if (binary)
+            throw std::runtime_error("binary files cannot be moved by line");
+        git_patch* raw_patch = nullptr;
+        Check(git_patch_from_diff(&raw_patch, diff.get(), 0), "load Working tree line patch");
+        std::unique_ptr<git_patch, decltype(&git_patch_free)> patch(raw_patch, git_patch_free);
+        PartialFile partial = BuildPartialFile(before, patch.get(), command.lines,
+            source_is_worktree, static_cast<git_filemode_t>(delta->old_file.mode),
+            static_cast<git_filemode_t>(delta->new_file.mode));
+        const git_oid replacement_tree = WriteAmendedTree(git.get(), active_oid, command.path, partial);
+        Mutation mutation;
+        gg_operation_options operation = OperationOptions();
+        Check(gg_repository_amend_tree_worktree(&mutation.value, gg, OidString(active_oid).c_str(),
+                  &replacement_tree, &operation),
+            "move lines between Working tree and active commit");
+        PublishWorktreeChanges({command.path}, true);
+        return;
+    }
 
     git_oid source_oid{};
     git_oid destination_oid{};

@@ -272,10 +272,19 @@ void Application::RenderMenuBar()
     {
         if (ActionMenuItem(ICON_MS_ADD, "New change", "Ctrl+N", CanCreateChange() && _active_operation.empty()))
             CreateChange();
-        if (ActionMenuItem(ICON_MS_COMMIT, "Commit...", nullptr, _compare_to.empty())) OpenDialog(Dialog::Commit);
+        const bool working_tree_selected = IsWorkingTreeRevision(_selected_revision);
+        const bool active_commit_selected = _selected_revision == CurrentCommit(*_snapshot)
+            && !_selected_revision.empty();
+        // The label follows the selection; the stable ID keeps one menu item.
+        const std::string commit_label = std::string(ICON_MS_COMMIT)
+            + (working_tree_selected ? "Commit..." : "Amend...") + "###Commit...";
+        if (ImGui::MenuItem(commit_label.c_str(), nullptr, false,
+                _snapshot->has_worktree && _compare_to.empty()
+                    && (working_tree_selected || active_commit_selected)))
+            OpenDialog(Dialog::Commit);
         ImGui::Separator();
-        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move working copy to previous")) EnqueueAction(MoveChange{GG_MOVE_PREVIOUS});
-        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move working copy to next")) EnqueueAction(MoveChange{GG_MOVE_NEXT});
+        if (ActionMenuItem(ICON_MS_ARROW_DOWNWARD, "Move @ to previous")) EnqueueAction(MoveChange{GG_MOVE_PREVIOUS});
+        if (ActionMenuItem(ICON_MS_ARROW_UPWARD, "Move @ to next")) EnqueueAction(MoveChange{GG_MOVE_NEXT});
         ImGui::Separator();
         RenderSelectedChangeActions(_selected_revision, false);
         ImGui::EndMenu();
@@ -378,7 +387,7 @@ void Application::RenderRecentRepositories()
 void Application::RenderSelectedChangeActions(const std::string& revision, bool select_revision)
 {
     // Shared change action state
-    const bool enabled = !revision.empty();
+    const bool enabled = !revision.empty() && !IsWorkingTreeRevision(revision);
     const auto select = [&] {
         if (select_revision)
             SelectRevision(revision);
@@ -480,8 +489,14 @@ void Application::RenderToolbar()
         ImGui::SetTooltip("Create and edit a new empty change on @.");
     ImGui::EndDisabled();
     ImGui::SameLine();
-    ImGui::BeginDisabled(!_compare_to.empty());
-    if (ActionButton(ICON_MS_COMMIT, "Commit")) OpenDialog(Dialog::Commit);
+    const bool working_tree_selected = IsWorkingTreeRevision(_selected_revision);
+    const bool active_commit_selected = _selected_revision == CurrentCommit(*_snapshot)
+        && !_selected_revision.empty();
+    ImGui::BeginDisabled(!_snapshot->has_worktree || !_compare_to.empty()
+        || (!working_tree_selected && !active_commit_selected));
+    const std::string commit_label = std::string(ICON_MS_COMMIT)
+        + (working_tree_selected ? "Commit" : "Amend") + "###Commit";
+    if (ImGui::Button(commit_label.c_str())) OpenDialog(Dialog::Commit);
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("|");
@@ -491,11 +506,11 @@ void Application::RenderToolbar()
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.208f, 0.278f, 0.369f, 1.0f));
     if (ActionButton(ICON_MS_ARROW_DOWNWARD, "Prev")) EnqueueAction(MoveChange{GG_MOVE_PREVIOUS});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Move the working copy to its parent. This modifies the repository and can be undone.");
+        ImGui::SetTooltip("Move @ to its parent. This modifies the repository and can be undone.");
     ImGui::SameLine();
     if (ActionButton(ICON_MS_ARROW_UPWARD, "Next")) EnqueueAction(MoveChange{GG_MOVE_NEXT});
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("Move the working copy to its child. This modifies the repository and can be undone.");
+        ImGui::SetTooltip("Move @ to its child. This modifies the repository and can be undone.");
     ImGui::SameLine();
     ImGui::BeginDisabled(!_snapshot->can_undo);
     if (ActionButton(ICON_MS_UNDO, "Undo")) EnqueueAction(Undo{});
