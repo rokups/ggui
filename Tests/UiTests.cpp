@@ -1493,6 +1493,53 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         git_repository_free(raw_remote);
     };
 
+    test = IM_REGISTER_TEST(engine, "Interactions", "DragBookmarkPillMovesBookmark");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        UiRepository repository;
+        const std::string base = repository.RevisionId("HEAD");
+        repository.Git("commit --allow-empty -m child");
+        const std::string child = repository.RevisionId("HEAD");
+        repository.Git("branch movable " + base);
+        IM_CHECK(OpenNavigationRepository(context, repository));
+        const auto bookmark_target = [&] {
+            const auto snapshot = application.SnapshotForTest();
+            if (snapshot != nullptr)
+                for (const NamedRef& ref : snapshot->refs)
+                    if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "movable")
+                        return ref.target;
+            return std::string{};
+        };
+        const auto drag_pill_to_row = [&](std::size_t row) {
+            const std::vector<ImGuiID> pills = GatherItems(context, "//History", "movable");
+            const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+            IM_CHECK_RETV(pills.size() == 1 && rows.size() > row, false);
+            const ImGuiTestItemInfo pill = context->ItemInfo(pills.front());
+            const ImGuiTestItemInfo target = context->ItemInfo(rows[row]);
+            context->MouseMoveToPos(pill.RectFull.GetCenter());
+            context->MouseDown();
+            context->MouseMoveToPos(pill.RectFull.GetCenter() + ImVec2(12.0f, 0.0f));
+            context->Yield(2);
+            context->MouseMoveToPos(target.RectFull.GetCenter());
+            context->Yield(2);
+            IM_CHECK_RETV(RenderedTextContains(context, "Move bookmark to"), false);
+            context->MouseUp();
+            return true;
+        };
+
+        // Rows are listed newest first: the child, then the base commit.
+        IM_CHECK(drag_pill_to_row(0));
+        IM_CHECK(WaitNavigation(context, [&] { return bookmark_target() == child; }));
+        IM_CHECK_EQ(application.SelectedRevisionsForTest().size(), 1U);
+
+        // Moving it backwards asks for confirmation first.
+        IM_CHECK(drag_pill_to_row(1));
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Force move");
+        IM_CHECK(WaitNavigation(context, [&] { return bookmark_target() == base; }));
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

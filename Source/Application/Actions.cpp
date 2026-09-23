@@ -379,6 +379,23 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
+void Application::MoveBookmark(const NamedRef& bookmark, const std::string& revision)
+{
+    if (bookmark.kind != GG_NAMED_REF_LOCAL_BOOKMARK || bookmark.target == revision)
+        return;
+    const BookmarkRelation relation = ClassifyBookmarkRelation(*_snapshot, bookmark.target, revision);
+    if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
+    {
+        OpenDialog(Dialog::ConfirmBookmarkMove);
+        _input_primary = bookmark.name;
+        _input_secondary = bookmark.target;
+        _input_tertiary = revision;
+        _dialog_snapshot_generation = _snapshot->generation;
+    }
+    else
+        _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {bookmark.name}, revision, {}});
+}
+
 void Application::RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes)
 {
     OpenDialog(Dialog::ConfirmBookmarkDelete);

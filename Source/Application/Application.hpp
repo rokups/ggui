@@ -257,6 +257,7 @@ private:
     std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
         const std::vector<std::string>& revisions) const;
     void RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes);
+    void MoveBookmark(const NamedRef& bookmark, const std::string& revision);
     void CreateChange(const std::string& parent = {});
     void RequestAbandon(const std::string& revision, bool include_descendants = false);
     void RequestSquash(const std::string& revision, bool include_descendants = false);
@@ -290,6 +291,7 @@ private:
     std::vector<GraphRow> _graph_rows;
     std::size_t _rendered_history_rows = 0;
     int _history_hovered_track = -1;
+    std::string _history_bookmark_drag;
     int _history_hovered_commit_row = -1;
     std::uint64_t _graph_generation = 0;
     std::uint64_t _history_requested_generation = 0;

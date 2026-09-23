@@ -614,7 +614,24 @@ void Application::RenderHistory()
 #endif
             }
 
-            if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
+            // A left-button drag that starts on a local bookmark pill moves
+            // that bookmark instead of the change.
+            if (ImGui::IsItemActivated())
+            {
+                if (hovered_badge != nullptr && hovered_badge->bookmark && hovered_badge->local
+                    && ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Left)
+                    _history_bookmark_drag = hovered_badge->label;
+                else
+                    _history_bookmark_drag.clear();
+            }
+            if (!actions_locked && !_history_bookmark_drag.empty()
+                && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
+            {
+                ImGui::SetDragDropPayload("GGUI_BOOKMARK",
+                    _history_bookmark_drag.c_str(), _history_bookmark_drag.size() + 1);
+                ImGui::EndDragDropSource();
+            }
+            else if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
             {
                 // Ctrl is the copy modifier during a drag, not a request to
                 // toggle the dragged commit out of the current selection.
@@ -635,6 +652,7 @@ void Application::RenderHistory()
             bool hovered_copy = false;
             bool hovered_file_drop = false;
             bool hovered_action_drop = false;
+            bool hovered_bookmark_drop = false;
             if (!actions_locked && ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
@@ -672,6 +690,16 @@ void Application::RenderHistory()
                             DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
                     }
                 }
+                else if (dragging != nullptr && dragging->IsDataType("GGUI_BOOKMARK"))
+                {
+                    const std::string_view name(static_cast<const char*>(dragging->Data));
+                    hovered_bookmark_drop = std::ranges::none_of(_snapshot->refs, [&](const NamedRef& ref) {
+                        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name
+                            && ref.target == revision.oid;
+                    });
+                    if (hovered_bookmark_drop)
+                        RenderRevisionTooltip("Move bookmark to", revision.oid, name);
+                }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
                 if (hovered_action_drop)
                     RenderRevisionTooltip("Choose an action for", revision.oid);
@@ -705,9 +733,18 @@ void Application::RenderHistory()
                         _open_drop_actions = true;
                     }
                 }
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_BOOKMARK"))
+                {
+                    const std::string_view name(static_cast<const char*>(payload->Data));
+                    const auto bookmark = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+                        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+                    });
+                    if (bookmark != _snapshot->refs.end())
+                        MoveBookmark(*bookmark, revision.oid);
+                }
                 ImGui::EndDragDropTarget();
             }
-            if (hovered_file_drop)
+            if (hovered_file_drop || hovered_bookmark_drop)
             {
                 const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
                 draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
@@ -759,20 +796,7 @@ void Application::RenderHistory()
                     for (const NamedRef& ref : _snapshot->refs)
                         if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
                             && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
-                        {
-                            const BookmarkRelation relation =
-                                ClassifyBookmarkRelation(*_snapshot, ref.target, revision.oid);
-                            if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
-                            {
-                                OpenDialog(Dialog::ConfirmBookmarkMove);
-                                _input_primary = ref.name;
-                                _input_secondary = ref.target;
-                                _input_tertiary = revision.oid;
-                                _dialog_snapshot_generation = _snapshot->generation;
-                            }
-                            else
-                                _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {ref.name}, revision.oid, {}});
-                        }
+                            MoveBookmark(ref, revision.oid);
                     ImGui::EndMenu();
                 }
                 const auto local_here = [&](const NamedRef& ref) {
