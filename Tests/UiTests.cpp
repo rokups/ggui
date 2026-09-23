@@ -1333,7 +1333,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(dialog, nullptr);
         context->SetRef("ggui action");
         IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Remote").ID);
-        IM_CHECK(RenderedTextContains(context, "Push bookmark coverage-bookmark"));
+        IM_CHECK(RenderedTextContains(context, "Bookmark: coverage-bookmark"));
         IM_CHECK(context->ItemExists("Force push"));
         IM_CHECK(!RenderedTextContains(context, "Warning: force push can overwrite remote history."));
         context->ItemClick("Force push");

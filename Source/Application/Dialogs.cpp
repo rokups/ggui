@@ -117,7 +117,6 @@ void Application::RenderDialogs()
     static char patch_save_path[512] = "patch.diff";
     if (ImGui::BeginPopupModal("Save Patch", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     {
-        ImGui::TextUnformatted("Save patch to file");
         if (ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();
         ImGui::SetNextItemWidth(FontPx(420.0f));
@@ -213,7 +212,6 @@ void Application::RenderDialogs()
     switch (_dialog)
     {
     case Dialog::Clone:
-        ImGui::TextUnformatted("Clone repository");
         DialogInput("URL", "https://host/owner/repository.git", &_input_primary, focus_first);
         ImGui::TextUnformatted("Destination");
         ImGui::SetNextItemWidth(-browse_width - ImGui::GetStyle().ItemSpacing.x);
@@ -228,14 +226,14 @@ void Application::RenderDialogs()
         if (_input_mode == 1) ImGui::TextDisabled("Leave empty to keep the current commit message.");
         break;
     case Dialog::Metaedit:
-        TextLabelledId("Edit metadata for ", _dialog_revision, RevisionPrefix(_dialog_revision),
+        TextLabelledId("Change: ", _dialog_revision, RevisionPrefix(_dialog_revision),
             CommitIdColor(_dialog_revision == _snapshot->working_copy));
         DialogMultiline("Description", &_input_primary, 100.0f, focus_first && !_input_flag);
         DialogInput("Author", "Name <email>", &_input_secondary, focus_first && _input_flag);
         break;
     case Dialog::Rebase:
     {
-        TextLabelledId("Rebase @ ", _input_secondary, RevisionPrefix(_input_secondary),
+        TextLabelledId("Change (@): ", _input_secondary, RevisionPrefix(_input_secondary),
             CommitIdColor(_input_secondary == _snapshot->working_copy));
         DialogInput("Destination", "commit ID or bookmark", &_input_primary, focus_first);
         const Revision* source = RebaseSource();
@@ -255,7 +253,7 @@ void Application::RenderDialogs()
         break;
     }
     case Dialog::Squash:
-        TextLabelledId("Squash ", _dialog_revision, RevisionPrefix(_dialog_revision),
+        TextLabelledId("Change: ", _dialog_revision, RevisionPrefix(_dialog_revision),
             CommitIdColor(_dialog_revision == _snapshot->working_copy));
         if (_input_flag_tertiary)
         {
@@ -274,7 +272,7 @@ void Application::RenderDialogs()
         DialogMultiline("Combined description", &_input_primary, 90.0f);
         break;
     case Dialog::Split:
-        TextLabelledId("Split ", _dialog_revision, RevisionPrefix(_dialog_revision),
+        TextLabelledId("Change: ", _dialog_revision, RevisionPrefix(_dialog_revision),
             CommitIdColor(_dialog_revision == _snapshot->working_copy));
         DialogMultiline("Selected filesets", &_input_filesets, 90.0f, focus_first);
         DialogInput("Selected description", "optional", &_input_primary);
@@ -289,10 +287,9 @@ void Application::RenderDialogs()
     case Dialog::Abandon:
     {
         PollAbandonRevisions();
-        TextLabelledId("Abandon ", _dialog_revision, RevisionPrefix(_dialog_revision),
+        TextLabelledId("Change: ", _dialog_revision, RevisionPrefix(_dialog_revision),
             CommitIdColor(_dialog_revision == _snapshot->working_copy));
-        ImGui::SameLine();
-        ImGui::TextWrapped("and restack its descendants. Local history changes remain undoable.");
+        ImGui::TextWrapped("Its descendants are restacked. Local history changes remain undoable.");
         if (_dialog_revision == _snapshot->working_copy)
             ImGui::TextDisabled("A new empty change will be created at its parents.");
         if (ImGui::Checkbox("Also abandon all descendants (full branch)", &_input_flag_tertiary))
@@ -332,13 +329,12 @@ void Application::RenderDialogs()
         break;
     }
     case Dialog::Bookmark:
-        ImGui::TextUnformatted("Create bookmark");
         DialogInput("Name", "bookmark name", &_input_primary, focus_first);
         DialogInput("Revision", "defaults to selected change", &_input_secondary);
         break;
     case Dialog::BookmarkRename:
     {
-        ImGui::Text("Rename bookmark %s", _input_secondary.c_str());
+        ImGui::Text("Bookmark: %s", _input_secondary.c_str());
         DialogInput("New name", "bookmark name", &_input_primary, focus_first);
         const bool conflict = _snapshot != nullptr && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
             return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
@@ -350,18 +346,15 @@ void Application::RenderDialogs()
         break;
     }
     case Dialog::Tag:
-        ImGui::TextUnformatted("Create or move tag");
         DialogInput("Name", "tag name", &_input_primary, focus_first);
         DialogInput("Revision", "defaults to selected change", &_input_secondary);
         ImGui::Checkbox("Allow move", &_input_flag);
         break;
     case Dialog::RemoteAdd:
-        ImGui::TextUnformatted("Add remote");
         DialogInput("Name", "origin", &_input_primary, focus_first);
         DialogInput("URL", "https://host/owner/repository.git", &_input_secondary);
         break;
     case Dialog::WorkspaceAdd:
-        ImGui::TextUnformatted("Add workspace");
         ImGui::TextUnformatted("Destination");
         if (focus_first)
             ImGui::SetKeyboardFocusHere();
@@ -373,15 +366,15 @@ void Application::RenderDialogs()
         DialogInput("Revision", "defaults to @", &_input_tertiary);
         break;
     case Dialog::WorkspaceRename:
-        ImGui::Text("Rename workspace %s", _input_secondary.c_str());
+        ImGui::Text("Workspace: %s", _input_secondary.c_str());
         DialogInput("New name", "workspace name", &_input_primary, focus_first);
         break;
     case Dialog::WorkspaceRemove:
-        ImGui::Text("Remove workspace %s?", _input_primary.c_str());
+        ImGui::Text("Workspace: %s", _input_primary.c_str());
         ImGui::TextWrapped("The linked worktree directory will be deleted. Recoverable tracked changes are retained in operation history, but filesystem deletion is not undoable.");
         break;
     case Dialog::PushTo:
-        ImGui::Text("Push bookmark %s", _input_secondary.c_str());
+        ImGui::Text("Bookmark: %s", _input_secondary.c_str());
         ImGui::TextUnformatted("Remote");
         if (focus_first)
             ImGui::SetKeyboardFocusHere();
@@ -402,7 +395,7 @@ void Application::RenderDialogs()
         }
         break;
     case Dialog::Reconcile:
-        ImGui::Text("Reconcile bookmark %s", _input_primary.c_str());
+        ImGui::Text("Bookmark: %s", _input_primary.c_str());
         TextLabelledId("Local tip: ", _input_tertiary, RevisionPrefix(_input_tertiary),
             CommitIdColor(_input_tertiary == _snapshot->working_copy));
         TextLabelledId(("Remote tip (" + _input_secondary + "): ").c_str(), _input_filesets,
@@ -456,13 +449,11 @@ void Application::RenderDialogs()
         break;
     }
     case Dialog::ConfirmLocked:
-        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f), "Warning: locked commit");
         ImGui::TextWrapped("%s", _locked_warning.c_str());
         ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote and require a force push.");
         break;
     case Dialog::ConfirmBookmarkMove:
-        ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f), "Warning: non-forward bookmark move");
-        ImGui::Text("Move bookmark %s", _input_primary.c_str());
+        ImGui::Text("Bookmark: %s", _input_primary.c_str());
         TextLabelledId("Current tip: ", _input_secondary, RevisionPrefix(_input_secondary),
             CommitIdColor(_input_secondary == _snapshot->working_copy));
         TextLabelledId("Target: ", _input_tertiary, RevisionPrefix(_input_tertiary),
