@@ -102,6 +102,10 @@ bool CaptureFramebuffer(
 
 float FontPx(float value);
 std::string IconLabel(std::string_view icon, std::string_view label);
+// Formats IconLabel into ImGui's shared temporary buffer. The result is valid
+// until the next temporary format, so pass it straight to a widget.
+const char* TempIconLabel(std::string_view icon, std::string_view label);
+// Labels must not point into ImGui's temporary buffer.
 bool ActionMenuItem(std::string_view icon, std::string_view label, const char* shortcut = nullptr,
     bool enabled = true);
 bool ActionButton(std::string_view icon, std::string_view label, const ImVec2& size = {});

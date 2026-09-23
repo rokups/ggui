@@ -32,17 +32,23 @@ std::string IconLabel(std::string_view icon, std::string_view label)
     return std::string(icon) + std::string(label) + "###" + std::string(label);
 }
 
+const char* TempIconLabel(std::string_view icon, std::string_view label)
+{
+    const char* result = nullptr;
+    ImFormatStringToTempBuffer(&result, nullptr, "%.*s%.*s###%.*s", static_cast<int>(icon.size()), icon.data(),
+        static_cast<int>(label.size()), label.data(), static_cast<int>(label.size()), label.data());
+    return result;
+}
+
 bool ActionMenuItem(std::string_view icon, std::string_view label, const char* shortcut,
     bool enabled)
 {
-    const std::string decorated = IconLabel(icon, label);
-    return ImGui::MenuItem(decorated.c_str(), shortcut, false, enabled);
+    return ImGui::MenuItem(TempIconLabel(icon, label), shortcut, false, enabled);
 }
 
 bool ActionButton(std::string_view icon, std::string_view label, const ImVec2& size)
 {
-    const std::string decorated = IconLabel(icon, label);
-    return ImGui::Button(decorated.c_str(), size);
+    return ImGui::Button(TempIconLabel(icon, label), size);
 }
 
 void IdCopyMenuItems(std::string_view name, std::string_view id, std::size_t unique_length)
