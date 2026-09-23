@@ -780,8 +780,11 @@ void Application::RenderHistory()
                 {
                     for (const NamedRef& ref : _snapshot->refs)
                         if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid
-                            && ActionMenuItem(ICON_MS_DELETE, ref.name))
-                            RequestBookmarkDelete(ref.name, true, {});
+                            && ImGui::BeginMenu(IconLabel(ICON_MS_BOOKMARK, ref.name).c_str()))
+                        {
+                            RenderBookmarkDeleteItems(ref.name);
+                            ImGui::EndMenu();
+                        }
                     ImGui::EndMenu();
                 }
 

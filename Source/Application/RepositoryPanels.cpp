@@ -311,13 +311,7 @@ void Application::RenderBookmarks()
             const std::string delete_label = IconLabel(ICON_MS_DELETE, "Delete");
             if (ImGui::BeginMenu(delete_label.c_str()))
             {
-                if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
-                    RequestBookmarkDelete(name, true, {});
-                for (const NamedRef& candidate : _snapshot->refs)
-                    if (candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name
-                        && !candidate.remote.empty()
-                        && ActionMenuItem(ICON_MS_CLOUD, candidate.remote))
-                        RequestBookmarkDelete(name, false, {candidate.remote});
+                RenderBookmarkDeleteItems(name);
                 ImGui::EndMenu();
             }
             ImGui::EndDisabled();
@@ -339,6 +333,27 @@ void Application::RenderBookmarks()
     ImGui::EndChild();
     ImGui::PopStyleVar();
     ImGui::End();
+}
+
+void Application::RenderBookmarkDeleteItems(const std::string& name)
+{
+    const bool has_local = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+    });
+    std::vector<std::string> remotes;
+    for (const NamedRef& ref : _snapshot->refs)
+        if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name && !ref.remote.empty()
+            && std::ranges::find(remotes, ref.remote) == remotes.end())
+            remotes.push_back(ref.remote);
+
+    if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
+        RequestBookmarkDelete(name, true, {});
+    for (const std::string& remote : remotes)
+        if (ActionMenuItem(ICON_MS_CLOUD, remote))
+            RequestBookmarkDelete(name, false, {remote});
+    if (has_local && !remotes.empty()
+        && ActionMenuItem(ICON_MS_DELETE_SWEEP, remotes.size() == 1 ? "Local & remote" : "Local & all remotes"))
+        RequestBookmarkDelete(name, true, remotes);
 }
 
 void Application::RenderTags()

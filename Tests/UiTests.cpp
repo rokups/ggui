@@ -1420,7 +1420,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(rows.front(), ImGuiMouseButton_Right);
             context->Yield();
             context->SetRef("//$FOCUSED");
-            context->MenuClick("Delete bookmark/doomed");
+            context->MenuClick("Delete bookmark/doomed/Local");
             IM_CHECK_RETV(WaitForWindow(context, "ggui action") != nullptr, false);
             context->SetRef("ggui action");
             IM_CHECK_RETV(RenderedTextContains(context, "Local bookmark"), false);
@@ -1436,6 +1436,50 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(request_delete());
         context->ItemClick("Delete");
         IM_CHECK(WaitNavigation(context, [&] { return !bookmark_exists(); }));
+    };
+
+    test = IM_REGISTER_TEST(engine, "Application", "DeleteLocalAndRemoteBookmark");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        UiRepository remote_owner;
+        remote_owner.Git("init --bare origin.git");
+        const std::filesystem::path remote = remote_owner.Path() / "origin.git";
+        UiRepository repository;
+        repository.Git("remote add origin " + Quote(remote.string()));
+        repository.Git("branch doomed");
+        repository.Git("push origin doomed");
+        IM_CHECK(OpenNavigationRepository(context, repository));
+        const auto bookmark_exists = [&](gg_named_ref_kind kind) {
+            const auto snapshot = application.SnapshotForTest();
+            return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [&](const NamedRef& ref) {
+                return ref.kind == kind && ref.name == "doomed";
+            });
+        };
+        IM_CHECK(bookmark_exists(GG_NAMED_REF_LOCAL_BOOKMARK));
+        IM_CHECK(bookmark_exists(GG_NAMED_REF_REMOTE_BOOKMARK));
+
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK(!rows.empty());
+        context->SetRef("History");
+        context->ItemClick(rows.front(), ImGuiMouseButton_Right);
+        context->Yield();
+        context->SetRef("//$FOCUSED");
+        context->MenuClick("Delete bookmark/doomed/Local & remote");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        IM_CHECK(RenderedTextContains(context, "Local bookmark"));
+        IM_CHECK(RenderedTextContains(context, "Remote bookmark origin/doomed"));
+        context->ItemClick("Delete");
+        IM_CHECK(WaitNavigation(context, [&] {
+            return !bookmark_exists(GG_NAMED_REF_LOCAL_BOOKMARK) && !bookmark_exists(GG_NAMED_REF_REMOTE_BOOKMARK)
+                && application.ActiveOperationForTest().empty();
+        }));
+        git_repository* raw_remote = nullptr;
+        IM_CHECK_EQ(git_repository_open(&raw_remote, remote.string().c_str()), GIT_OK);
+        git_reference* reference = nullptr;
+        IM_CHECK_EQ(git_reference_lookup(&reference, raw_remote, "refs/heads/doomed"), GIT_ENOTFOUND);
+        git_reference_free(reference);
+        git_repository_free(raw_remote);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
