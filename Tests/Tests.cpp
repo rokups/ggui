@@ -914,6 +914,40 @@ TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)
         [&](const Revision& revision) { return revision.oid == abandoned; }));
 }
 
+TEST(RepositoryEngine, AbandonsEmptyLastCommitWithUncommittedChanges)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.revisions.empty();
+    });
+    ASSERT_NE(opened, nullptr);
+    const std::string base = opened->head;
+
+    engine.Enqueue(NewChange{"empty", {base}, {}, {}, false});
+    const auto created = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation && !snapshot.working_copy.empty()
+            && snapshot.working_copy != base;
+    });
+    ASSERT_NE(created, nullptr);
+    const std::string empty = created->working_copy;
+
+    std::ofstream(repository.path / "tracked.txt") << "uncommitted\n";
+    engine.Enqueue(Abandon{{empty}, false, false, {}});
+    const TerminalEvent terminal = WaitForTerminal(engine, "abandon");
+    EXPECT_TRUE(terminal.finished) << terminal.message;
+    const auto abandoned = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return std::ranges::none_of(snapshot.revisions,
+            [&](const Revision& revision) { return revision.oid == empty; });
+    });
+    ASSERT_NE(abandoned, nullptr);
+    EXPECT_EQ(abandoned->working_copy.empty() ? abandoned->head : abandoned->working_copy, base);
+    std::ifstream input(repository.path / "tracked.txt");
+    EXPECT_EQ(std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()),
+        "uncommitted\n");
+}
+
 TEST(RepositoryEngine, KeepsUnnamedLocalHeadsVisibleAfterSwitchingChanges)
 {
     TemporaryRepository repository;
