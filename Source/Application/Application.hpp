@@ -141,6 +141,7 @@ private:
         ConfirmDrop,
         ConfirmLocked,
         ConfirmBookmarkMove,
+        ConfirmBookmarkDelete,
     };
 
     enum class DropAction
@@ -158,6 +159,13 @@ private:
         DropAction action = DropAction::ReorderBefore;
         bool entire_branch = false;
         bool copy = false;
+    };
+
+    struct PendingBookmarkDelete
+    {
+        std::string name;
+        bool local = false;
+        std::vector<std::string> remotes;
     };
 
     bool Initialize();
@@ -247,6 +255,7 @@ private:
     void PollAbandonRevisions();
     std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
         const std::vector<std::string>& revisions) const;
+    void RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes);
     void CreateChange(const std::string& parent = {});
     void RequestAbandon(const std::string& revision, bool include_descendants = false);
     void RequestSquash(const std::string& revision, bool include_descendants = false);
@@ -355,6 +364,7 @@ private:
     std::size_t _progress_total = 0;
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
+    PendingBookmarkDelete _pending_bookmark_delete;
     bool _open_drop_actions = false;
     bool _open_save_patch = false;
     bool _open_apply_patch = false;

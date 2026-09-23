@@ -312,12 +312,12 @@ void Application::RenderBookmarks()
             if (ImGui::BeginMenu(delete_label.c_str()))
             {
                 if (ActionMenuItem(ICON_MS_BOOKMARK, "Local", nullptr, has_local))
-                    EnqueueAction(Bookmark{GG_BOOKMARK_DELETE, {name}, {}, {}});
+                    RequestBookmarkDelete(name, true, {});
                 for (const NamedRef& candidate : _snapshot->refs)
                     if (candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name
                         && !candidate.remote.empty()
                         && ActionMenuItem(ICON_MS_CLOUD, candidate.remote))
-                        EnqueueAction(RemoteBookmarkDelete{name, candidate.remote});
+                        RequestBookmarkDelete(name, false, {candidate.remote});
                 ImGui::EndMenu();
             }
             ImGui::EndDisabled();

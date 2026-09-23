@@ -1400,6 +1400,44 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }));
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "DeleteBookmarkRequiresConfirmation");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        UiRepository repository;
+        repository.Git("branch doomed");
+        IM_CHECK(OpenNavigationRepository(context, repository));
+        const auto bookmark_exists = [&] {
+            const auto snapshot = application.SnapshotForTest();
+            return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "doomed";
+            });
+        };
+        IM_CHECK(bookmark_exists());
+        const auto request_delete = [&] {
+            const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+            IM_CHECK_RETV(!rows.empty(), false);
+            context->SetRef("History");
+            context->ItemClick(rows.front(), ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+            context->MenuClick("Delete bookmark/doomed");
+            IM_CHECK_RETV(WaitForWindow(context, "ggui action") != nullptr, false);
+            context->SetRef("ggui action");
+            IM_CHECK_RETV(RenderedTextContains(context, "Local bookmark"), false);
+            return true;
+        };
+
+        IM_CHECK(request_delete());
+        context->ItemClick("Cancel");
+        context->Yield(3);
+        IM_CHECK(!ActionDialogOpen());
+        IM_CHECK(bookmark_exists());
+
+        IM_CHECK(request_delete());
+        context->ItemClick("Delete");
+        IM_CHECK(WaitNavigation(context, [&] { return !bookmark_exists(); }));
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
@@ -3639,6 +3677,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/Delete");
         context->Yield();
         context->ItemClick("**/Local");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Delete");
         context->Yield(2);
 
         FocusWindow(context, "Tags");

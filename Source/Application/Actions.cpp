@@ -379,6 +379,13 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
+void Application::RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes)
+{
+    OpenDialog(Dialog::ConfirmBookmarkDelete);
+    if (_dialog == Dialog::ConfirmBookmarkDelete)
+        _pending_bookmark_delete = {name, local, std::move(remotes)};
+}
+
 void Application::CreateChange(const std::string& parent)
 {
     if (!_active_operation.empty() || _snapshot == nullptr || IsWorkingTreeRevision(parent)
@@ -806,6 +813,8 @@ bool Application::CanSubmitDialog() const
     switch (_dialog)
     {
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
+    case Dialog::ConfirmBookmarkDelete:
+        return _snapshot != nullptr && (_pending_bookmark_delete.local || !_pending_bookmark_delete.remotes.empty());
     case Dialog::Rebase:
         return HasText(_input_primary) && _snapshot != nullptr
             && _snapshot->generation == _dialog_snapshot_generation

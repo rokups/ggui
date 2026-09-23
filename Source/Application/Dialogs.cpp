@@ -183,7 +183,7 @@ void Application::RenderDialogs()
         "Reconcile bookmark###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action",
         "Locked commit warning###ggui action",
-        "Force bookmark move###ggui action"};
+        "Force bookmark move###ggui action", "Delete bookmark###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
@@ -464,6 +464,15 @@ void Application::RenderDialogs()
             ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
                 "Repository changed. Close this dialog and inspect the bookmark again.");
         break;
+    case Dialog::ConfirmBookmarkDelete:
+        ImGui::Text("Bookmark: %s", _pending_bookmark_delete.name.c_str());
+        if (_pending_bookmark_delete.local)
+            ImGui::BulletText("Local bookmark");
+        for (const std::string& remote : _pending_bookmark_delete.remotes)
+            ImGui::BulletText("Remote bookmark %s/%s", remote.c_str(), _pending_bookmark_delete.name.c_str());
+        if (!_pending_bookmark_delete.remotes.empty())
+            ImGui::TextWrapped("Deleting a remote bookmark cannot be undone here.");
+        break;
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
@@ -493,20 +502,22 @@ void Application::RenderDialogs()
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
-        || _dialog == Dialog::ConfirmBookmarkMove || _dialog == Dialog::WorkspaceRemove;
+        || _dialog == Dialog::ConfirmBookmarkMove || _dialog == Dialog::ConfirmBookmarkDelete
+        || _dialog == Dialog::WorkspaceRemove;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
     const char* submit_label = _dialog == Dialog::Commit ? (_input_mode == 0 ? "Commit" : "Amend")
         : _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::WorkspaceRemove ? "Remove"
+        : _dialog == Dialog::ConfirmBookmarkDelete ? "Delete"
         : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmBookmarkMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
         || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBookmarkMove
-        || _dialog == Dialog::WorkspaceRemove;
+        || _dialog == Dialog::ConfirmBookmarkDelete || _dialog == Dialog::WorkspaceRemove;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -636,6 +647,19 @@ void Application::SubmitDialog()
     case Dialog::ConfirmBookmarkMove:
         EnqueueAction(Bookmark{GG_BOOKMARK_MOVE, {_input_primary}, _input_tertiary, {}, true});
         break;
+    case Dialog::ConfirmBookmarkDelete:
+    {
+        std::vector<Command> commands;
+        for (const std::string& remote : _pending_bookmark_delete.remotes)
+            commands.emplace_back(RemoteBookmarkDelete{_pending_bookmark_delete.name, remote});
+        if (_pending_bookmark_delete.local)
+            commands.emplace_back(Bookmark{GG_BOOKMARK_DELETE, {_pending_bookmark_delete.name}, {}, {}});
+        if (EnqueueAction(std::move(commands.front())))
+            for (Command& command : commands | std::views::drop(1))
+                _engine.Enqueue(std::move(command));
+        _pending_bookmark_delete = {};
+        break;
+    }
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }
     _dialog = Dialog::None;
