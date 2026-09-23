@@ -447,10 +447,13 @@ void Application::RenderDiff()
         || IsSubmoduleMode(_diff.old_mode) || IsSubmoduleMode(_diff.new_mode)
         || (_diff.old_mode != 0 && _diff.new_mode != 0 && _diff.old_mode != _diff.new_mode)
         || (!plain && !diff.HasMappedLineNumbers());
+    // Only @ and the Working tree above it can be changed from the diff.
+    // History stays inspectable (copy, blame, external diff) but read-only.
+    const bool read_only_diff = !working_tree_diff && !active_commit_diff;
 
     diff.SetChangeControlsCallback(
         [this, move_parent, move_child, working_tree_diff, active_commit_diff,
-            linear_source, linear_child, unsupported_diff](int first, int end,
+            linear_source, linear_child, unsupported_diff, read_only_diff](int first, int end,
             const ImVec2& control_size, float right_control_x) {
         const bool mapped = diff.HasMappedLineNumbers() && first >= 0 && first < end
             && end <= static_cast<int>(viewer_lines.size())
@@ -461,7 +464,7 @@ void Application::RenderDiff()
                 });
         const auto move_change = [&](const char* label, ImGuiDir direction, const std::string& destination,
                                      bool target_valid, const char* tooltip) {
-            ImGui::BeginDisabled(unsupported_diff || !linear_source || !mapped || !target_valid);
+            ImGui::BeginDisabled(unsupported_diff || read_only_diff || !linear_source || !mapped || !target_valid);
             const bool pressed = ImGui::InvisibleButton(label, control_size, ImGuiButtonFlags_EnableNav);
             const ImVec2 minimum = ImGui::GetItemRectMin();
             const ImVec2 maximum = ImGui::GetItemRectMax();
@@ -492,7 +495,7 @@ void Application::RenderDiff()
             }
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("%s", tooltip);
+                ImGui::SetTooltip("%s", read_only_diff ? "Only @ and the Working tree can be changed." : tooltip);
         };
         // Narrow overlays sit inside the middle gutter without changing either pane's width.
         const ImVec2 position = ImGui::GetCursorScreenPos();
@@ -600,7 +603,7 @@ void Application::RenderDiff()
             RequestBlame(_diff.revision, _diff.path);
         ImGui::EndDisabled();
         ImGui::Separator();
-        const bool move_unsupported = unsupported || !linear_source;
+        const bool move_unsupported = unsupported || read_only_diff || !linear_source;
         if (!move_unsupported && !context_line.empty() && (linear_child || !parent.empty()))
         {
             const float line_height = std::max(view.GetLineHeight(), 1.0f);
@@ -659,8 +662,8 @@ void Application::RenderDiff()
                         "Reverting these lines will rewrite the locked active commit.");
                 ImGui::EndDisabled();
             }
-            ImGui::BeginDisabled(unsupported || context_hunk.empty() || CurrentCommit(*_snapshot).empty()
-                || IsWorkingTreeRevision(_diff.revision));
+            ImGui::BeginDisabled(unsupported || read_only_diff || context_hunk.empty()
+                || CurrentCommit(*_snapshot).empty() || IsWorkingTreeRevision(_diff.revision));
             if (ActionMenuItem(ICON_MS_RESTORE, "Revert hunk"))
                 QueueCommands({RevertFile{_diff.revision, _diff.path, _diff.path, context_hunk}}, {"@"},
                     "Reverting this hunk will rewrite the locked active commit.");

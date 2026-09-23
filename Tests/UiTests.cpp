@@ -4141,10 +4141,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         RepoSnapshot snapshot = RichSnapshot();
-        snapshot.working_copy = "child";
+        snapshot.working_copy = "source";
         snapshot.revisions = {
-            {"child", {"source"}, {"change-child"}, "Child", {}, 3, true, false, true},
-            {"source", {"base"}, {"change-source"}, "Source", {}, 2, false, false, false},
+            {"source", {"middle"}, {"change-source"}, "Source", {}, 3, true, false, true},
+            {"middle", {"base"}, {"change-middle"}, "Middle", {}, 2, false, false, false},
             {"base", {}, {"change-base"}, "Base", {}, 1, false, false, false},
         };
         snapshot.status = {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}};
@@ -4272,26 +4272,27 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_LE(std::fabs(highlight.GetCenter().y
                               - (diff_view()->DC.CursorStartPos.y + line_height + ImGui::GetTextLineHeight() * 0.5f)),
             0.01f);
-        for (const char* action : {"Move line to child", "Move line to parent", "Move hunk to child",
+        for (const char* action : {"Move line to Working tree", "Move line to parent", "Move hunk to Working tree",
                  "Move hunk to parent"})
         {
             const std::string path = std::string("**/") + action;
             IM_CHECK(context->ItemExists(path.c_str()));
             IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
         }
-        IM_CHECK(!context->ItemExists("**/Revert line"));
+        IM_CHECK(context->ItemExists("**/Revert line"));
+        IM_CHECK((context->ItemInfo("**/Revert line").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(context->ItemExists("**/Revert hunk"));
         IM_CHECK((context->ItemInfo("**/Revert hunk").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        IM_CHECK(!context->ItemExists("**/Move lines to child"));
-        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        IM_CHECK(!context->ItemExists("**/Move lines to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move selection to Working tree"));
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
 
         open_line(0);
         IM_CHECK(line_highlight().IsInverted());
-        IM_CHECK((context->ItemInfo("**/Move line to child").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Move line to Working tree").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Move line to parent").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Move hunk to child").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK((context->ItemInfo("**/Move hunk to Working tree").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Move hunk to parent").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
@@ -4305,11 +4306,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         check_selection_highlight();
         open_line(2);
-        IM_CHECK(context->ItemExists("**/Move lines to child"));
+        IM_CHECK(context->ItemExists("**/Move lines to Working tree"));
         IM_CHECK(context->ItemExists("**/Move lines to parent"));
-        IM_CHECK(!context->ItemExists("**/Move line to child"));
-        IM_CHECK(!context->ItemExists("**/Move hunk to child"));
-        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        IM_CHECK(!context->ItemExists("**/Move line to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move hunk to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move selection to Working tree"));
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::SetClipboardText("unchanged");
         context->ItemClick("**/Copy");
@@ -4317,11 +4318,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
         IM_CHECK(std::string_view(ImGui::GetClipboardText()).find("new") != std::string_view::npos);
         open_line(2);
-        context->ItemClick("**/Move lines to child");
+        context->ItemClick("**/Move lines to Working tree");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         const MoveDiffLines& move = application.PendingMoveDiffLinesForTest();
         IM_CHECK_EQ(move.source, "source");
-        IM_CHECK_EQ(move.destination, "child");
+        const std::string working_tree = MakeWorkingTreeHistoryItem(
+            application.SnapshotForTest()->repository_generation, "source").id;
+        IM_CHECK_EQ(move.destination, working_tree);
         IM_CHECK_EQ(move.path, "file.txt");
         IM_CHECK_EQ(move.lines.size(), 2U);
         IM_CHECK_EQ(move.lines[0].kind, DiffLineKind::Deletion);
@@ -4386,8 +4389,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         };
         check_triangle(parent_arrow, true);
         check_triangle(child_arrow, false);
-        for (const auto& [label, destination] : {std::pair{"Move change to parent", "base"},
-                 std::pair{"Move change to child", "child"}})
+        for (const auto& [label, destination] : {std::pair<const char*, std::string>{"Move change to parent", "middle"},
+                 std::pair<const char*, std::string>{"Move change to child", working_tree}})
         {
             context->ItemClick((std::string("**/") + label).c_str());
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
@@ -4403,9 +4406,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         open_side_left_line(1);
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK(context->ItemExists("**/Move hunk to child"));
-        IM_CHECK(!context->ItemExists("**/Move lines to child"));
-        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        IM_CHECK(context->ItemExists("**/Move hunk to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move lines to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move selection to Working tree"));
         highlight = line_highlight();
         const float split_x = highlight.Max.x;
         IM_CHECK_LT(highlight.Min.x, split_x);
@@ -4438,11 +4441,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         check_selection_highlight();
         open_right_line(1);
-        IM_CHECK(context->ItemExists("**/Move lines to child"));
+        IM_CHECK(context->ItemExists("**/Move lines to Working tree"));
         IM_CHECK(context->ItemExists("**/Move lines to parent"));
-        IM_CHECK(!context->ItemExists("**/Move line to child"));
-        IM_CHECK(!context->ItemExists("**/Move hunk to child"));
-        IM_CHECK(!context->ItemExists("**/Move selection to child"));
+        IM_CHECK(!context->ItemExists("**/Move line to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move hunk to Working tree"));
+        IM_CHECK(!context->ItemExists("**/Move selection to Working tree"));
         IM_CHECK((context->ItemInfo("**/Copy").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::SetClipboardText("unchanged");
         context->ItemClick("**/Copy");
@@ -4455,38 +4458,38 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK_NE(std::string(ImGui::GetClipboardText()), "unchanged");
 
-        application.SelectRevisionForTest("child");
-        DiffResult working_result{1000, "child", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
+        // Commits other than @ are read-only in the diff.
+        application.SelectRevisionForTest("middle");
+        DiffResult historical_result{1000, "middle", "file.txt", "zero\nold\nsame\n", "zero\nnew\nsame\n", false,
             {{"file.txt", "file.txt", GIT_DELTA_MODIFIED, false}}};
-        working_result.old_mode = working_result.new_mode = GIT_FILEMODE_BLOB;
-        working_result.lines = {
+        historical_result.old_mode = historical_result.new_mode = GIT_FILEMODE_BLOB;
+        historical_result.lines = {
             {DiffLineKind::Context, 39, 49, 0},
             {DiffLineKind::Deletion, 40, -1, 0},
             {DiffLineKind::Addition, -1, 50, 0},
             {DiffLineKind::Context, 41, 51, 0},
             {},
         };
-        application.ApplyEventForTest(DiffReady{std::move(working_result)});
+        application.ApplyEventForTest(DiffReady{std::move(historical_result)});
         context->Yield(3);
         context->SetRef("Diff");
+        IM_CHECK((context->ItemInfo("**/Move change to parent").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Move change to child").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         if (application.DiffSideBySideForTest())
         {
             context->ComboClick("View/Unified");
             context->Yield();
         }
         open_line(1);
-        for (const char* action : {"Revert line", "Revert hunk"})
+        for (const char* action : {"Move line to child", "Move line to parent", "Move hunk to child",
+                 "Move hunk to parent", "Revert hunk"})
         {
             const std::string path = std::string("**/") + action;
             IM_CHECK(context->ItemExists(path.c_str()));
-            IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+            IM_CHECK((context->ItemInfo(path.c_str()).ItemFlags & ImGuiItemFlags_Disabled) != 0);
         }
-        ImGui::ClosePopupToLevel(0, true);
-        context->Yield();
-
-        open_line(0);
-        IM_CHECK((context->ItemInfo("**/Revert line").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Revert hunk").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK(!context->ItemExists("**/Revert line"));
+        IM_CHECK((context->ItemInfo("**/Blame file").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
     };
