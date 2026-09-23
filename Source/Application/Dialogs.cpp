@@ -37,6 +37,10 @@ void Application::OpenDialog(Dialog dialog)
     _dialog_revision = dialog == Dialog::Commit && _snapshot != nullptr
         ? (IsWorkingTreeRevision(_selected_revision) ? _selected_revision : CurrentCommit(*_snapshot))
         : _selected_revision;
+    // Refs cannot point at the virtual working tree; target the commit below it.
+    if ((dialog == Dialog::Bookmark || dialog == Dialog::Tag) && _snapshot != nullptr
+        && IsWorkingTreeRevision(_dialog_revision))
+        _dialog_revision = CurrentCommit(*_snapshot);
     _dialog_snapshot_generation = _snapshot == nullptr ? 0 : _snapshot->generation;
     _input_primary.clear();
     _input_secondary.clear();

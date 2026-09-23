@@ -1373,6 +1373,33 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "CreateBookmarkFromRepositoryHistory");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        UiRepository repository;
+        repository.Write("tracked.txt", "dirty\n");
+        IM_CHECK(OpenNavigationRepository(context, repository));
+        const std::string base = repository.RevisionId("HEAD");
+        const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
+        IM_CHECK(!rows.empty());
+        context->SetRef("History");
+        context->ItemClick(rows.front(), ImGuiMouseButton_Right);
+        context->Yield();
+        context->ItemClick("**/Create bookmark...");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemInputValue("Name", "from-history");
+        context->Yield(3);
+        IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("Apply");
+        IM_CHECK(WaitNavigation(context, [&] {
+            const auto snapshot = application.SnapshotForTest();
+            return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [&](const NamedRef& ref) {
+                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "from-history" && ref.target == base;
+            });
+        }));
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

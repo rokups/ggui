@@ -794,8 +794,6 @@ bool Application::CanSubmitDialog() const
     case Dialog::Split:
     case Dialog::Abandon:
     case Dialog::Restore:
-    case Dialog::Bookmark:
-    case Dialog::Tag:
     case Dialog::ConfirmLocked:
         if (_snapshot == nullptr || _snapshot->generation != _dialog_snapshot_generation)
             return false;
@@ -821,13 +819,17 @@ bool Application::CanSubmitDialog() const
         return !_input_flag_tertiary
             || (_abandon_revisions_complete && _abandon_revisions_revision == _dialog_revision);
     case Dialog::Bookmark:
-        return HasText(_input_primary);
+    case Dialog::Tag:
+        // Creating a ref only needs its target to exist. Background refreshes
+        // must not invalidate the dialog as they do for rewriting operations.
+        return HasText(_input_primary) && _snapshot != nullptr
+            && (HasText(_input_secondary)
+                || ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions) != nullptr);
     case Dialog::BookmarkRename:
         return HasText(_input_primary) && _input_primary != _input_secondary && _snapshot != nullptr
             && std::ranges::none_of(_snapshot->refs, [this](const NamedRef& ref) {
                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
                });
-    case Dialog::Tag:
     case Dialog::WorkspaceAdd:
     case Dialog::WorkspaceRename:
     case Dialog::WorkspaceRemove: return HasText(_input_primary);
