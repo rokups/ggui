@@ -1475,6 +1475,94 @@ TEST(RepositoryEngine, HidesHeadsThatOnlyKeepWorkspacesAlive)
     }));
 }
 
+TEST(RepositoryEngine, SearchTemporarilyExpandsTheMergeHoldingAMatch)
+{
+    TemporaryRepository repository;
+    const auto git = [&](const std::string& arguments) {
+        return std::system(("git -C " + Quote(repository.path) + " " + arguments + " >/dev/null 2>&1").c_str());
+    };
+    const auto rev = [&](const std::string& name) {
+        std::string output;
+        FILE* pipe = popen(("git -C " + Quote(repository.path) + " rev-parse " + name).c_str(), "r");
+        char buffer[128];
+        while (pipe != nullptr && std::fgets(buffer, sizeof buffer, pipe) != nullptr) output += buffer;
+        if (pipe != nullptr) pclose(pipe);
+        while (!output.empty() && output.back() == '\n') output.pop_back();
+        return output;
+    };
+    const std::string base = rev("HEAD");
+    ASSERT_EQ(git("checkout -b feature"), 0);
+    ASSERT_EQ(git("commit --allow-empty -m feature-one"), 0);
+    const std::string feature_one = rev("HEAD");
+    ASSERT_EQ(git("commit --allow-empty -m feature-two"), 0);
+    const std::string feature_two = rev("HEAD");
+    ASSERT_EQ(git("checkout main"), 0);
+    ASSERT_EQ(git("commit --allow-empty -m main-change"), 0);
+    ASSERT_EQ(git("merge --no-ff feature -m merge-feature"), 0);
+    const std::string merge = rev("HEAD");
+    ASSERT_EQ(git("branch -D feature"), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
+    ASSERT_NE(snapshot, nullptr);
+    std::uint64_t last_request = 0;
+    const auto history = [&](Command command) {
+        engine.Enqueue(std::move(command));
+        std::shared_ptr<const HistoryView> result;
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (std::chrono::steady_clock::now() < deadline && result == nullptr)
+        {
+            for (const Event& event : engine.PollEvents())
+                if (const auto* ready = std::get_if<HistoryReady>(&event);
+                    ready != nullptr && !ready->view->skeleton && ready->view->request > last_request)
+                    result = ready->view;
+            std::this_thread::sleep_for(5ms);
+        }
+        if (result != nullptr) last_request = result->request;
+        return result;
+    };
+    const auto search = [&](std::string text) {
+        return history(RebuildHistory{HistoryQuery{{}, {}, {}, std::move(text), snapshot->repository_generation}});
+    };
+    const auto item = [](const HistoryView& view, const std::string& id) {
+        return std::ranges::find(view.items, id, &HistoryItem::id);
+    };
+
+    // Revealing a commit on the merged branch opens the merge and the path.
+    const auto revealed = search(feature_one);
+    ASSERT_NE(revealed, nullptr);
+    ASSERT_NE(item(*revealed, merge), revealed->items.end());
+    EXPECT_EQ(item(*revealed, merge)->parents.size(), 2U);
+    EXPECT_NE(item(*revealed, feature_two), revealed->items.end());
+    ASSERT_NE(item(*revealed, feature_one), revealed->items.end());
+    EXPECT_EQ(item(*revealed, feature_two)->parents, (std::vector<std::string>{feature_one}));
+
+    // Clearing the filter collapses it again.
+    const auto cleared = search("");
+    ASSERT_NE(cleared, nullptr);
+    EXPECT_EQ(item(*cleared, merge)->parents.size(), 1U);
+    EXPECT_EQ(item(*cleared, feature_one), cleared->items.end());
+
+    // A match on the first-parent line below the fork keeps it collapsed.
+    const auto below = search(base);
+    ASSERT_NE(below, nullptr);
+    EXPECT_EQ(item(*below, merge)->parents.size(), 1U);
+
+    // Collapsing the merge while the search opens it lasts for that search.
+    ASSERT_NE(search(feature_one), nullptr);
+    const auto collapsed = history(ExpandHistoryRegion{merge, true});
+    ASSERT_NE(collapsed, nullptr);
+    EXPECT_EQ(item(*collapsed, merge)->parents.size(), 1U);
+    const auto reopened = history(ExpandHistoryRegion{merge, true});
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_EQ(item(*reopened, merge)->parents.size(), 2U);
+    // That click was a manual expansion, so it outlives the search.
+    const auto persisted = search("");
+    ASSERT_NE(persisted, nullptr);
+    EXPECT_EQ(item(*persisted, merge)->parents.size(), 2U);
+}
+
 TEST(RepositoryEngine, CollapsesAndTogglesMergeHistory)
 {
     TemporaryRepository repository;

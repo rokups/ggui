@@ -465,12 +465,24 @@ void RepositoryEngine::Impl::RequestHistory(HistoryQuery query, std::string expa
         {
             if (query.repository_generation != active_history_query.repository_generation)
                 expanded_history_regions.clear();
+            if (query.repository_generation != active_history_query.repository_generation
+                || query.search != active_history_query.search)
+                suppressed_merge_expansions.clear();
             active_history_query = query;
+        }
+        else if (toggle && temporary_merge_expansions.contains(expand)
+            && !suppressed_merge_expansions.contains(expand)
+            && std::ranges::find(expanded_history_regions, expand) == expanded_history_regions.end())
+        {
+            // Collapsing a merge the search opened lasts until the search changes.
+            suppressed_merge_expansions.insert(expand);
+            action = "collapse-merge";
         }
         else if (const auto found = std::ranges::find(expanded_history_regions, expand);
             found == expanded_history_regions.end())
         {
             expanded_history_regions.push_back(expand);
+            suppressed_merge_expansions.erase(expand);
             action = expand.starts_with("region:") ? "expand-region" : "expand-merge";
         }
         else if (toggle)
@@ -509,6 +521,7 @@ void RepositoryEngine::Impl::RunHistory()
     {
         HistoryRequest request;
         std::vector<std::string> expansions;
+        std::unordered_set<std::string> suppressed_expansions;
         {
             std::unique_lock lock(history_mutex);
             history_cv.wait(lock, [this, &context] {
@@ -535,6 +548,7 @@ void RepositoryEngine::Impl::RunHistory()
             request = std::move(*history_request);
             history_request.reset();
             expansions = expanded_history_regions;
+            suppressed_expansions = suppressed_merge_expansions;
         }
         const auto stale = [&] {
             return stopping.load() || request.session != session.load()
@@ -821,7 +835,7 @@ void RepositoryEngine::Impl::RunHistory()
                 continue;
             }
 
-            const std::unordered_set<std::string> expanded(expansions.begin(), expansions.end());
+            std::unordered_set<std::string> expanded(expansions.begin(), expansions.end());
             std::vector<git_oid> materialized;
             TraceStage base_history_stage(trace, "base-history-materialization");
             const bool reused_base_history = !request.expand.empty() && !cached_collapsed_materialized.empty();
@@ -959,6 +973,128 @@ void RepositoryEngine::Impl::RunHistory()
                         + " added_commits=" + std::to_string(added));
             }
 
+            // A search match (a revealed commit is one) that only a collapsed
+            // merge's side branch reaches opens that merge and the path to the
+            // match for this view. Nothing is recorded, so the merge collapses
+            // again once the search no longer matches; only manual expansions
+            // persist.
+            std::unordered_set<std::string> temporary_expansions;
+            // Runs before every published view: description search finds
+            // matches while it walks, and expanding again is harmless.
+            const auto expand_for_search = [&] {
+                if (!search_matches.empty() && !stale())
+                {
+                    TraceStage search_expansion_stage(trace, "search-merge-expansion");
+                    struct Reached
+                    {
+                        std::string previous;
+                        unsigned int parent_index = 0;
+                        std::string merge;
+                    };
+                    std::unordered_map<std::string, Reached> reached;
+                    std::deque<git_oid> queue;
+                    for (const git_oid& oid : materialized)
+                    {
+                        const std::string id = OidString(oid);
+                        if (expanded.contains(id) || suppressed_expansions.contains(id)) continue;
+                        git_commit* raw_commit = nullptr;
+                        if (git_commit_lookup(&raw_commit, repository.get(), &oid) != GIT_OK)
+                        {
+                            git_error_clear();
+                            continue;
+                        }
+                        std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                        for (unsigned int index = 1; index < git_commit_parentcount(commit.get()); ++index)
+                        {
+                            const git_oid& parent = *git_commit_parent_id(commit.get(), index);
+                            if (reached.try_emplace(OidString(parent), Reached{id, index, id}).second)
+                                queue.push_back(parent);
+                        }
+                    }
+                    // Walk the hidden side branches together, stopping at the
+                    // shown graph, until every match is placed or the budget ends.
+                    std::vector<std::string> found;
+                    std::size_t lookups = 0;
+                    while (!queue.empty() && found.size() < search_matches.size() && lookups < 4096 && !stale())
+                    {
+                        const git_oid oid = queue.front();
+                        queue.pop_front();
+                        const std::string id = OidString(oid);
+                        const bool match = search_matches.contains(id);
+                        if (match) found.push_back(id);
+                        if (present.contains(id) && !match) continue;
+                        git_commit* raw_commit = nullptr;
+                        ++lookups;
+                        if (git_commit_lookup(&raw_commit, repository.get(), &oid) != GIT_OK)
+                        {
+                            git_error_clear();
+                            continue;
+                        }
+                        std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+                        const std::string merge = reached.at(id).merge;
+                        for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
+                        {
+                            const git_oid& parent = *git_commit_parent_id(commit.get(), index);
+                            if (reached.try_emplace(OidString(parent), Reached{id, index, merge}).second)
+                                queue.push_back(parent);
+                        }
+                    }
+                    for (const std::string& match : found)
+                    {
+                        // Side branches rejoin the first-parent line below their
+                        // fork; a match there belongs to that line, not the merge.
+                        git_oid match_oid{};
+                        git_oid merge_oid{};
+                        const std::string& merge = reached.at(match).merge;
+                        if (git_oid_fromstr(&match_oid, match.c_str(), git_repository_oid_type(repository.get())) != GIT_OK
+                            || git_oid_fromstr(&merge_oid, merge.c_str(), git_repository_oid_type(repository.get()))
+                                != GIT_OK)
+                            continue;
+                        git_commit* raw_merge = nullptr;
+                        if (git_commit_lookup(&raw_merge, repository.get(), &merge_oid) != GIT_OK)
+                        {
+                            git_error_clear();
+                            continue;
+                        }
+                        std::unique_ptr<git_commit, decltype(&git_commit_free)> merge_commit(raw_merge, git_commit_free);
+                        const git_oid& first_parent = *git_commit_parent_id(merge_commit.get(), 0);
+                        const int below_first_parent = git_graph_descendant_of(repository.get(), &first_parent, &match_oid);
+                        if (below_first_parent != 0 || git_oid_equal(&first_parent, &match_oid) != 0)
+                        {
+                            if (below_first_parent < 0) git_error_clear();
+                            continue;
+                        }
+                        for (std::string current = match; current != merge;)
+                        {
+                            const Reached& step = reached.at(current);
+                            if (!present.contains(current))
+                            {
+                                git_oid oid{};
+                                if (git_oid_fromstr(&oid, current.c_str(), git_repository_oid_type(repository.get()))
+                                    == GIT_OK)
+                                {
+                                    materialized.push_back(oid);
+                                    present.insert(current);
+                                }
+                            }
+                            if (step.parent_index > 0) temporary_expansions.insert(step.previous);
+                            current = step.previous;
+                        }
+                    }
+                    expanded.insert(temporary_expansions.begin(), temporary_expansions.end());
+                    if (search_expansion_stage.Enabled())
+                        search_expansion_stage.Complete("lookups=" + std::to_string(lookups)
+                            + " matches=" + std::to_string(found.size())
+                            + " merges=" + std::to_string(temporary_expansions.size()));
+                }
+                {
+                    std::lock_guard lock(history_mutex);
+                    if (!stale()) temporary_merge_expansions = temporary_expansions;
+                }
+            };
+            expand_for_search();
+
+
             const auto make_view = [&] {
                 TraceStage assembly_stage(trace, "view-assembly");
                 auto view = std::make_shared<HistoryView>();
@@ -1080,6 +1216,7 @@ void RepositoryEngine::Impl::RunHistory()
                         {
                             if (!stale())
                             {
+                                expand_for_search();
                                 auto view = make_view();
                                 TraceStage publication_stage(trace, "publication");
                                 const std::size_t published_items = view->items.size();
@@ -1097,6 +1234,7 @@ void RepositoryEngine::Impl::RunHistory()
                 {
                     if (unpublished_matches)
                     {
+                        expand_for_search();
                         auto view = make_view();
                         TraceStage publication_stage(trace, "publication");
                         const std::size_t published_items = view->items.size();

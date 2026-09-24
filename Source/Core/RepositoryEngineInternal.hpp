@@ -18,6 +18,7 @@
 #include <string_view>
 #include <thread>
 #include <variant>
+#include <unordered_set>
 #include <vector>
 
 namespace Ggui::RepositoryInternal
@@ -241,6 +242,11 @@ struct RepositoryEngine::Impl
     std::uint64_t repository_path_session = 0;
     HistoryQuery active_history_query;
     std::vector<std::string> expanded_history_regions;
+    // Merges the current search expanded only for that view, and the ones
+    // the user collapsed while the search holds them open. Both reset with
+    // the search; manual expansions above persist.
+    std::unordered_set<std::string> temporary_merge_expansions;
+    std::unordered_set<std::string> suppressed_merge_expansions;
     std::atomic_uint64_t history_request_version = 0;
     RepositoryInternal::GitRepositoryPtr git;
     gg_repository* gg = nullptr;

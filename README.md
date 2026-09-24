@@ -13,7 +13,10 @@ viewport anchor, and both the row and toolbar report that expansion is
 loading without replacing the repository and current-commit context.
 Merge commits show their first-parent history by default. Their graph dot has
 a `+` control for revealing the merged branch and a `-` control for collapsing
-it again; nested merges remain independently collapsed.
+it again; nested merges remain independently collapsed. When a search or a
+revealed commit matches a commit on a collapsed merge's branch, that merge and
+the path to the match open for as long as the filter matches, then collapse
+again; only merges expanded with `+` stay expanded.
 Collapsed regions never imply a relationship between unrelated
 histories and never require a full-history count.
 
