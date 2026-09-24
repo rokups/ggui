@@ -1434,7 +1434,8 @@ void Application::OpenConflictInMergeTool(const std::string& path)
         if (raw_git_directory == nullptr)
             throw std::runtime_error("The repository has no git directory");
         const std::string git_directory(raw_git_directory);
-        const char* arguments[]{"git", "-C", worktree.c_str(), "--git-dir", git_directory.c_str(), "mergetool",
+        const std::string worktree_path = worktree.string();
+        const char* arguments[]{"git", "-C", worktree_path.c_str(), "--git-dir", git_directory.c_str(), "mergetool",
             "--no-prompt", "--", path.c_str(), nullptr};
         SDL_Environment* environment = SDL_CreateEnvironment(true);
         if (environment == nullptr
