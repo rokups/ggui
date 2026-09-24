@@ -3825,6 +3825,100 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield(2);
         }
 
+        // Multi-selection: Ctrl toggles, Shift selects a range from the
+        // anchor, and the focused file stays the one shown in Diff.
+        using Files = std::vector<std::string>;
+        context->SetRef("Changes");
+        context->ItemClick("**/A  added.txt");
+        IM_CHECK(application.SelectedFilesForTest() == Files{"added.txt"});
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/M  modified.txt");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK(application.SelectedFilesForTest() == (Files{"added.txt", "modified.txt"}));
+        IM_CHECK_EQ(application.FocusedFileForTest(), "modified.txt");
+        context->KeyDown(ImGuiMod_Shift);
+        context->ItemClick("**/D  deleted.txt");
+        context->KeyUp(ImGuiMod_Shift);
+        IM_CHECK(application.SelectedFilesForTest() == (Files{"deleted.txt", "modified.txt"}));
+        IM_CHECK_EQ(application.FocusedFileForTest(), "deleted.txt");
+        // Ctrl-clicking the focused file off shows another selected file.
+        context->KeyDown(ImGuiMod_Ctrl);
+        context->ItemClick("**/D  deleted.txt");
+        IM_CHECK(application.SelectedFilesForTest() == Files{"modified.txt"});
+        IM_CHECK_EQ(application.FocusedFileForTest(), "modified.txt");
+        // The last selected file stays selected.
+        context->ItemClick("**/M  modified.txt");
+        IM_CHECK(application.SelectedFilesForTest() == Files{"modified.txt"});
+        context->ItemClick("**/D  deleted.txt");
+        context->KeyUp(ImGuiMod_Ctrl);
+        IM_CHECK(application.SelectedFilesForTest() == (Files{"deleted.txt", "modified.txt"}));
+
+        // Right-clicking inside the selection acts on all of it.
+        const auto finish_diff = [&] {
+            application.ApplyEventForTest(DiffReady{DiffResult{1000, working_tree,
+                application.FocusedFileForTest(), "old\n", "new\n", false, RichSnapshot().status}});
+            context->Yield(2);
+        };
+        finish_diff();
+        const auto open_selection_menu = [&] {
+            context->SetRef("Changes");
+            context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+            context->Yield();
+            IM_CHECK(context->ItemExists("**/Delete files"));
+            IM_CHECK(!context->ItemExists("**/Blame file"));
+        };
+        open_selection_menu();
+        if (std::getenv("GGUI_CAPTURE_MANUAL") != nullptr)
+        {
+            context->CaptureReset();
+            IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
+        }
+        context->ItemClick("**/Copy");
+        context->Yield();
+        context->ItemClick("**/Relative paths");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "deleted.txt\nmodified.txt");
+        open_selection_menu();
+        context->ItemClick("**/Copy");
+        context->Yield();
+        context->ItemClick("**/Names");
+        open_selection_menu();
+        context->ItemClick("**/Copy");
+        context->Yield();
+        context->ItemClick("**/Absolute paths");
+        IM_CHECK(std::string_view(ImGui::GetClipboardText()).ends_with("/modified.txt"));
+        open_selection_menu();
+        context->ItemClick("**/Revert");
+        IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+        context->SetRef("ggui action");
+        context->ItemClick("Cancel");
+        context->Yield(2);
+        for (const char* action : {"Track", "Untrack", "Move to active commit", "Delete files"})
+        {
+            open_selection_menu();
+            context->ItemClick((std::string("**/") + action).c_str());
+            context->Yield(2);
+            if (ActionDialogOpen())
+            {
+                context->SetRef("ggui action");
+                context->ItemClick("Cancel");
+                context->Yield(2);
+            }
+        }
+        // A right-click outside the selection selects that file alone.
+        context->SetRef("Changes");
+        context->ItemClick("**/A  added.txt", ImGuiMouseButton_Right);
+        context->Yield();
+        IM_CHECK(application.SelectedFilesForTest() == Files{"added.txt"});
+        context->KeyPress(ImGuiKey_Escape);
+        // Keyboard: Shift+Down extends and Ctrl+A selects every listed file.
+        FocusWindow(context, "Changes");
+        context->KeyPress(ImGuiMod_Shift | ImGuiKey_DownArrow);
+        IM_CHECK(application.SelectedFilesForTest() == (Files{"added.txt", "deleted.txt"}));
+        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_A);
+        IM_CHECK_GE(application.SelectedFilesForTest().size(), 5U);
+        context->KeyPress(ImGuiKey_DownArrow);
+        IM_CHECK_EQ(application.SelectedFilesForTest().size(), 1U);
+
         application.SelectRevisionForTest("right");
         DiffResult right_diff{1000, "right", "modified.txt", "old\n", "new\n", false, RichSnapshot().status};
         right_diff.patch = "right patch\n";

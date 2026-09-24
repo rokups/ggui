@@ -463,13 +463,14 @@ void Application::RequestBranchDelete(const std::string& name, bool local, std::
         _pending_branch_delete = {name, local, std::move(remotes)};
 }
 
-void Application::RequestRevertWorkingFile(const StatusEntry& file)
+void Application::RequestWorkingFiles(std::vector<StatusEntry> files, bool remove)
 {
-    OpenDialog(Dialog::ConfirmRevertWorkingFile);
-    if (_dialog != Dialog::ConfirmRevertWorkingFile)
+    OpenDialog(Dialog::ConfirmWorkingFiles);
+    if (_dialog != Dialog::ConfirmWorkingFiles)
         return;
-    _pending_revert_file = {_diff.revision, file.old_path, file.path, {}};
-    _pending_revert_deletes = file.status == GIT_DELTA_ADDED || file.status == GIT_DELTA_UNTRACKED;
+    _pending_working_revision = _diff.revision;
+    _pending_working_files = std::move(files);
+    _pending_working_delete = remove;
 }
 
 void Application::CreateChange(const std::string& parent, bool detach)
@@ -941,8 +942,8 @@ bool Application::CanSubmitDialog() const
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::ConfirmBranchDelete:
         return _snapshot != nullptr && (_pending_branch_delete.local || !_pending_branch_delete.remotes.empty());
-    case Dialog::ConfirmRevertWorkingFile:
-        return _snapshot != nullptr && !_pending_revert_file.path.empty();
+    case Dialog::ConfirmWorkingFiles:
+        return _snapshot != nullptr && !_pending_working_files.empty();
     case Dialog::Rebase:
         return HasText(_input_primary) && _snapshot != nullptr
             && _snapshot->generation == _dialog_snapshot_generation
@@ -1018,6 +1019,14 @@ std::string_view Application::DropTooltip(DropAction action, bool entire_branch,
 }
 
 void Application::SelectFile(const std::string& path)
+{
+    _selected_files = {path};
+    _selected_files_revision = _diff.revision;
+    _file_selection_anchor = path;
+    FocusFile(path);
+}
+
+void Application::FocusFile(const std::string& path)
 {
     _selected_file = path;
     _preferred_file = path;
@@ -1136,12 +1145,95 @@ bool Application::CanNavigateChangedFile(int direction) const
     return direction < 0 ? selected != files.begin() : std::next(selected) != files.end();
 }
 
-void Application::NavigateChangedFile(int direction)
+std::vector<const StatusEntry*> Application::VisibleChangedFiles() const
 {
     std::vector<const StatusEntry*> files;
     for (const StatusEntry& file : _diff.files)
         if (FileMatchesFilter(file))
             files.push_back(&file);
+    return files;
+}
+
+bool Application::IsChangedFileSelected(const std::string& path) const
+{
+    const bool multiple = SameDiffRevision(_selected_files_revision, _diff.revision)
+        && std::ranges::contains(_selected_files, _selected_file);
+    return multiple ? std::ranges::contains(_selected_files, path) : path == _selected_file;
+}
+
+std::vector<const StatusEntry*> Application::SelectedChangedFiles() const
+{
+    std::vector<const StatusEntry*> result;
+    for (const StatusEntry& file : _diff.files)
+        if (IsChangedFileSelected(file.path))
+            result.push_back(&file);
+    return result;
+}
+
+void Application::ClickChangedFile(const std::string& path, bool toggle, bool range)
+{
+    const std::vector<const StatusEntry*> visible = VisibleChangedFiles();
+    const auto position = [&](const std::string& value) {
+        return std::ranges::find(visible, value, &StatusEntry::path);
+    };
+    std::vector<std::string> selection;
+    for (const StatusEntry* file : SelectedChangedFiles())
+        selection.push_back(file->path);
+    if (range && position(_file_selection_anchor) != visible.end() && position(path) != visible.end())
+    {
+        auto first = position(_file_selection_anchor);
+        auto last = position(path);
+        if (last < first)
+            std::swap(first, last);
+        if (!toggle)
+            selection.clear();
+        for (auto file = first; file <= last; ++file)
+            if (!std::ranges::contains(selection, (*file)->path))
+                selection.push_back((*file)->path);
+    }
+    else if (toggle)
+    {
+        _file_selection_anchor = path;
+        if (const auto selected = std::ranges::find(selection, path); selected == selection.end())
+            selection.push_back(path);
+        else if (selection.size() > 1)
+        {
+            selection.erase(selected);
+            _selected_files = selection;
+            _selected_files_revision = _diff.revision;
+            // Removing the focused file shows another selected one.
+            if (path == _selected_file)
+                FocusFile(selection.back());
+            return;
+        }
+    }
+    else
+    {
+        SelectFile(path);
+        return;
+    }
+    _selected_files = std::move(selection);
+    _selected_files_revision = _diff.revision;
+    if (path != _selected_file)
+        FocusFile(path);
+}
+
+void Application::SelectAllChangedFiles()
+{
+    const std::vector<const StatusEntry*> visible = VisibleChangedFiles();
+    if (visible.empty())
+        return;
+    _selected_files.clear();
+    for (const StatusEntry* file : visible)
+        _selected_files.push_back(file->path);
+    _selected_files_revision = _diff.revision;
+    if (!std::ranges::contains(_selected_files, _selected_file))
+        FocusFile(_selected_files.front());
+}
+
+void Application::NavigateChangedFile(int direction, bool extend)
+{
+    const std::vector<const StatusEntry*> files = VisibleChangedFiles();
     if (files.empty())
         return;
     auto selected = std::ranges::find_if(files,
@@ -1154,7 +1246,10 @@ void Application::NavigateChangedFile(int direction)
         ++selected;
     else
         return;
-    SelectFile((*selected)->path);
+    if (extend)
+        ClickChangedFile((*selected)->path, false, true);
+    else
+        SelectFile((*selected)->path);
 }
 
 std::optional<std::filesystem::path> Application::WorkingCopyPath(

@@ -26,7 +26,7 @@ namespace
 struct FileDropPayload
 {
     std::string source;
-    std::string path;
+    std::vector<std::string> paths;
 };
 
 std::optional<std::string> ParseChangeDropPayload(const ImGuiPayload& payload)
@@ -41,9 +41,10 @@ std::optional<std::string> ParseChangeDropPayload(const ImGuiPayload& payload)
     return std::string(begin, terminator);
 }
 
-// ChangesPanel emits two NUL-terminated strings. Validate both boundaries
-// before constructing strings so malformed external payloads cannot turn into
-// an arbitrary fileset or an out-of-bounds read.
+// ChangesPanel emits NUL-terminated strings: the source change, then one or
+// more paths. Validate every boundary before constructing strings so
+// malformed external payloads cannot turn into an arbitrary fileset or an
+// out-of-bounds read.
 std::optional<FileDropPayload> ParseFileDropPayload(const ImGuiPayload& payload)
 {
     if (payload.Data == nullptr || payload.DataSize < 2)
@@ -53,11 +54,18 @@ std::optional<FileDropPayload> ParseFileDropPayload(const ImGuiPayload& payload)
     const char* source_end = std::find(begin, end, '\0');
     if (source_end == end || source_end == begin)
         return std::nullopt;
-    const char* path_begin = source_end + 1;
-    const char* path_end = std::find(path_begin, end, '\0');
-    if (path_end == end || path_end == path_begin)
+    FileDropPayload result{std::string(begin, source_end), {}};
+    for (const char* path_begin = source_end + 1; path_begin != end;)
+    {
+        const char* path_end = std::find(path_begin, end, '\0');
+        if (path_end == end || path_end == path_begin)
+            return std::nullopt;
+        result.paths.emplace_back(path_begin, path_end);
+        path_begin = path_end + 1;
+    }
+    if (result.paths.empty())
         return std::nullopt;
-    return FileDropPayload{std::string(begin, source_end), std::string(path_begin, path_end)};
+    return result;
 }
 
 } // namespace
@@ -677,7 +685,8 @@ void Application::RenderHistory()
                     if (_compare_to.empty() && file.has_value() && file->source != revision.oid)
                     {
                         hovered_file_drop = true;
-                        RenderRevisionTooltip("Move file to change", revision.oid);
+                        RenderRevisionTooltip(file->paths.size() == 1 ? "Move file to change"
+                                : "Move files to change", revision.oid);
                     }
                 }
                 else if (dragging != nullptr && dragging->IsDataType("GGUI_CHANGE"))
@@ -723,9 +732,9 @@ void Application::RenderHistory()
                     {
                         const std::optional<FileDropPayload> file = ParseFileDropPayload(*payload);
                         if (file.has_value() && file->source != revision.oid)
-                            QueueCommands({MoveFiles{file->source, revision.oid, {file->path}}},
+                            QueueCommands({MoveFiles{file->source, revision.oid, file->paths}},
                                 {file->source, revision.oid},
-                                "Moving this file will rewrite a locked source or destination commit.");
+                                "Moving these files will rewrite a locked source or destination commit.");
                     }
                 }
                 if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_CHANGE"))

@@ -167,7 +167,13 @@ revert.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
 navigation respects the active Changes filter and stops at the first and last
-matching file. Repository, workspace, file, history, and branch context
+matching file. The Changes list supports multi-selection: Ctrl-click toggles a
+file, Shift-click or Shift+Up/Down selects a range, and Ctrl+A selects every
+listed file, while Diff shows the file clicked last. Right-clicking the
+selection copies names or paths, reverts, moves to the parent or child, tracks,
+untracks, or deletes all of its files; dragging a selected file onto History
+moves the whole selection, and Split and Restore start from it. Reverting
+Working tree files or deleting several files asks for confirmation first. Repository, workspace, file, history, and branch context
 menus provide portable open, copy, and rename actions. **Ctrl+W** closes the
 current repository without changing it and returns to the recent-repository
 welcome screen.

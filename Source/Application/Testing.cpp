@@ -117,6 +117,19 @@ const std::string& Application::ActiveOperationForTest() const
     return _active_operation;
 }
 
+std::vector<std::string> Application::SelectedFilesForTest() const
+{
+    std::vector<std::string> result;
+    for (const StatusEntry* file : SelectedChangedFiles())
+        result.push_back(file->path);
+    return result;
+}
+
+const std::string& Application::FocusedFileForTest() const
+{
+    return _selected_file;
+}
+
 void Application::RequestBlameForTest(const std::string& revision, const std::string& path)
 {
     RequestBlame(revision, path);

@@ -110,6 +110,8 @@ public:
     std::size_t RenderedHistoryRowsForTest() const;
     const std::string& ActiveOperationForTest() const;
     void RequestBlameForTest(const std::string& revision, const std::string& path);
+    std::vector<std::string> SelectedFilesForTest() const;
+    const std::string& FocusedFileForTest() const;
     std::pair<std::string, std::string> BlameLocationForTest() const;
     const std::string& ErrorMessageForTest() const;
     void CreateChangeForTest(const std::string& parent);
@@ -144,7 +146,7 @@ private:
         ConfirmLocked,
         ConfirmBranchMove,
         ConfirmBranchDelete,
-        ConfirmRevertWorkingFile,
+        ConfirmWorkingFiles,
     };
 
     enum class DropAction
@@ -232,7 +234,17 @@ private:
     std::size_t OperationPrefix(const std::string& oid) const;
     void RevealRevision(const std::string& oid);
     void SelectRevision(const std::string& oid, bool additive = false);
+    // Selects one file, replacing any multi-selection.
     void SelectFile(const std::string& path);
+    // Shows a file in Diff without changing the multi-selection.
+    void FocusFile(const std::string& path);
+    // Applies a click in the Changes list: Ctrl toggles, Shift selects a range.
+    void ClickChangedFile(const std::string& path, bool toggle, bool range);
+    void SelectAllChangedFiles();
+    bool IsChangedFileSelected(const std::string& path) const;
+    // Selected files in list order; the focused file alone without a selection.
+    std::vector<const StatusEntry*> SelectedChangedFiles() const;
+    std::vector<const StatusEntry*> VisibleChangedFiles() const;
     void RequestDiff(bool fallback_to_first);
     // Opens a blame view and records it in the Back/Forward history.
     void RequestBlame(const std::string& revision, const std::string& path);
@@ -248,7 +260,8 @@ private:
     std::pair<std::string, std::string> AdjacentRevisions(const std::string& revision) const;
     bool FileMatchesFilter(const StatusEntry& file) const;
     bool CanNavigateChangedFile(int direction) const;
-    void NavigateChangedFile(int direction);
+    // Moves the focused file; extend grows the selection from its anchor.
+    void NavigateChangedFile(int direction, bool extend = false);
     static std::optional<std::filesystem::path> WorkingCopyPath(
         const std::string& root, const std::string& relative);
     void OpenFileInEditor(const std::string& path);
@@ -272,7 +285,9 @@ private:
     std::vector<RemoteBranchDelete> RemoteBranchesAt(
         const std::vector<std::string>& revisions) const;
     void RequestBranchDelete(const std::string& name, bool local, std::vector<std::string> remotes);
-    void RequestRevertWorkingFile(const StatusEntry& file);
+    // Asks before reverting or deleting working-tree files, which discards
+    // edits that no operation records.
+    void RequestWorkingFiles(std::vector<StatusEntry> files, bool remove);
     void MoveBranch(const NamedRef& branch, const std::string& revision);
     // Alt+N (detach) never advances a branch; HEAD detaches at the new change.
     void CreateChange(const std::string& parent = {}, bool detach = false);
@@ -350,6 +365,12 @@ private:
     std::vector<std::string> _selected_revisions;
     std::string _selected_file;
     std::string _preferred_file;
+    // Changes multi-selection. _selected_file is the focused file shown in
+    // Diff; the selection applies only while it holds that file and belongs
+    // to the listed change.
+    std::vector<std::string> _selected_files;
+    std::string _selected_files_revision;
+    std::string _file_selection_anchor;
     std::string _pending_revision;
     std::string _pending_editor_revision;
     std::string _pending_editor_path;
@@ -391,10 +412,10 @@ private:
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
     PendingBranchDelete _pending_branch_delete;
-    // Reverting a working-tree file discards edits that no operation
-    // records, so it is confirmed first.
-    RevertFile _pending_revert_file;
-    bool _pending_revert_deletes = false;
+    // Files awaiting the working-tree revert or delete confirmation.
+    std::string _pending_working_revision;
+    std::vector<StatusEntry> _pending_working_files;
+    bool _pending_working_delete = false;
     bool _open_drop_actions = false;
     bool _open_save_patch = false;
     bool _open_apply_patch = false;

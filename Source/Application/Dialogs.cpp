@@ -72,7 +72,14 @@ void Application::OpenDialog(Dialog dialog)
         }
     }
     if (dialog == Dialog::Split || dialog == Dialog::Restore)
-        _input_filesets = _selected_file;
+    {
+        // Start from the files selected in Changes, one fileset per line.
+        _input_filesets.clear();
+        for (const StatusEntry* file : SelectedChangedFiles())
+            _input_filesets += (_input_filesets.empty() ? "" : "\n") + file->path;
+        if (_input_filesets.empty())
+            _input_filesets = _selected_file;
+    }
     if (dialog == Dialog::Rebase && _snapshot != nullptr)
     {
         _input_secondary = CurrentCommit(*_snapshot);
@@ -184,7 +191,7 @@ void Application::RenderDialogs()
         "Confirm operation###ggui action",
         "Locked commit warning###ggui action",
         "Force branch move###ggui action", "Delete branch###ggui action",
-        "Revert file###ggui action"};
+        "Revert files###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
@@ -201,7 +208,8 @@ void Application::RenderDialogs()
     };
     bool open = true;
     if (!ImGui::BeginPopupModal(
-            popup_titles[static_cast<std::size_t>(_dialog)], &open, ImGuiWindowFlags_AlwaysAutoResize))
+            _dialog == Dialog::ConfirmWorkingFiles && _pending_working_delete ? "Delete files###ggui action"
+                : popup_titles[static_cast<std::size_t>(_dialog)], &open, ImGuiWindowFlags_AlwaysAutoResize))
     {
         if (!open) close_dialog();
         return;
@@ -474,15 +482,39 @@ void Application::RenderDialogs()
         if (!_pending_branch_delete.remotes.empty())
             ImGui::TextWrapped("Deleting a remote branch cannot be undone here.");
         break;
-    case Dialog::ConfirmRevertWorkingFile:
-        ImGui::Text("File: %s", _pending_revert_file.path.c_str());
-        if (!_pending_revert_file.old_path.empty() && _pending_revert_file.old_path != _pending_revert_file.path)
-            ImGui::TextDisabled("Renamed from %s", _pending_revert_file.old_path.c_str());
-        ImGui::TextWrapped(_pending_revert_deletes
-                ? "The file is not in @, so reverting deletes it from disk."
-                : "Uncommitted changes to this file are discarded and it is restored as it is in @.");
+    case Dialog::ConfirmWorkingFiles:
+    {
+        // Name every file up to a limit, so a large selection stays readable.
+        constexpr std::size_t kListedFiles = 12;
+        std::size_t new_files = 0;
+        for (std::size_t index = 0; index < _pending_working_files.size(); ++index)
+        {
+            const StatusEntry& file = _pending_working_files[index];
+            const bool added = file.status == GIT_DELTA_ADDED || file.status == GIT_DELTA_UNTRACKED;
+            new_files += added ? 1 : 0;
+            if (index >= kListedFiles)
+                continue;
+            if (!file.old_path.empty() && file.old_path != file.path)
+                ImGui::BulletText("%s (renamed from %s)", file.path.c_str(), file.old_path.c_str());
+            else
+                ImGui::BulletText("%s", file.path.c_str());
+        }
+        if (_pending_working_files.size() > kListedFiles)
+            ImGui::TextDisabled("and %zu more", _pending_working_files.size() - kListedFiles);
+        if (_pending_working_delete)
+            ImGui::TextWrapped(_pending_working_files.size() == 1 ? "The file is deleted from disk."
+                                                                  : "These files are deleted from disk.");
+        else if (new_files == _pending_working_files.size())
+            ImGui::TextWrapped(new_files == 1 ? "The file is not in @, so reverting deletes it from disk."
+                                              : "These files are not in @, so reverting deletes them from disk.");
+        else
+            ImGui::TextWrapped(_pending_working_files.size() == 1
+                    ? "Uncommitted changes to this file are discarded and it is restored as it is in @."
+                    : "Uncommitted changes to these files are discarded and they are restored as they are in @."
+                      " Files that are not in @ are deleted.");
         ImGui::TextWrapped("Uncommitted changes are not recorded in the operation log, so this cannot be undone.");
         break;
+    }
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
@@ -513,7 +545,7 @@ void Application::RenderDialogs()
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
         || _dialog == Dialog::ConfirmBranchMove || _dialog == Dialog::ConfirmBranchDelete
-        || _dialog == Dialog::WorkspaceRemove || _dialog == Dialog::ConfirmRevertWorkingFile;
+        || _dialog == Dialog::WorkspaceRemove || _dialog == Dialog::ConfirmWorkingFiles;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
@@ -521,7 +553,7 @@ void Application::RenderDialogs()
         : _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::WorkspaceRemove ? "Remove"
         : _dialog == Dialog::ConfirmBranchDelete ? "Delete"
-        : _dialog == Dialog::ConfirmRevertWorkingFile ? "Revert"
+        : _dialog == Dialog::ConfirmWorkingFiles ? (_pending_working_delete ? "Delete" : "Revert")
         : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmBranchMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
@@ -529,7 +561,7 @@ void Application::RenderDialogs()
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
         || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBranchMove
         || _dialog == Dialog::ConfirmBranchDelete || _dialog == Dialog::WorkspaceRemove
-        || _dialog == Dialog::ConfirmRevertWorkingFile;
+        || _dialog == Dialog::ConfirmWorkingFiles;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -672,10 +704,22 @@ void Application::SubmitDialog()
         _pending_branch_delete = {};
         break;
     }
-    case Dialog::ConfirmRevertWorkingFile:
-        EnqueueAction(std::move(_pending_revert_file));
-        _pending_revert_file = {};
+    case Dialog::ConfirmWorkingFiles:
+    {
+        std::vector<Command> commands;
+        for (const StatusEntry& file : _pending_working_files)
+        {
+            if (_pending_working_delete)
+                commands.emplace_back(DeleteFile{file.path});
+            else
+                commands.emplace_back(RevertFile{_pending_working_revision, file.old_path, file.path, {}});
+        }
+        if (EnqueueAction(std::move(commands.front())))
+            for (Command& command : commands | std::views::drop(1))
+                _engine.Enqueue(std::move(command));
+        _pending_working_files.clear();
         break;
+    }
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }
     _dialog = Dialog::None;
