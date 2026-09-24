@@ -183,7 +183,8 @@ void Application::RenderDialogs()
         "Reconcile branch###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action",
         "Locked commit warning###ggui action",
-        "Force branch move###ggui action", "Delete branch###ggui action"};
+        "Force branch move###ggui action", "Delete branch###ggui action",
+        "Revert file###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
@@ -473,6 +474,15 @@ void Application::RenderDialogs()
         if (!_pending_branch_delete.remotes.empty())
             ImGui::TextWrapped("Deleting a remote branch cannot be undone here.");
         break;
+    case Dialog::ConfirmRevertWorkingFile:
+        ImGui::Text("File: %s", _pending_revert_file.path.c_str());
+        if (!_pending_revert_file.old_path.empty() && _pending_revert_file.old_path != _pending_revert_file.path)
+            ImGui::TextDisabled("Renamed from %s", _pending_revert_file.old_path.c_str());
+        ImGui::TextWrapped(_pending_revert_deletes
+                ? "The file is not in @, so reverting deletes it from disk."
+                : "Uncommitted changes to this file are discarded and it is restored as it is in @.");
+        ImGui::TextWrapped("Uncommitted changes are not recorded in the operation log, so this cannot be undone.");
+        break;
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
 
@@ -503,7 +513,7 @@ void Application::RenderDialogs()
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
         || _dialog == Dialog::ConfirmBranchMove || _dialog == Dialog::ConfirmBranchDelete
-        || _dialog == Dialog::WorkspaceRemove;
+        || _dialog == Dialog::WorkspaceRemove || _dialog == Dialog::ConfirmRevertWorkingFile;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
     ImGui::BeginDisabled(operation_blocks_submit || !can_submit);
@@ -511,13 +521,15 @@ void Application::RenderDialogs()
         : _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::WorkspaceRemove ? "Remove"
         : _dialog == Dialog::ConfirmBranchDelete ? "Delete"
+        : _dialog == Dialog::ConfirmRevertWorkingFile ? "Revert"
         : _dialog == Dialog::Reconcile ? "Reconcile"
         : _dialog == Dialog::ConfirmBranchMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
         || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBranchMove
-        || _dialog == Dialog::ConfirmBranchDelete || _dialog == Dialog::WorkspaceRemove;
+        || _dialog == Dialog::ConfirmBranchDelete || _dialog == Dialog::WorkspaceRemove
+        || _dialog == Dialog::ConfirmRevertWorkingFile;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -660,6 +672,10 @@ void Application::SubmitDialog()
         _pending_branch_delete = {};
         break;
     }
+    case Dialog::ConfirmRevertWorkingFile:
+        EnqueueAction(std::move(_pending_revert_file));
+        _pending_revert_file = {};
+        break;
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None
     }
     _dialog = Dialog::None;

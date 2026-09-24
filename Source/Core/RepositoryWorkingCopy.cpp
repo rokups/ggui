@@ -389,6 +389,11 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
     Sync();
     if (command.source.empty() || command.path.empty())
         throw std::runtime_error("revert file requires a source change and path");
+    if (IsWorkingTreeRevision(command.source))
+    {
+        RevertWorkingTreeFile(command);
+        return;
+    }
 
     git_oid source_oid{};
     Check(gg_repository_resolve(&source_oid, gg, command.source.c_str()), "resolve file revert source");
@@ -474,6 +479,36 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
     Check(git_apply(git.get(), diff.get(), GIT_APPLY_LOCATION_WORKDIR,
               selected_hunks.empty() ? nullptr : &apply_options),
         "apply inverse file diff");
+    Sync();
+    PublishWorktreeChanges(paths, false);
+}
+
+void RepositoryEngine::Impl::RevertWorkingTreeFile(const RevertFile& command)
+{
+    if (!command.lines.empty())
+        throw std::runtime_error("working-tree lines cannot be reverted individually");
+    // Restore the file (and a rename's old path) as it is in @. Paths that
+    // are not in @ are new in the working tree and are removed.
+    const git_oid active_oid = ResolveActiveCommit(git.get());
+    git_commit* raw_active = nullptr;
+    Check(git_commit_lookup(&raw_active, git.get(), &active_oid), "load active commit");
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> active(raw_active, git_commit_free);
+    git_tree* raw_tree = nullptr;
+    Check(git_commit_tree(&raw_tree, active.get()), "load active commit tree");
+    std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
+
+    std::vector<std::string> paths{command.path};
+    if (!command.old_path.empty() && command.old_path != command.path)
+        paths.push_back(command.old_path);
+    std::vector<char*> pathspec;
+    for (std::string& path : paths)
+        pathspec.push_back(path.data());
+    git_checkout_options options = GIT_CHECKOUT_OPTIONS_INIT;
+    options.checkout_strategy = GIT_CHECKOUT_FORCE | GIT_CHECKOUT_REMOVE_UNTRACKED
+        | GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH;
+    options.paths = {pathspec.data(), pathspec.size()};
+    Check(git_checkout_tree(git.get(), reinterpret_cast<const git_object*>(tree.get()), &options),
+        "restore working-tree file");
     Sync();
     PublishWorktreeChanges(paths, false);
 }

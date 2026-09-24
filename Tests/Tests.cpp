@@ -2607,6 +2607,43 @@ TEST(RepositoryEngine, BlamesWorkingTreeFilesAgainstTheActiveCommit)
     EXPECT_TRUE(emptied->lines.empty());
 }
 
+TEST(RepositoryEngine, RevertsWorkingTreeFilesToTheActiveCommit)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.revisions.empty(); }), nullptr);
+    const auto read = [&](const char* name) {
+        std::ifstream input(repository.path / name);
+        return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+
+    // An edited file is restored as it is in @; an unrelated edit survives.
+    std::ofstream(repository.path / "tracked.txt") << "edited\n";
+    std::ofstream(repository.path / "new.txt") << "new\n";
+    engine.Enqueue(RevertFile{"working-tree:1", {}, "tracked.txt", {}});
+    EXPECT_TRUE(WaitForTerminal(engine, "revert file").finished);
+    EXPECT_EQ(read("tracked.txt"), "base\n");
+    EXPECT_TRUE(std::filesystem::exists(repository.path / "new.txt"));
+
+    // A file that is not in @ is removed.
+    engine.Enqueue(RevertFile{"working-tree:1", {}, "new.txt", {}});
+    EXPECT_TRUE(WaitForTerminal(engine, "revert file").finished);
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "new.txt"));
+
+    // A rename restores the old path and removes the new one.
+    std::filesystem::rename(repository.path / "tracked.txt", repository.path / "moved.txt");
+    engine.Enqueue(RevertFile{"working-tree:1", "tracked.txt", "moved.txt", {}});
+    EXPECT_TRUE(WaitForTerminal(engine, "revert file").finished);
+    EXPECT_EQ(read("tracked.txt"), "base\n");
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "moved.txt"));
+
+    engine.Enqueue(RevertFile{"working-tree:1", {}, "tracked.txt", {DiffLine{}}});
+    const TerminalEvent lines = WaitForTerminal(engine, "revert file");
+    EXPECT_FALSE(lines.finished);
+    EXPECT_NE(lines.message.find("individually"), std::string::npos);
+}
+
 TEST(RepositoryEngine, LoadsFileContentFromARevision)
 {
     TemporaryRepository repository;

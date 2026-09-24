@@ -463,6 +463,15 @@ void Application::RequestBranchDelete(const std::string& name, bool local, std::
         _pending_branch_delete = {name, local, std::move(remotes)};
 }
 
+void Application::RequestRevertWorkingFile(const StatusEntry& file)
+{
+    OpenDialog(Dialog::ConfirmRevertWorkingFile);
+    if (_dialog != Dialog::ConfirmRevertWorkingFile)
+        return;
+    _pending_revert_file = {_diff.revision, file.old_path, file.path, {}};
+    _pending_revert_deletes = file.status == GIT_DELTA_ADDED || file.status == GIT_DELTA_UNTRACKED;
+}
+
 void Application::CreateChange(const std::string& parent, bool detach)
 {
     if (!_active_operation.empty() || _snapshot == nullptr || IsWorkingTreeRevision(parent)
@@ -932,6 +941,8 @@ bool Application::CanSubmitDialog() const
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
     case Dialog::ConfirmBranchDelete:
         return _snapshot != nullptr && (_pending_branch_delete.local || !_pending_branch_delete.remotes.empty());
+    case Dialog::ConfirmRevertWorkingFile:
+        return _snapshot != nullptr && !_pending_revert_file.path.empty();
     case Dialog::Rebase:
         return HasText(_input_primary) && _snapshot != nullptr
             && _snapshot->generation == _dialog_snapshot_generation

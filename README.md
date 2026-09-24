@@ -127,7 +127,9 @@ application stay disabled until comparison mode is exited. The Diff context
 selector includes **Full** for displaying both complete file versions.
 Right-clicking a changed file can apply that change's inverse for the file to
 the active gg change while preserving later edits where the patch
-applies. Working-tree file menus can also delete the file from disk.
+applies. Reverting a Working tree file instead restores it as it is in `@`
+(removing it if it is new), after a confirmation because uncommitted edits
+cannot be undone. Working-tree file menus can also delete the file from disk.
 Changed-file and diff context menus can open the line-level **Blame** panel;
 the header identifies the exact file version (commit, author, date, and
 summary). The source is shown in the same read-only, syntax-highlighted editor

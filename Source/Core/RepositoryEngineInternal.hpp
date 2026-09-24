@@ -297,6 +297,7 @@ struct RepositoryEngine::Impl
     void ApplyPatchText(const ApplyPatch& command);
     void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);
+    void RevertWorkingTreeFile(const RevertFile& command);
     void DeleteWorkingFile(const DeleteFile& command);
     void MoveWorkingTreeFile(const MoveFiles& command);
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false);

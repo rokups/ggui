@@ -217,12 +217,19 @@ void Application::RenderChanges()
                 ImGui::EndMenu();
             }
             ImGui::Separator();
+            // A commit's file change is reverted by applying its inverse to the
+            // working tree; a working-tree file is restored as it is in @.
             ImGui::BeginDisabled(
                 actions_locked || comparison_active || _diff_loading || CurrentCommit(*_snapshot).empty()
-                    || IsWorkingTreeRevision(_diff.revision));
+                    || (working_tree_diff && file.conflicted));
             if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
-                QueueCommands({RevertFile{_diff.revision, file.old_path, file.path, {}}}, {"@"},
-                    "Reverting this file will rewrite the locked active commit.");
+            {
+                if (working_tree_diff)
+                    RequestRevertWorkingFile(file);
+                else
+                    QueueCommands({RevertFile{_diff.revision, file.old_path, file.path, {}}}, {"@"},
+                        "Reverting this file will rewrite the locked active commit.");
+            }
             ImGui::EndDisabled();
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked || comparison_active || move_child.empty());

@@ -144,6 +144,7 @@ private:
         ConfirmLocked,
         ConfirmBranchMove,
         ConfirmBranchDelete,
+        ConfirmRevertWorkingFile,
     };
 
     enum class DropAction
@@ -271,6 +272,7 @@ private:
     std::vector<RemoteBranchDelete> RemoteBranchesAt(
         const std::vector<std::string>& revisions) const;
     void RequestBranchDelete(const std::string& name, bool local, std::vector<std::string> remotes);
+    void RequestRevertWorkingFile(const StatusEntry& file);
     void MoveBranch(const NamedRef& branch, const std::string& revision);
     // Alt+N (detach) never advances a branch; HEAD detaches at the new change.
     void CreateChange(const std::string& parent = {}, bool detach = false);
@@ -389,6 +391,10 @@ private:
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
     PendingBranchDelete _pending_branch_delete;
+    // Reverting a working-tree file discards edits that no operation
+    // records, so it is confirmed first.
+    RevertFile _pending_revert_file;
+    bool _pending_revert_deletes = false;
     bool _open_drop_actions = false;
     bool _open_save_patch = false;
     bool _open_apply_patch = false;

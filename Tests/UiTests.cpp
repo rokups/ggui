@@ -3803,6 +3803,28 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemInfo("**/Move to parent").RectFull.Min.y);
         context->KeyPress(ImGuiKey_Escape);
 
+        // Working-tree files are blamed from disk against @. Reverting one
+        // discards unrecorded edits, so it is confirmed first.
+        const std::string working_tree = MakeWorkingTreeHistoryItem(
+            application.SnapshotForTest()->repository_generation, application.SnapshotForTest()->working_copy).id;
+        application.SelectRevisionForTest(working_tree);
+        application.ApplyEventForTest(DiffReady{DiffResult{1000, working_tree, "modified.txt", "old\n", "new\n",
+            false, RichSnapshot().status}});
+        context->Yield(2);
+        for (const char* choice : {"Cancel", "Revert"})
+        {
+            context->SetRef("Changes");
+            context->ItemClick("**/M  modified.txt", ImGuiMouseButton_Right);
+            context->Yield();
+            IM_CHECK((context->ItemInfo("**/Blame file").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+            IM_CHECK((context->ItemInfo("**/Revert").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+            context->ItemClick("**/Revert");
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            context->SetRef("ggui action");
+            context->ItemClick(choice);
+            context->Yield(2);
+        }
+
         application.SelectRevisionForTest("right");
         DiffResult right_diff{1000, "right", "modified.txt", "old\n", "new\n", false, RichSnapshot().status};
         right_diff.patch = "right patch\n";
