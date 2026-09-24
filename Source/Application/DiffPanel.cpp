@@ -340,6 +340,7 @@ void Application::RenderDiff()
     static bool dark_palette = !_dark_theme;
     static bool viewer_dirty = false;
     static float reveal_scroll_y = -1.0f;
+    static float diff_scroll_y = 0.0f;
     static std::vector<DiffRange> revealed_context;
     static std::vector<DiffLine> viewer_lines;
     static std::vector<DiffGap> viewer_gaps;
@@ -393,6 +394,10 @@ void Application::RenderDiff()
             for (const DiffLine& line : viewer_lines)
                 line_numbers.emplace_back(line.old_line + 1, line.new_line + 1);
             diff.SetLineNumbers(line_numbers);
+            // A reload of the same file, such as after it changed on disk,
+            // keeps the reader's place.
+            if (reveal_scroll_y < 0.0f && !visit_changed && !options_changed)
+                reveal_scroll_y = diff_scroll_y;
             if (reveal_scroll_y >= 0.0f)
             {
                 diff.PreserveScrollY(reveal_scroll_y);
@@ -688,6 +693,7 @@ void Application::RenderDiff()
         diff.Render("##diff view", available, true);
         ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
         IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
+        diff_scroll_y = view_window->Scroll.y;
         const float line_height = std::max(diff.GetLineHeight(), 1.0f);
         const int edge = std::max(_diff_context_lines, 1);
         const bool reveal_all_modifier = ImGui::GetIO().KeyShift;

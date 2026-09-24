@@ -47,7 +47,9 @@ void Application::RenderChanges()
     const std::string move_parent = working_tree_diff ? CurrentCommit(*_snapshot) : parent;
     const std::string move_child = active_commit_diff
         ? "working-tree:" + std::to_string(_snapshot->repository_generation) : child;
-    if (_diff_loading && !_pending_revision.empty())
+    // Reloads of the listed change (such as working-tree updates) keep the
+    // current list and count on screen.
+    if (_diff_loading && !_pending_revision.empty() && !SameDiffRevision(_diff.revision, _selected_revision))
         ImGui::TextDisabled("Loading selected change...");
     else if (IsWorkingTreeRevision(_selected_revision) && !working_tree_diff && !_diff_loading)
         ImGui::TextDisabled("Working tree not scanned. Refresh (F5) to load its changes.");

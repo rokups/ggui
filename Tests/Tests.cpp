@@ -892,39 +892,57 @@ TEST(RepositoryEngine, IncrementalRefreshUpdatesOnlyTouchedStatusPaths)
     EXPECT_NE(std::ranges::find(added->status, "untracked-dir/nested.txt", &StatusEntry::path), added->status.end());
 }
 
-TEST(RepositoryEngine, MarksNewTopLevelDirectoriesStaleUntilExplicitRefresh)
+TEST(RepositoryEngine, KeepsWorkingTreeStatusCurrentWithoutExplicitRefresh)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
-    const auto opened = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
-        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Unscanned;
-    });
-    ASSERT_NE(opened, nullptr);
-    engine.Enqueue(Refresh{true, {}, true});
-    const auto scanned = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > opened->generation
-            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    // Opening scans the working tree in the background.
+    const auto scanned = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return !snapshot.root.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
     });
     ASSERT_NE(scanned, nullptr);
+    EXPECT_TRUE(scanned->status.empty());
 
+    // A new directory is queried as a subtree and listed without a refresh.
     std::filesystem::create_directories(repository.path / "new-directory");
     std::ofstream(repository.path / "new-directory" / "file.txt") << "new\n";
-    const auto stale = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > scanned->generation
-            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Stale;
+    const auto added = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return std::ranges::contains(snapshot.status, "new-directory/file.txt", &StatusEntry::path);
     });
-    ASSERT_NE(stale, nullptr);
-    EXPECT_TRUE(stale->status.empty());
-    engine.Enqueue(Refresh{true, {}, true});
-    const auto refreshed = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > stale->generation
-            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
-    });
-    ASSERT_NE(refreshed, nullptr);
-    const auto file = std::ranges::find(refreshed->status, "new-directory/file.txt", &StatusEntry::path);
-    ASSERT_NE(file, refreshed->status.end());
+    ASSERT_NE(added, nullptr);
+    EXPECT_EQ(added->worktree_state, RepoSnapshot::WorktreeState::Ready);
+    const auto file = std::ranges::find(added->status, "new-directory/file.txt", &StatusEntry::path);
     EXPECT_EQ(file->status, GIT_DELTA_UNTRACKED);
+
+    // Edits and removals are picked up the same way.
+    std::ofstream(repository.path / "tracked.txt") << "edited\n";
+    ASSERT_NE(WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return std::ranges::contains(snapshot.status, "tracked.txt", &StatusEntry::path);
+    }), nullptr);
+
+    // With current status, a working-tree diff lists it and reads only the
+    // selected file.
+    engine.Enqueue(LoadDiff{"working-tree:1", "tracked.txt"});
+    const auto diff = WaitForDiff(engine);
+    ASSERT_TRUE(diff.has_value());
+    EXPECT_EQ(diff->path, "tracked.txt");
+    EXPECT_EQ(diff->after, "edited\n");
+    EXPECT_EQ(diff->selected_status, GIT_DELTA_MODIFIED);
+    ASSERT_EQ(diff->files.size(), 2U);
+    EXPECT_EQ(diff->files[0].path, "new-directory/file.txt");
+    EXPECT_EQ(diff->files[1].path, "tracked.txt");
+    engine.Enqueue(LoadDiff{"working-tree:1", "gone.txt", true});
+    const auto fallback = WaitForDiff(engine);
+    ASSERT_TRUE(fallback.has_value());
+    EXPECT_EQ(fallback->path, "new-directory/file.txt");
+    EXPECT_EQ(fallback->after, "new\n");
+
+    std::filesystem::remove_all(repository.path / "new-directory");
+    std::ofstream(repository.path / "tracked.txt") << "base\n";
+    ASSERT_NE(WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.status.empty() && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    }), nullptr);
 }
 
 TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)

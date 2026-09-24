@@ -297,12 +297,6 @@ void RepositoryEngine::Impl::InvalidateWorktreeStatus()
     worktree_status_stale = false;
 }
 
-void RepositoryEngine::Impl::MarkWorktreeStatusStale()
-{
-    if (worktree_ready)
-        worktree_status_stale = true;
-}
-
 void RepositoryEngine::Impl::PublishWorktreeChanges(
     const std::vector<std::string>& paths, bool history_changed)
 {

@@ -336,17 +336,13 @@ void RepositoryWatcher::handleFileAction(efsw::WatchID, const std::string& direc
         const auto remember = [&](const std::filesystem::path& value)
         {
             const auto relative = value.lexically_normal().lexically_relative(_worktree);
-            if (relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+            if (relative.empty() || relative == "." || relative.is_absolute() || *relative.begin() == "..")
             {
                 _full_scan = true;
                 return;
             }
-            std::error_code error;
-            if (std::filesystem::is_directory(value, error))
-            {
-                _full_scan = true;
-                return;
-            }
+            // A directory path covers everything below it, so a directory
+            // event is a status query for that subtree, not a full scan.
             std::lock_guard lock(_changes_mutex);
             const std::string path = relative.generic_string();
             if (std::ranges::find(_changed_paths, path) == _changed_paths.end())

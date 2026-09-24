@@ -359,8 +359,9 @@ void RepositoryEngine::Impl::Execute(
         else if (const auto* value = std::get_if<Refresh>(&command))
         {
             // Git metadata adoption does not inspect the filesystem. An
-            // explicit refresh may build a complete status baseline; watcher
-            // events update known paths and mark broad/unknown changes stale.
+            // explicit refresh builds a complete status baseline; watcher
+            // events update known paths, and broad or unknown changes rescan
+            // in the background so the status never stays stale.
             if (!value->inspect_working_tree)
             {
                 Sync(false);
@@ -375,11 +376,7 @@ void RepositoryEngine::Impl::Execute(
             else if (!value->paths.empty() && worktree_ready && !worktree_status_stale)
                 PublishSnapshot(true, false, value->paths);
             else
-            {
-                if (value->paths.empty())
-                    MarkWorktreeStatusStale();
-                PublishSnapshot(false, false);
-            }
+                PublishSnapshot(true, false);
         }
         else if (std::holds_alternative<RebuildHistory>(command)
             || std::holds_alternative<ExpandHistoryRegion>(command))
@@ -1246,7 +1243,10 @@ void RepositoryEngine::Impl::Run()
         std::optional<QueuedCommand> command;
         {
             std::unique_lock lock(queue_mutex);
-            queue_cv.wait(lock, [this] { return stopping || !commands.empty() || watcher.Changed(); });
+            queue_cv.wait(lock, [this] {
+                return stopping || !commands.empty() || watcher.Changed()
+                    || (worktree_scan_requested && gg != nullptr && !test_commands_suppressed);
+            });
             if (stopping)
                 break;
             if (!commands.empty())
@@ -1269,15 +1269,16 @@ void RepositoryEngine::Impl::Run()
                 if (stopping) break;
                 if (!commands.empty()) continue;
             }
-            const RepositoryWatcher::Changes changes = watcher.ConsumeChanges();
-            if (changes.worktree || changes.metadata)
+            RepositoryWatcher::Changes changes = watcher.ConsumeChanges();
+            const bool scan = worktree_scan_requested.exchange(false);
+            if (changes.worktree || changes.metadata || scan)
             {
                 const std::uint64_t task = ++diagnostic_task;
                 const auto queued = DiagnosticNow();
                 TraceTaskQueued(task, "refresh", 0, topology_generation.load());
                 const std::uint64_t repository_generation = topology_generation.load();
-                Execute(Refresh{changes.worktree,
-                    changes.full_scan ? std::vector<std::string>{} : std::move(changes.paths)}, task,
+                Execute(Refresh{changes.worktree || scan,
+                    changes.full_scan || scan ? std::vector<std::string>{} : std::move(changes.paths)}, task,
                     repository_generation, queued);
             }
         }

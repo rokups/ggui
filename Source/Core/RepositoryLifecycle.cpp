@@ -74,6 +74,7 @@ void RepositoryEngine::Impl::Close()
         gg_repository_free(gg);
     gg = nullptr;
     git.reset();
+    worktree_scan_requested = false;
     cached_status.clear();
     worktree_ready = false;
     worktree_status_stale = false;
@@ -227,6 +228,9 @@ void RepositoryEngine::Impl::Attach(GitRepositoryPtr repository)
 
         auto initial = ReadSnapshot(false);
         Post(SnapshotReady{std::move(initial)});
+        // Read working-tree status in the background once the repository is
+        // shown, so changes are listed without an explicit refresh.
+        worktree_scan_requested = workdir != nullptr;
     }
     catch (...)
     {

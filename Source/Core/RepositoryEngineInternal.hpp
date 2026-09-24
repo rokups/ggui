@@ -246,6 +246,8 @@ struct RepositoryEngine::Impl
     std::vector<StatusEntry> cached_status;
     bool worktree_ready = false;
     bool worktree_status_stale = false;
+    // A background full status scan is due, such as after opening.
+    std::atomic_bool worktree_scan_requested = false;
 
     struct BackgroundActivityGuard
     {
@@ -284,7 +286,6 @@ struct RepositoryEngine::Impl
     void PublishSnapshot(bool include_worktree = false, bool history_changed = false,
         const std::vector<std::string>& status_paths = {});
     void InvalidateWorktreeStatus();
-    void MarkWorktreeStatusStale();
     void PublishWorktreeChanges(const std::vector<std::string>& paths, bool history_changed = true);
     void LoadPatch(const LoadDiff& command);
     void LoadFile(const LoadFileContent& command);

@@ -17,6 +17,7 @@
 #include <ranges>
 #include <stdexcept>
 #include <string>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -194,12 +195,46 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
         Check(git_diff_find_similar(value.get(), &find_options), "find renamed files");
         return value;
     };
+    // The engine keeps working-tree status current from watcher events. When
+    // it is, list those files and diff only the selected one instead of
+    // scanning the whole working tree for every reload.
+    std::optional<std::vector<StatusEntry>> known_status;
+    if (working_tree)
+    {
+        std::lock_guard lock(snapshot_mutex);
+        if (latest_snapshot != nullptr && latest_snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready)
+            known_status = latest_snapshot->status;
+    }
+    std::string selected_path = command.path;
+    std::vector<std::string> worktree_paths;
+    if (known_status.has_value())
+    {
+        std::ranges::sort(*known_status, {}, &StatusEntry::path);
+        const auto selected = std::ranges::find_if(*known_status, [&](const StatusEntry& file) {
+            return file.path == selected_path || file.old_path == selected_path;
+        });
+        if (selected == known_status->end() && command.fallback_to_first)
+            selected_path = known_status->empty() ? "" : known_status->front().path;
+        const auto entry = std::ranges::find(*known_status, selected_path, &StatusEntry::path);
+        if (!selected_path.empty())
+            worktree_paths.push_back(selected_path);
+        if (entry != known_status->end() && !entry->old_path.empty() && entry->old_path != selected_path)
+            worktree_paths.push_back(entry->old_path);
+    }
+    std::vector<char*> worktree_pathspec;
+    for (std::string& path : worktree_paths)
+        worktree_pathspec.push_back(path.data());
     const auto create_worktree_diff = [&](const git_diff_options* options) {
         git_diff_options worktree_options = GIT_DIFF_OPTIONS_INIT;
         if (options != nullptr)
             worktree_options = *options;
         worktree_options.flags |= GIT_DIFF_INCLUDE_UNTRACKED | GIT_DIFF_RECURSE_UNTRACKED_DIRS
             | GIT_DIFF_SHOW_UNTRACKED_CONTENT | GIT_DIFF_INCLUDE_TYPECHANGE;
+        if (known_status.has_value())
+        {
+            worktree_options.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
+            worktree_options.pathspec = {worktree_pathspec.data(), worktree_pathspec.size()};
+        }
         git_diff* raw_diff = nullptr;
         Check(git_diff_tree_to_workdir(&raw_diff, repository, old_tree.get(), &worktree_options),
             "create working-tree diff");
@@ -207,9 +242,13 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
         Check(git_diff_find_similar(value.get(), &find_options), "find working-tree renames");
         return value;
     };
-    std::unique_ptr<git_diff, decltype(&git_diff_free)> diff = working_tree
-        ? create_worktree_diff(nullptr)
-        : create_diff(content_old_tree, content_new_tree);
+    // With known status and no selected file there is nothing to diff; an
+    // empty pathspec would scan the whole working tree.
+    std::unique_ptr<git_diff, decltype(&git_diff_free)> diff = !working_tree
+        ? create_diff(content_old_tree, content_new_tree)
+        : known_status.has_value() && worktree_pathspec.empty()
+        ? std::unique_ptr<git_diff, decltype(&git_diff_free)>(nullptr, git_diff_free)
+        : create_worktree_diff(nullptr);
     std::unique_ptr<git_diff, decltype(&git_diff_free)> status_diff(nullptr, git_diff_free);
     git_diff* files_diff = diff.get();
     if (command.file_comparison)
@@ -217,10 +256,12 @@ void RepositoryEngine::Impl::LoadPatch(const LoadDiff& command, git_repository* 
         status_diff = working_tree ? create_worktree_diff(nullptr) : create_diff(old_tree.get(), new_tree.get());
         files_diff = status_diff.get();
     }
-    DiffResult result{snapshot_generation, command.revision, command.path, {}, {}, false, {}, command.compare_to,
+    DiffResult result{snapshot_generation, command.revision, selected_path, {}, {}, false, {}, command.compare_to,
         command.file_comparison};
     result.options = command.options;
-    for (size_t index = 0; index < git_diff_num_deltas(files_diff); ++index)
+    if (known_status.has_value())
+        result.files = std::move(*known_status);
+    for (size_t index = 0; !known_status.has_value() && index < git_diff_num_deltas(files_diff); ++index)
     {
         const git_diff_delta* delta = git_diff_get_delta(files_diff, index);
         const char* old_path = delta->old_file.path == nullptr ? "" : delta->old_file.path;

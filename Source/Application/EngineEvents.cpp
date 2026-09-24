@@ -41,6 +41,8 @@ void Application::ApplyEvent(Event event)
                     const std::string old_compare_to = _compare_to;
                     const std::vector<StatusEntry> old_status = _snapshot == nullptr
                         ? std::vector<StatusEntry>{} : _snapshot->status;
+                    const bool old_status_ready = _snapshot != nullptr
+                        && _snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready;
                     _snapshot = std::move(value.snapshot);
                     _history_refs_by_revision.clear();
                     for (std::size_t index = 0; index < _snapshot->refs.size(); ++index)
@@ -119,16 +121,20 @@ void Application::ApplyEvent(Event event)
                     }
                     if (IsWorkingTreeRevision(_selected_revision))
                     {
-                        // Working-tree diffs scan the filesystem, so snapshots
-                        // never start one for a tree that is unscanned or stale,
-                        // and a regenerated virtual ID keeps the loaded diff.
-                        // Explicit selection and foreground operations reload it.
+                        // Once status is current, working-tree diffs list it and
+                        // read only the selected file, so every status change
+                        // reloads the list at once. Snapshots never start a
+                        // diff for a tree that is unscanned, and a regenerated
+                        // virtual ID keeps the loaded diff.
                         if (!repository_changed && IsWorkingTreeRevision(old_selection))
                         {
-                            if (old_selection != _selected_revision || old_status != _snapshot->status)
-                                _working_tree_diff_outdated = true;
+                            const bool ready = _snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready;
                             if (IsWorkingTreeRevision(_diff.revision)) _diff.revision = _selected_revision;
                             if (IsWorkingTreeRevision(_pending_revision)) _pending_revision = _selected_revision;
+                            if (ready && (!old_status_ready || old_status != _snapshot->status))
+                                RequestDiff(true);
+                            else if (old_selection != _selected_revision || old_status != _snapshot->status)
+                                _working_tree_diff_outdated = true;
                         }
                         else if (_snapshot->worktree_state == RepoSnapshot::WorktreeState::Ready)
                             RequestDiff(true);
