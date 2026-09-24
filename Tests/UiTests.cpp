@@ -1083,8 +1083,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         repository.Git("update-ref refs/heads/feature " + feature_tip);
         repository.Git("update-ref refs/heads/other " + other_tip);
         repository.Git("update-ref refs/gg/visible-heads/" + feature_child + " " + feature_child);
-        repository.Git("checkout --detach " + main_tip);
-        repository.Git("update-ref refs/gg/workspaces/default " + main_child);
+        // @ is HEAD: a detached checkout above the main branch.
+        repository.Git("checkout --detach " + main_child);
         IM_CHECK(OpenNavigationRepository(context, repository));
         const auto wait_for_history = [&](std::vector<std::string> expected) {
             std::ranges::sort(expected);
@@ -1095,7 +1095,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             });
         };
         IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"main"});
-        IM_CHECK(wait_for_history({base, main_tip, main_child}));
+        // The unnamed head marked under refs/gg/visible-heads/ is shown whatever
+        // the selection; the unselected "other" branch is not.
+        IM_CHECK(wait_for_history({base, main_tip, main_child, feature_tip, feature_child}));
         FocusWindow(context, "Branches");
         ImGuiWindow* branches = ImGui::FindWindowByName("Branches");
         IM_CHECK_NE(branches, nullptr);
@@ -4703,16 +4705,18 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
         FocusWindow(context, "Blame");
         IM_CHECK(context->ItemExists("##blame view"));
-        const ImGuiTestItemInfo blame_view = context->ItemInfo("##blame view");
+        // The view moves as the header changes (such as for the Working tree),
+        // so look it up for every pointer position.
+        const auto blame_view_rect = [&] { return context->ItemInfo("//Blame/##blame view").RectFull; };
         const float blame_line_height = ImGui::GetTextLineHeightWithSpacing();
         const auto gutter = [&](int row, float x) {
-            return ImVec2(blame_view.RectFull.Min.x + x,
-                blame_view.RectFull.Min.y + ImGui::GetStyle().WindowPadding.y + (row + 0.5f) * blame_line_height);
+            const ImRect view = blame_view_rect();
+            return ImVec2(view.Min.x + x, view.Min.y + ImGui::GetStyle().WindowPadding.y + (row + 0.5f) * blame_line_height);
         };
         const auto commit_x = ImGui::CalcTextSize("#").x + 20.0f;
         if (std::getenv("GGUI_CAPTURE_MANUAL") != nullptr)
         {
-            context->MouseMoveToPos(gutter(2, blame_view.RectFull.GetWidth() * 0.8f));
+            context->MouseMoveToPos(gutter(2, blame_view_rect().GetWidth() * 0.8f));
             context->Yield(2);
             context->CaptureReset();
             IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
@@ -4733,7 +4737,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
 
         const auto open_blame_context = [&](int row) {
             FocusWindow(context, "Blame");
-            context->MouseMoveToPos(gutter(row, blame_view.RectFull.GetWidth() * 0.8f));
+            context->MouseMoveToPos(gutter(row, blame_view_rect().GetWidth() * 0.8f));
             context->MouseClick(ImGuiMouseButton_Right);
             context->Yield();
             context->SetRef("//$FOCUSED");
@@ -4794,7 +4798,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("###blame back");
         context->Yield();
         IM_CHECK(application.BlameLocationForTest() == Location("base", "old.txt"));
-        context->MouseMoveToPos(blame_view.RectFull.GetCenter());
+        // The view reloads between views; aim at the window instead.
+        context->MouseMoveToPos(ImGui::FindWindowByName("Blame")->Rect().GetCenter());
         context->MouseClick(3);
         context->Yield();
         IM_CHECK(application.BlameLocationForTest() == Location("middle", "file.txt"));

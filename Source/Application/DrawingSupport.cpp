@@ -194,8 +194,12 @@ bool HighlightedIdButton(std::string_view id, std::size_t unique_length, ImU32 p
     size.y += baseline * 2.0f;
     const std::string item_id(id);
     const bool clicked = ImGui::InvisibleButton(item_id.c_str(), size);
-    DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(ImGui::GetItemRectMin().x,
-        ImGui::GetItemRectMin().y + baseline), id, unique_length, prefix_color);
+    const ImVec2 text_position(ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y + baseline);
+    DrawHighlightedId(ImGui::GetWindowDrawList(), text_position, id, unique_length, prefix_color);
+    // Drawn text bypasses ImGui's text logging; log it so captures and
+    // copy-to-clipboard logging include the ID.
+    if (GImGui->LogEnabled)
+        ImGui::LogRenderedText(&text_position, id.data(), id.data() + shown);
     if (ImGui::IsItemHovered())
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     return clicked;

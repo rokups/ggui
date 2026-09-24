@@ -686,15 +686,22 @@ void Application::RenderToolbar()
                 _snapshot->head_branch.data() + _snapshot->head_branch.size());
         }
         ImGui::SameLine();
-        TextLabelledId(_snapshot->working_copy.empty() ? "HEAD " : "@ ", current_commit,
-            RevisionPrefix(current_commit), CommitIdColor(true));
-        ImGui::EndGroup();
-        ImGui::PopStyleColor();
+        ImGui::TextUnformatted(_snapshot->working_copy.empty() ? "HEAD " : "@ ");
+        ImGui::SameLine(0.0f, 0.0f);
+        // The ID reveals the active commit in History.
+        const bool reveal_current = HighlightedIdButton(current_commit, RevisionPrefix(current_commit),
+            CommitIdColor(true));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Reveal %s in History", current_commit.c_str());
         if (ImGui::BeginPopupContextItem("current commit ID context"))
         {
             IdCopyMenuItems("commit ID", current_commit, RevisionPrefix(current_commit));
             ImGui::EndPopup();
         }
+        ImGui::EndGroup();
+        ImGui::PopStyleColor();
+        if (reveal_current)
+            RevealRevision(current_commit);
     }
 
     // All repository work shares one status indicator. Interactive work gets
