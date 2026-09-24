@@ -4536,8 +4536,125 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         IM_CHECK(!context->ItemExists("**/Revert line"));
         IM_CHECK((context->ItemInfo("**/Blame file").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        context->ItemClick("**/Blame file");
+        context->Yield();
+
+        // Blame shows the file in a read-only editor with commit metadata in its gutter.
+        BlameResult blame;
+        blame.generation = 1000;
+        blame.revision = "middle";
+        blame.path = "file.txt";
+        blame.viewed_revision = {"middle", {"base"}, {"change-middle"}, "Middle", {}, 2, false, false, false};
+        const auto blame_line = [](std::size_t number, std::string revision, std::string contents) {
+            BlameLine line;
+            line.line = line.original_line = number;
+            line.revision = std::move(revision);
+            line.author = line.revision == "middle" ? "Alice" : "";
+            line.author_email = "alice@example.test";
+            line.timestamp = 1700000000;
+            line.summary = line.revision == "middle" ? "Middle change\n\nDetails" : "";
+            line.contents = std::move(contents);
+            if (line.revision == "middle")
+            {
+                line.blame_before_revision = "base";
+                line.blame_before_path = "file.txt";
+                line.previous_revision = "base";
+                line.previous_path = "old.txt";
+                line.previous_line = 7;
+                line.previous_author = "Bob";
+                line.previous_timestamp = 1600000000;
+                line.previous_summary = "Base change";
+            }
+            return line;
+        };
+        blame.lines = {blame_line(1, "middle", "zero\n"), blame_line(2, "middle", "new\n"),
+            blame_line(3, "", "same\n")};
+        blame.lines.back().boundary = true;
+        application.ApplyEventForTest(BlameReady{std::move(blame)});
+        context->Yield(3);
+        FocusWindow(context, "Blame");
+        IM_CHECK(context->ItemExists("##blame view"));
+        const ImGuiTestItemInfo blame_view = context->ItemInfo("##blame view");
+        const float blame_line_height = ImGui::GetTextLineHeightWithSpacing();
+        const auto gutter = [&](int row, float x) {
+            return ImVec2(blame_view.RectFull.Min.x + x,
+                blame_view.RectFull.Min.y + ImGui::GetStyle().WindowPadding.y + (row + 0.5f) * blame_line_height);
+        };
+        const auto commit_x = ImGui::CalcTextSize("#").x + 20.0f;
+        if (std::getenv("GGUI_CAPTURE_MANUAL") != nullptr)
+        {
+            context->MouseMoveToPos(gutter(2, blame_view.RectFull.GetWidth() * 0.8f));
+            context->Yield(2);
+            context->CaptureReset();
+            IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
+        }
+        context->MouseMoveToPos(gutter(0, commit_x));
+        context->Yield(2);
+        context->MouseClick(ImGuiMouseButton_Left);
+        context->Yield();
+
+        // Clicking a block's gutter selects its lines so they copy as source.
+        FocusWindow(context, "Blame");
+        context->MouseMoveToPos(gutter(1, commit_x));
+        context->MouseClick(ImGuiMouseButton_Left);
+        context->Yield();
+        context->KeyPress(ImGuiMod_Ctrl | ImGuiKey_C);
+        context->Yield();
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "zero\nnew\n");
+
+        const auto open_blame_context = [&](int row) {
+            FocusWindow(context, "Blame");
+            context->MouseMoveToPos(gutter(row, blame_view.RectFull.GetWidth() * 0.8f));
+            context->MouseClick(ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+        };
+        open_blame_context(1);
+        context->ItemClick("**/Copy change block");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "zero\nnew\n");
+        open_blame_context(1);
+        context->ItemClick("**/Copy");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "zero\nnew\n");
+        open_blame_context(1);
+        context->ItemClick("**/Copy source line");
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "new");
+        for (const char* action : {"Select change block", "Copy commit ID", "Reveal commit",
+                 "Copy prior commit ID", "Reveal originating commit"})
+        {
+            open_blame_context(0);
+            context->ItemClick((std::string("**/") + action).c_str());
+            context->Yield();
+        }
+        IM_CHECK_STR_EQ(ImGui::GetClipboardText(), "base");
+        open_blame_context(2);
+        IM_CHECK(!context->ItemExists("**/Blame before this change"));
         ImGui::ClosePopupToLevel(0, true);
         context->Yield();
+
+        FocusWindow(context, "Blame");
+        context->ItemInputValue("##blame filter", "same");
+        context->Yield(2);
+        context->MouseMoveToPos(gutter(0, commit_x));
+        context->Yield(2);
+        context->ItemInputValue("##blame filter", "no such line");
+        context->Yield(2);
+        IM_CHECK(!context->ItemExists("##blame view"));
+        context->ItemInputValue("##blame filter", "");
+        context->Yield(2);
+        open_blame_context(0);
+        context->ItemClick("**/Blame originating source");
+        context->Yield();
+        BlameResult origin;
+        origin.generation = 1000;
+        origin.revision = "base";
+        origin.path = "old.txt";
+        origin.lines = {blame_line(1, "middle", "zero")};
+        application.ApplyEventForTest(BlameReady{std::move(origin)});
+        context->Yield(2);
+        open_blame_context(0);
+        context->ItemClick("**/Blame before this change");
+        context->Yield();
+        IM_CHECK(context->ItemExists("//Blame"));
     };
 
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");

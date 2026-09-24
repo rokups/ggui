@@ -130,13 +130,14 @@ the active gg change while preserving later edits where the patch
 applies. Working-tree file menus can also delete the file from disk.
 Changed-file and diff context menus can open the line-level **Blame** panel;
 the header identifies the exact file version (commit, author, date, and
-summary). The source is shown in a conventional three-column blame table:
-line number, grouped **Last changed** metadata, and source. Contiguous blocks
-show their owning commit, author, date, and subject; click the commit to reveal
-it, hover any line for its exact source/origin metadata, or use the block's
-**Before** action to inspect the file immediately before that change.
-Right-clicking a line offers the same per-line actions, and blame can be
-filtered by author, commit, subject, or content. The optional **Reflog** panel
+summary). The source is shown in the same read-only, syntax-highlighted editor
+as the diff, so it can be selected, searched, and copied. A gutter beside each
+contiguous change block shows its owning commit, author, date, and subject:
+click the commit to reveal it, click elsewhere in the gutter to select the
+block, or hover it for exact source/origin metadata. Right-clicking a line
+copies it or its block, and offers **Blame before this change** to inspect the
+file immediately before that change. Blame can be filtered by author, commit,
+subject, or content. The optional **Reflog** panel
 shows the HEAD move history,
 including commits retained only by the reflog; hashes can be revealed, copied,
 or preserved as a branch.
