@@ -210,9 +210,7 @@ VisibleHeads ResolveVisibleHeads(git_repository* repository, const References& r
     {
         const gg_reference& reference = references.value.items[index];
         const std::string_view name = reference.name == nullptr ? "" : reference.name;
-        if (!name.starts_with("refs/heads/")
-            && !name.starts_with("refs/gg/visible-heads/")
-            && !name.starts_with("refs/gg/workspaces/"))
+        if (!name.starts_with("refs/heads/") && !name.starts_with("refs/gg/visible-heads/"))
             continue;
 
         git_object* raw_object = nullptr;
@@ -501,7 +499,6 @@ void RepositoryEngine::Impl::RunHistory()
     std::unordered_map<std::string, Revision> cached_revisions;
     std::unique_ptr<NamedRefs> cached_named_refs;
     std::unique_ptr<References> cached_references;
-    std::unique_ptr<Workspaces> cached_workspaces;
     std::unique_ptr<VisibleHeads> cached_visible_heads;
     std::vector<git_oid> cached_collapsed_materialized;
     RepositoryReadContext context;
@@ -528,7 +525,6 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_revisions.clear();
                 cached_named_refs.reset();
                 cached_references.reset();
-                cached_workspaces.reset();
                 cached_visible_heads.reset();
                 cached_collapsed_materialized.clear();
                 continue;
@@ -568,7 +564,6 @@ void RepositoryEngine::Impl::RunHistory()
                 cached_revisions.clear();
                 cached_named_refs.reset();
                 cached_references.reset();
-                cached_workspaces.reset();
                 cached_visible_heads.reset();
                 cached_collapsed_materialized.clear();
             }
@@ -577,68 +572,26 @@ void RepositoryEngine::Impl::RunHistory()
             {
                 cached_named_refs = std::make_unique<NamedRefs>();
                 cached_references = std::make_unique<References>();
-                cached_workspaces = std::make_unique<Workspaces>();
                 Check(gg_repository_named_refs(&cached_named_refs->value, history_gg.get()), "load history refs");
                 Check(gg_repository_references(&cached_references->value, history_gg.get()),
                     "load history references");
-                Check(gg_repository_workspaces(&cached_workspaces->value, history_gg.get()),
-                    "load history workspaces");
             }
             const NamedRefs& named = *cached_named_refs;
             const References& references = *cached_references;
-            const Workspaces& workspaces = *cached_workspaces;
             if (metadata_stage.Enabled())
                 metadata_stage.Complete("cache=" + std::string(metadata_cached ? "hit" : "miss")
                     + " named_refs=" + std::to_string(named.value.count)
-                    + " references=" + std::to_string(references.value.count)
-                    + " workspaces=" + std::to_string(workspaces.value.count));
+                    + " references=" + std::to_string(references.value.count));
             const auto selected = [](const std::vector<std::string>& values, std::string_view value) {
                 return std::ranges::find(values, value) != values.end();
             };
             std::vector<git_oid> heads;
-            std::vector<git_oid> selected_branches;
-            std::vector<git_oid> unselected_branches;
             std::vector<git_oid> remote_tips;
             std::vector<git_oid> conservatively_locked_heads;
             std::vector<git_oid> primary_heads;
             const auto add = [](std::vector<git_oid>& values, const git_oid& oid) {
                 if (std::ranges::none_of(values, [&](const git_oid& value) { return git_oid_equal(&value, &oid) != 0; }))
                     values.push_back(oid);
-            };
-            struct BoundedReachability
-            {
-                bool matched = false;
-                bool complete = true;
-            };
-            std::size_t implicit_lookup_budget = 256;
-            const auto descends_from_any = [&](const git_oid& candidate,
-                                               const std::vector<git_oid>& ancestors) {
-                BoundedReachability result;
-                if (ancestors.empty()) return result;
-                std::deque<git_oid> pending{candidate};
-                std::unordered_set<std::string> visited;
-                while (!pending.empty() && implicit_lookup_budget > 0 && !stale())
-                {
-                    const git_oid oid = pending.front();
-                    pending.pop_front();
-                    if (!visited.insert(OidString(oid)).second) continue;
-                    --implicit_lookup_budget;
-                    if (std::ranges::any_of(ancestors,
-                            [&](const git_oid& ancestor) { return git_oid_equal(&oid, &ancestor) != 0; }))
-                    {
-                        result.matched = true;
-                        return result;
-                    }
-                    git_commit* raw_commit = nullptr;
-                    const int lookup = git_commit_lookup(&raw_commit, repository.get(), &oid);
-                    if (lookup == GIT_ENOTFOUND) continue;
-                    Check(lookup, "inspect bounded branch descendants");
-                    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
-                    for (unsigned int index = 0; index < git_commit_parentcount(commit.get()); ++index)
-                        pending.push_back(*git_commit_parent_id(commit.get(), index));
-                }
-                result.complete = pending.empty();
-                return result;
             };
             git_oid working{};
             std::optional<git_oid> working_head;
@@ -672,14 +625,12 @@ void RepositoryEngine::Impl::RunHistory()
                 if (ref.kind == GG_NAMED_REF_REMOTE_BRANCH) add(remote_tips, ref.target);
                 if (ref.kind == GG_NAMED_REF_LOCAL_BRANCH)
                 {
-                    const bool chosen = request.query.branches.empty() || selected(request.query.branches, name);
-                    add(chosen ? selected_branches : unselected_branches, ref.target);
-                    if (chosen) add(heads, ref.target);
+                    if (request.query.branches.empty() || selected(request.query.branches, name))
+                        add(heads, ref.target);
                 }
                 else if (ref.kind == GG_NAMED_REF_REMOTE_BRANCH && chosen_remote
                     && (request.query.branches.empty() || selected(request.query.branches, name)))
                 {
-                    add(selected_branches, ref.target);
                     add(heads, ref.target);
                 }
                 else if ((ref.kind == GG_NAMED_REF_LOCAL_TAG
@@ -691,28 +642,13 @@ void RepositoryEngine::Impl::RunHistory()
                 }
             }
             if (head_selection_stage.Enabled())
-                head_selection_stage.Complete("heads=" + std::to_string(heads.size())
-                    + " selected_branches=" + std::to_string(selected_branches.size())
-                    + " unselected_branches=" + std::to_string(unselected_branches.size()));
-            // Preserve the selected-branch filtering for other workspaces,
-            // including native worktrees which do not have a gg reference.
-            TraceStage reachability_stage(trace, "bounded-reachability");
-            for (std::size_t index = 0; index < workspaces.value.count; ++index)
-            {
-                const git_oid& candidate = workspaces.value.items[index].working_copy;
-                const BoundedReachability selected_result = descends_from_any(candidate, selected_branches);
-                const BoundedReachability unselected_result = descends_from_any(candidate, unselected_branches);
-                const bool claimed = unselected_result.matched
-                    || (!unselected_result.complete && !unselected_branches.empty());
-                if (selected_result.matched && !claimed) add(heads, candidate);
-            }
-            if (reachability_stage.Enabled())
-                reachability_stage.Complete("lookups=" + std::to_string(256 - implicit_lookup_budget)
-                    + " budget_remaining=" + std::to_string(implicit_lookup_budget));
+                head_selection_stage.Complete("heads=" + std::to_string(heads.size()));
             // Unnamed heads the user created (gg marks them under
-            // refs/gg/visible-heads/) and other workspaces' @ are always
-            // visible, whatever the branch selection. Heads that only Git or
-            // gg internals still reference (aliases, reflogs) never are.
+            // refs/gg/visible-heads/) are always visible, whatever the branch
+            // selection. Heads that only Git or gg internals still reference
+            // never are: aliases, reflogs, and the refs that keep other
+            // workspaces' @ alive, which are placeholders rather than work.
+            // Work in another workspace shows through its branch or marker.
             // Resolve their actual DAG heads so switching the working copy
             // cannot make a sibling head disappear.
             TraceStage visible_heads_stage(trace, "visible-head-resolution");
@@ -721,7 +657,7 @@ void RepositoryEngine::Impl::RunHistory()
             {
                 const gg_reference& ref = references.value.items[index];
                 const std::string_view name = ref.name == nullptr ? "" : ref.name;
-                if (name.starts_with("refs/gg/visible-heads/") || name.starts_with("refs/gg/workspaces/"))
+                if (name.starts_with("refs/gg/visible-heads/"))
                     unnamed_targets.insert(OidString(ref.target));
             }
             const bool visible_heads_cached = cached_visible_heads != nullptr;
@@ -1190,7 +1126,6 @@ void RepositoryEngine::Impl::RunHistory()
         {
             cached_named_refs.reset();
             cached_references.reset();
-            cached_workspaces.reset();
             cached_visible_heads.reset();
             cached_collapsed_materialized.clear();
             if (!stale()) Post(ErrorEvent{"history", error.what()});

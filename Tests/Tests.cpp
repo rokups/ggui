@@ -1414,6 +1414,48 @@ TEST(RepositoryEngine, OrdersAvailableHistoryByDateWithoutBreakingTopology)
     EXPECT_LT(a_parent, base);
 }
 
+TEST(RepositoryEngine, HidesHeadsThatOnlyKeepWorkspacesAlive)
+{
+    TemporaryRepository repository;
+    const auto git_output = [&](const std::string& arguments) {
+        std::string output;
+        FILE* pipe = popen(("git -C " + Quote(repository.path) + " " + arguments + " 2>/dev/null").c_str(), "r");
+        if (pipe == nullptr) return output;
+        char buffer[256];
+        while (std::fgets(buffer, sizeof buffer, pipe) != nullptr) output += buffer;
+        pclose(pipe);
+        while (!output.empty() && output.back() == '\n') output.pop_back();
+        return output;
+    };
+    // A placeholder commit that only a workspace ref keeps alive.
+    const std::string placeholder = git_output("commit-tree HEAD^{tree} -p HEAD -m workspace-placeholder");
+    ASSERT_FALSE(placeholder.empty());
+    ASSERT_EQ(std::system(("git -C " + Quote(repository.path) + " update-ref refs/gg/workspaces/other "
+        + placeholder).c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.root.empty(); });
+    ASSERT_NE(snapshot, nullptr);
+    engine.Enqueue(RebuildHistory{HistoryQuery{{}, {}, {}, {}, snapshot->repository_generation}});
+    std::shared_ptr<const HistoryView> history;
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (history == nullptr && std::chrono::steady_clock::now() < deadline)
+    {
+        for (const Event& event : engine.PollEvents())
+            if (const auto* ready = std::get_if<HistoryReady>(&event); ready != nullptr && !ready->view->skeleton)
+                history = ready->view;
+        std::this_thread::sleep_for(5ms);
+    }
+    ASSERT_NE(history, nullptr);
+    EXPECT_FALSE(std::ranges::any_of(history->items, [&](const HistoryItem& item) {
+        return item.revision.oid == placeholder;
+    }));
+    EXPECT_TRUE(std::ranges::any_of(history->items, [&](const HistoryItem& item) {
+        return item.kind == HistoryItemKind::Commit && !item.revision.oid.empty();
+    }));
+}
+
 TEST(RepositoryEngine, CollapsesAndTogglesMergeHistory)
 {
     TemporaryRepository repository;
@@ -1501,7 +1543,6 @@ TEST(RepositoryEngine, CollapsesAndTogglesMergeHistory)
     EXPECT_NE(diagnostics.find("repository_generation="), std::string::npos);
     EXPECT_NE(diagnostics.find("stage=cached-metadata-loading"), std::string::npos);
     EXPECT_NE(diagnostics.find("stage=head-selection"), std::string::npos);
-    EXPECT_NE(diagnostics.find("stage=bounded-reachability"), std::string::npos);
     EXPECT_NE(diagnostics.find("cache=hit candidates="), std::string::npos);
     EXPECT_NE(diagnostics.find("stage=base-history-materialization"), std::string::npos);
     EXPECT_NE(diagnostics.find("stage=merge-branch-expansion"), std::string::npos);

@@ -192,8 +192,10 @@ add or remove a branch, or Ctrl-click to show only that branch. At least one
 branch stays selected whenever branches exist.
 Unnamed heads you created (with **Alt+N**, detached commits, or duplication) are
 always included, whatever the selection, so switching the active change never
-hides an unbranched line of work. Heads that only Git internals still reference
-are not shown. The checked-out branch is outlined, in both History pills and
+hides an unbranched line of work. Heads that only Git or gg internals still
+reference are not shown, including the placeholders that keep other workspaces'
+`@` alive; work in another workspace appears through its branch or as an
+unnamed head you created. The checked-out branch is outlined, in both History pills and
 the Branches panel; branches checked out in another workspace are muted.
 No tags are selected by default. Select tags in the Tags panel to ensure their
 tagged history is found and revealed, or Ctrl-click to surface only one.
