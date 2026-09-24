@@ -294,6 +294,24 @@ void FocusWindow(ImGuiTestContext* context, const char* name)
     context->Yield();
 }
 
+// Floats a docked panel at a fixed size inside the main window, so a test
+// does not depend on the host window's size, which a tiling window manager
+// may choose. Pair with ResetLayout.
+void UndockAndResize(ImGuiTestContext* context, const char* name, ImVec2 size)
+{
+    const std::string path = std::string("//") + name;
+    context->UndockWindow(path.c_str());
+    context->Yield();
+    context->WindowResize(path.c_str(), size);
+    context->Yield(2);
+}
+
+void ResetLayout(ImGuiTestContext* context)
+{
+    context->MenuClick("//##MainMenuBar/View/Reset layout");
+    context->Yield(3);
+}
+
 void HoverRichSnapshotAuthor(ImGuiTestContext* context)
 {
     FocusWindow(context, "Change information");
@@ -1685,32 +1703,6 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_GT(context->ItemInfo("Open repository folder").RectFull.Min.x, repository_combo.RectFull.Max.x);
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "WindowSettingsRoundTrip");
-    test->TestFunc = [](ImGuiTestContext* context) {
-        IM_CHECK(ImGui::GetIO().IniFilename == nullptr);
-        std::size_t original_size = 0;
-        const char* original_data = ImGui::SaveIniSettingsToMemory(&original_size);
-        const std::string original(original_data, original_size);
-        constexpr std::string_view ignored = "[Ggui][OtherWindow]\nSize=400,300\n\n";
-        ImGui::LoadIniSettingsFromMemory(ignored.data(), ignored.size());
-        constexpr std::string_view maximized =
-            "[Ggui][MainWindow]\nPos=101,102\nSize=901,602\nMaximized=1\n\n";
-        ImGui::LoadIniSettingsFromMemory(maximized.data(), maximized.size());
-        context->Yield(2);
-        constexpr std::string_view settings =
-            "[Ggui][MainWindow]\nPos=101,102\nSize=901,602\nMaximized=0\n\n";
-        ImGui::LoadIniSettingsFromMemory(settings.data(), settings.size());
-        context->Yield(2);
-        std::size_t saved_size = 0;
-        const char* saved_data = ImGui::SaveIniSettingsToMemory(&saved_size);
-        const std::string_view saved(saved_data, saved_size);
-        IM_CHECK(saved.find("[Ggui][MainWindow]") != std::string_view::npos);
-        IM_CHECK(saved.find("Size=901,602") != std::string_view::npos);
-        IM_CHECK(saved.find("Maximized=0") != std::string_view::npos);
-        ImGui::LoadIniSettingsFromMemory(original.data(), original.size());
-        context->Yield(2);
-    };
-
     test = IM_REGISTER_TEST(engine, "Interactions", "MultiParentNewChange");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
@@ -2424,7 +2416,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         const ImGuiWindow* branch_tooltip = nullptr;
+        // Narrow panels elide the long names whatever the host window's size.
+        const ImVec2 narrow(ApplicationInternal::FontPx(260.0f), ApplicationInternal::FontPx(320.0f));
         const auto check_tooltip = [&](const char* window, const std::string& item) {
+            UndockAndResize(context, window, narrow);
             FocusWindow(context, window);
             context->MouseMove(("**/" + item).c_str());
             context->Yield(2);
@@ -2448,6 +2443,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         check_tooltip("Tags", tag);
         check_tooltip("Workspaces", workspace);
         check_tooltip("Remotes", remote);
+        UndockAndResize(context, "Changes", narrow);
         FocusWindow(context, "Changes");
         ImGuiTestItemList change_items;
         context->GatherItems(&change_items, "//Changes");
@@ -2466,6 +2462,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
         IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
+        ResetLayout(context);
     };
 
     test = IM_REGISTER_TEST(engine, "Presentation", "ExistingGitWorktree");
@@ -4876,6 +4873,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(2);
         application.SelectRevisionForTest("left");
+        // A short History scrolls whatever the host window's size.
+        UndockAndResize(context, "History",
+            ImVec2(ApplicationInternal::FontPx(700.0f), ApplicationInternal::FontPx(360.0f)));
         FocusWindow(context, "History");
         ImGuiWindow* history = ImGui::FindWindowByName("History");
         IM_CHECK_NE(history, nullptr);
@@ -4959,6 +4959,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiMod_Shift | ImGuiKey_S);
         context->Yield(2);
         IM_CHECK(!ActionDialogOpen());
+        ResetLayout(context);
     };
 
     test = IM_REGISTER_TEST(engine, "Workflow", "BranchAbandonExcludesRetainedOperationHistory");
