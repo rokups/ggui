@@ -756,6 +756,52 @@ TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
     EXPECT_TRUE(revisions.front().pushed);
 }
 
+TEST(RepositorySummary, ReportsBranchAndUpstreamDivergence)
+{
+    TemporaryRepository repository;
+    ASSERT_GT(git_libgit2_init(), 0);
+    struct ShutdownGit
+    {
+        ~ShutdownGit() { git_libgit2_shutdown(); }
+    } shutdown_git;
+    const std::string git = "git -C " + Quote(repository.path) + " ";
+
+    RepositorySummary summary = SummarizeRepository(repository.path.string());
+    EXPECT_TRUE(summary.available);
+    EXPECT_EQ(summary.branch, "main");
+    EXPECT_TRUE(summary.upstream.empty());
+
+    // Git's upstream: one local commit and two remote-only commits.
+    ASSERT_EQ(std::system((git + "update-ref refs/remotes/origin/main HEAD"
+        " && " + git + "config branch.main.remote origin"
+        " && " + git + "config branch.main.merge refs/heads/main"
+        " && " + git + "commit --allow-empty -q -m local"
+        " && " + git + "update-ref refs/remotes/origin/main $(" + git + "commit-tree -p origin/main -m r1 HEAD^{tree})"
+        " && " + git + "update-ref refs/remotes/origin/main $(" + git + "commit-tree -p origin/main -m r2 HEAD^{tree})")
+                              .c_str()),
+        0);
+    summary = SummarizeRepository(repository.path.string());
+    EXPECT_EQ(summary.upstream, "origin/main");
+    EXPECT_EQ(summary.outgoing, 1U);
+    EXPECT_EQ(summary.incoming, 2U);
+
+    // gg tracking without Git configuration.
+    ASSERT_EQ(std::system((git + "config --unset branch.main.remote && " + git
+        + "update-ref refs/gg/tracking/branches/origin/main origin/main").c_str()), 0);
+    summary = SummarizeRepository(repository.path.string());
+    EXPECT_EQ(summary.upstream, "origin/main");
+    EXPECT_EQ(summary.outgoing, 1U);
+    EXPECT_EQ(summary.incoming, 2U);
+
+    ASSERT_EQ(std::system((git + "checkout -q --detach").c_str()), 0);
+    summary = SummarizeRepository(repository.path.string());
+    EXPECT_TRUE(summary.available);
+    EXPECT_TRUE(summary.branch.empty());
+    EXPECT_EQ(summary.incoming + summary.outgoing, 0U);
+
+    EXPECT_FALSE(SummarizeRepository((repository.path / "missing").string()).available);
+}
+
 TEST(RepositoryEngine, OpensWithoutScanningAndRefreshesOnRequest)
 {
     TemporaryRepository repository;

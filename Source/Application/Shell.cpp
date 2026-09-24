@@ -7,7 +7,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <future>
 #include <ranges>
 #include <set>
 #include <string>
@@ -342,8 +344,28 @@ void Application::RenderMenuBar()
     ImGui::EndMainMenuBar();
 }
 
+void Application::RefreshRecentSummaries()
+{
+    using namespace std::chrono_literals;
+    if (_recent_summaries_future.valid() && _recent_summaries_future.wait_for(0ms) == std::future_status::ready)
+        for (auto& [path, summary] : _recent_summaries_future.get())
+            _recent_summaries[std::move(path)] = std::move(summary);
+    // Reread every time the list opens; the previous values show meanwhile.
+    if (!ImGui::IsWindowAppearing() || _recent_summaries_future.valid())
+        return;
+    _recent_summaries_future = std::async(std::launch::async, [paths = _recent_repositories] {
+        std::vector<std::pair<std::string, RepositorySummary>> result;
+        result.reserve(paths.size());
+        for (const std::string& path : paths)
+            result.emplace_back(path, SummarizeRepository(path));
+        return result;
+    });
+}
+
 void Application::RenderRecentRepositories()
 {
+    RefreshRecentSummaries();
+
     // Repository filter
     if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
     ImGui::SetNextItemWidth(FontPx(300.0f));
@@ -353,27 +375,87 @@ void Application::RenderRecentRepositories()
     // Repository list
     bool any_visible = false;
     std::string remove;
+    const ImGuiStyle& style = ImGui::GetStyle();
     for (const RecentRepository& repository : RecentRepositories(_recent_repositories))
     {
-        if (!ContainsInsensitive(repository.visible, _recent_filter)) continue;
+        const auto found = _recent_summaries.find(repository.path);
+        const RepositorySummary* summary = found == _recent_summaries.end() || !found->second.available
+            ? nullptr
+            : &found->second;
+        if (!ContainsInsensitive(repository.visible, _recent_filter)
+            && (summary == nullptr || !ContainsInsensitive(summary->branch, _recent_filter)))
+            continue;
         any_visible = true;
+
+        // Checkout context: branch (or detached HEAD) and upstream divergence.
+        const char* branch_icon = nullptr;
+        std::string_view branch;
+        const char* counts = nullptr;
+        const char* counts_end = nullptr;
+        if (summary != nullptr)
+        {
+            branch_icon = summary->branch.empty() ? ICON_MS_CALL_SPLIT " " : ICON_MS_BOOKMARK " ";
+            branch = summary->branch.empty() ? std::string_view("detached") : std::string_view(summary->branch);
+        }
+        const float branch_width = branch_icon == nullptr ? 0.0f
+            : ImGui::CalcTextSize(branch_icon).x + ImGui::CalcTextSize(branch.data(), branch.data() + branch.size()).x;
+        if (summary != nullptr && (summary->incoming != 0 || summary->outgoing != 0))
+        {
+            if (summary->incoming != 0 && summary->outgoing != 0)
+                ImFormatStringToTempBuffer(&counts, &counts_end, ICON_MS_ARROW_DOWNWARD "%zu " ICON_MS_ARROW_UPWARD "%zu",
+                    summary->incoming, summary->outgoing);
+            else if (summary->incoming != 0)
+                ImFormatStringToTempBuffer(&counts, &counts_end, ICON_MS_ARROW_DOWNWARD "%zu", summary->incoming);
+            else
+                ImFormatStringToTempBuffer(&counts, &counts_end, ICON_MS_ARROW_UPWARD "%zu", summary->outgoing);
+        }
+        const float counts_width = counts == nullptr ? 0.0f : ImGui::CalcTextSize(counts, counts_end).x;
+        const float gap = style.ItemSpacing.x * 3.0f;
+        const float name_width = ImGui::CalcTextSize(repository.parent.c_str()).x
+            + ImGui::CalcTextSize(repository.name.c_str()).x;
+        const float detail_width = branch_width + (counts == nullptr ? 0.0f : style.ItemSpacing.x + counts_width);
+
         const bool selected = _snapshot != nullptr && repository.path == _snapshot->root;
         ImGui::PushID(repository.path.c_str());
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 0.0f));
-        const bool open = ImGui::Selectable(
-            (repository.visible + "###repository").c_str(), selected, ImGuiSelectableFlags_SpanAvailWidth);
-        ImGui::PopStyleColor();
+        // The requested width sizes the popup; it includes the padding the
+        // text is inset by on both sides so the widest row fits too.
+        const bool open = ImGui::Selectable("###repository", selected, ImGuiSelectableFlags_SpanAvailWidth,
+            ImVec2(style.FramePadding.x * 2.0f + name_width + (detail_width == 0.0f ? 0.0f : gap + detail_width),
+                0.0f));
         const ImVec2 minimum = ImGui::GetItemRectMin();
         const ImVec2 maximum = ImGui::GetItemRectMax();
-        ImVec2 text{minimum.x + ImGui::GetStyle().FramePadding.x,
+        ImVec2 text{minimum.x + style.FramePadding.x,
             minimum.y + (maximum.y - minimum.y - ImGui::GetTextLineHeight()) * 0.5f};
         ImDrawList* draw = ImGui::GetWindowDrawList();
         draw->AddText(text, ImGui::GetColorU32(ImGuiCol_TextDisabled), repository.parent.c_str());
         text.x += ImGui::CalcTextSize(repository.parent.c_str()).x;
         draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), repository.name.c_str());
+        // Details are right-aligned so branches line up across rows.
+        text.x = std::max(text.x + ImGui::CalcTextSize(repository.name.c_str()).x + gap,
+            maximum.x - style.FramePadding.x - detail_width);
+        if (branch_icon != nullptr)
+        {
+            const ImU32 color = ImGui::GetColorU32(ImGuiCol_TextDisabled);
+            draw->AddText(text, color, branch_icon);
+            draw->AddText(ImVec2(text.x + ImGui::CalcTextSize(branch_icon).x, text.y), color, branch.data(),
+                branch.data() + branch.size());
+            text.x += branch_width + style.ItemSpacing.x;
+        }
+        if (counts != nullptr)
+            draw->AddText(text, ImGui::GetColorU32(ImGuiCol_Text), counts, counts_end);
         if (ImGui::IsItemHovered())
         {
-            ImGui::SetTooltip("%s", repository.path.c_str());
+            if (summary == nullptr)
+                ImGui::SetTooltip("%s", repository.path.c_str());
+            else if (summary->branch.empty())
+                ImGui::SetTooltip("%s\nHEAD is detached.", repository.path.c_str());
+            else if (summary->upstream.empty())
+                ImGui::SetTooltip("%s\nOn branch %s, not tracking a remote branch.", repository.path.c_str(),
+                    summary->branch.c_str());
+            else
+                ImGui::SetTooltip("%s\nOn branch %s, tracking %s.\n%zu incoming, %zu outgoing commits.",
+                    repository.path.c_str(), summary->branch.c_str(), summary->upstream.c_str(), summary->incoming,
+                    summary->outgoing);
             if (ImGui::IsKeyPressed(ImGuiKey_Delete, false)) remove = repository.path;
         }
         if (open && !selected && remove.empty()) EnqueueAction(OpenRepository{repository.path});

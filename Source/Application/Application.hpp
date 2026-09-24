@@ -206,6 +206,7 @@ private:
     void RenderOperations();
     void RenderDialogs();
     void RenderRecentRepositories();
+    void RefreshRecentSummaries();
     void SetupDockspace();
     void UpdateGraphBuild();
     void EnsureVisibleBranchSelection();
@@ -348,6 +349,9 @@ private:
     std::string _compare_to;
     bool _file_comparison = false;
     std::vector<std::string> _recent_repositories;
+    // Checkout context shown beside recent repositories, read off-thread.
+    std::unordered_map<std::string, RepositorySummary> _recent_summaries;
+    std::future<std::vector<std::pair<std::string, RepositorySummary>>> _recent_summaries_future;
     bool _drop_batch_active = false;
     bool _drop_batch_opened = false;
     std::filesystem::path _settings_path;

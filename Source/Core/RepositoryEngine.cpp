@@ -2,6 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-only
 #include "RepositoryEngineInternal.hpp"
 
+#if __has_include(<git2-experimental/sys/errors.h>)
+#include <git2-experimental/sys/errors.h>
+#else
+#include <git2/sys/errors.h>
+#endif
+
 #include <algorithm>
 #include <filesystem>
 #include <memory>
@@ -193,6 +199,86 @@ BranchRelation ClassifyBranchRelation(
     if (remote_is_ancestor != 0)
         return BranchRelation::LocalAhead;
     return BranchRelation::Diverged;
+}
+
+RepositorySummary SummarizeRepository(const std::string& path)
+{
+    RepositorySummary summary;
+    git_repository* raw = nullptr;
+    if (git_repository_open_ext(&raw, path.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
+    {
+        git_error_clear();
+        return summary;
+    }
+    RepositoryInternal::GitRepositoryPtr repository(raw);
+    using ReferencePtr = std::unique_ptr<git_reference, decltype(&git_reference_free)>;
+    git_reference* raw_head = nullptr;
+    if (git_reference_lookup(&raw_head, repository.get(), "HEAD") != GIT_OK)
+    {
+        git_error_clear();
+        return summary;
+    }
+    ReferencePtr head(raw_head, git_reference_free);
+    summary.available = true;
+    constexpr std::string_view heads = "refs/heads/";
+    const char* symbolic = git_reference_symbolic_target(head.get());
+    if (symbolic == nullptr || !std::string_view(symbolic).starts_with(heads))
+        return summary;
+    summary.branch = std::string_view(symbolic).substr(heads.size());
+
+    git_reference* raw_local = nullptr;
+    if (git_reference_lookup(&raw_local, repository.get(), symbolic) != GIT_OK)
+    {
+        git_error_clear();
+        return summary;
+    }
+    ReferencePtr local(raw_local, git_reference_free);
+    // Git's configured upstream wins; otherwise use gg's remote tracking.
+    std::string upstream_ref;
+    git_buf buffer{};
+    if (git_branch_upstream_name(&buffer, repository.get(), symbolic) == GIT_OK)
+        upstream_ref.assign(buffer.ptr, buffer.size);
+    else
+    {
+        git_error_clear();
+        constexpr std::string_view tracking = "refs/gg/tracking/branches/";
+        const std::string suffix = "/" + summary.branch;
+        git_reference_iterator* raw_iterator = nullptr;
+        if (git_reference_iterator_glob_new(
+                &raw_iterator, repository.get(), (std::string(tracking) + "*").c_str())
+            == GIT_OK)
+        {
+            const char* name = nullptr;
+            while (upstream_ref.empty() && git_reference_next_name(&name, raw_iterator) == GIT_OK)
+            {
+                const std::string_view candidate(name);
+                if (candidate.ends_with(suffix) && candidate.size() > tracking.size() + suffix.size())
+                    upstream_ref = "refs/remotes/" + std::string(candidate.substr(tracking.size()));
+            }
+            git_reference_iterator_free(raw_iterator);
+        }
+        git_error_clear();
+    }
+    git_buf_dispose(&buffer);
+    git_oid upstream{};
+    if (upstream_ref.empty() || git_reference_name_to_id(&upstream, repository.get(), upstream_ref.c_str()) != GIT_OK)
+    {
+        git_error_clear();
+        return summary;
+    }
+    const git_oid* target = git_reference_target(local.get());
+    if (target == nullptr
+        || git_graph_ahead_behind(&summary.outgoing, &summary.incoming, repository.get(), target, &upstream) != GIT_OK)
+    {
+        git_error_clear();
+        summary.outgoing = summary.incoming = 0;
+        return summary;
+    }
+    constexpr std::string_view remotes = "refs/remotes/";
+    summary.upstream = std::string_view(upstream_ref).starts_with(remotes)
+        ? upstream_ref.substr(remotes.size())
+        : upstream_ref;
+    return summary;
 }
 
 void RepositoryEngine::Cancel()

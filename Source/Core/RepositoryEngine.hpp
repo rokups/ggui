@@ -60,4 +60,18 @@ enum class BranchRelation
 BranchRelation ClassifyBranchRelation(
     const RepoSnapshot& snapshot, std::string_view local, std::string_view remote);
 
+// Checkout context of a repository that is not open, for repository pickers.
+struct RepositorySummary
+{
+    bool available = false;
+    // Checked-out branch; empty with a detached HEAD.
+    std::string branch;
+    // Tracked remote branch, such as "origin/main"; empty when untracked.
+    std::string upstream;
+    std::size_t incoming = 0;
+    std::size_t outgoing = 0;
+};
+
+RepositorySummary SummarizeRepository(const std::string& path);
+
 } // namespace Ggui
