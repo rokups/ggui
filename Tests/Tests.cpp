@@ -1490,6 +1490,7 @@ TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)
     EXPECT_TRUE(metadata_finished);
 
     engine.Enqueue(Refresh{true, {}, true});
+    bool foreground_started = false;
     bool foreground_finished = false;
     bool foreground_reported_as_background = false;
     const auto refresh_deadline = std::chrono::steady_clock::now() + 5s;
@@ -1497,7 +1498,13 @@ TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)
     {
         for (const Event& event : engine.PollEvents())
         {
-            if (std::holds_alternative<BackgroundActivityStarted>(event))
+            // Opening writes gg metadata, so a watcher refresh may still run
+            // before the foreground one. The worker runs one command at a
+            // time; only activity inside the foreground refresh is its own.
+            if (const auto* started = std::get_if<OperationStarted>(&event);
+                started != nullptr && started->name == "refresh")
+                foreground_started = true;
+            if (foreground_started && std::holds_alternative<BackgroundActivityStarted>(event))
                 foreground_reported_as_background = true;
             if (const auto* finished = std::get_if<OperationFinished>(&event);
                 finished != nullptr && finished->name == "refresh")
@@ -1505,6 +1512,7 @@ TEST(RepositoryEngine, ReportsBackgroundRepositoryActivity)
         }
         std::this_thread::sleep_for(5ms);
     }
+    EXPECT_TRUE(foreground_started);
     EXPECT_TRUE(foreground_finished);
     EXPECT_FALSE(foreground_reported_as_background);
 }
