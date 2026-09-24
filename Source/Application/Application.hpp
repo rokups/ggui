@@ -108,6 +108,8 @@ public:
     std::vector<std::string> VisibleHistoryRevisionsForTest() const;
     const std::vector<Revision>& HistoryRevisionsForTest() const;
     std::size_t RenderedHistoryRowsForTest() const;
+    // History item IDs in display order with their graph columns.
+    std::vector<std::pair<std::string, int>> HistoryLayoutForTest() const;
     const std::string& ActiveOperationForTest() const;
     void RequestBlameForTest(const std::string& revision, const std::string& path);
     std::vector<std::string> SelectedFilesForTest() const;

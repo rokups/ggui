@@ -112,9 +112,10 @@ Git's `HEAD`; the toolbar shows the checked-out branch next to it, or
 **detached** when `HEAD` is not on a branch.
 
 History includes a virtual **Working tree** row for filesystem changes relative
-to the active commit (`@`). Select that row and choose **Commit** to commit the
-whole working tree; select the active commit and choose **Amend** to update it
-with the whole working tree. Status is read in the background after opening and
+to the active commit (`@`). It always heads the list and shares `@`'s lane.
+Select that row and choose **Commit** to commit the whole working tree; select
+the active commit and choose **Amend** to update it with the whole working
+tree. Status is read in the background after opening and
 kept current from filesystem events, whether changes come from ggui or another
 program, so the Working tree's file list updates as files change. **Refresh**
 (F5) forces a complete rescan. Filesystem changes are listed, never committed

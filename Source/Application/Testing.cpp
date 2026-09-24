@@ -130,6 +130,16 @@ const std::string& Application::FocusedFileForTest() const
     return _selected_file;
 }
 
+std::vector<std::pair<std::string, int>> Application::HistoryLayoutForTest() const
+{
+    std::vector<std::pair<std::string, int>> result;
+    if (_history_view == nullptr)
+        return result;
+    for (std::size_t index = 0; index < _history_view->items.size() && index < _graph_rows.size(); ++index)
+        result.emplace_back(_history_view->items[index].id, _graph_rows[index].column);
+    return result;
+}
+
 void Application::RequestBlameForTest(const std::string& revision, const std::string& path)
 {
     RequestBlame(revision, path);

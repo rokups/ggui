@@ -376,7 +376,10 @@ void RepositoryEngine::Impl::Execute(
             else
             {
                 // Background scans yield to any command that arrives and run
-                // again once the queue is free.
+                // again once the queue is free. Follow Git changes that arrived
+                // with the file changes, so status never pairs a moved HEAD
+                // with the previous @.
+                Sync(false);
                 background_status_scan = true;
                 struct ScanEnd
                 {

@@ -971,6 +971,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         auto view = std::make_shared<HistoryView>();
         view->repository_generation = application.SnapshotForTest()->repository_generation;
         view->request = 1000000;
+        // A newer head sorts before @, but the Working tree still heads the
+        // list and shares @'s lane.
+        HistoryItem newer;
+        newer.id = "newer-head";
+        newer.revision.oid = newer.id;
+        newer.revision.description = "Newer head";
+        view->items.push_back(std::move(newer));
         HistoryItem active;
         active.id = snapshot.working_copy;
         active.revision = snapshot.revisions.front();
@@ -980,7 +987,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("History");
         IM_CHECK(context->ItemExists("**/working tree"));
         IM_CHECK(RenderedTextContains(context, "Working tree"));
-        IM_CHECK_EQ(application.HistoryRevisionsForTest().size(), 1U);
+        IM_CHECK_EQ(application.HistoryRevisionsForTest().size(), 2U);
+        const std::vector<std::pair<std::string, int>> layout = application.HistoryLayoutForTest();
+        IM_CHECK_EQ(layout.size(), 3U);
+        IM_CHECK(layout[0].first.starts_with("working-tree:"));
+        IM_CHECK_EQ(layout[2].first, snapshot.working_copy);
+        IM_CHECK_EQ(layout[0].second, layout[2].second);
+        IM_CHECK_GT(layout[1].second, layout[0].second);
         context->ItemClick("**/working tree");
         IM_CHECK_EQ(application.SelectedRevisionsForTest(),
             (std::vector<std::string>{MakeWorkingTreeHistoryItem(

@@ -606,6 +606,25 @@ TEST(GraphLayout, ConnectsVirtualWorkingTreeToActiveCommit)
     EXPECT_EQ(rows.front().tracks_after, rows[1].tracks_before);
 }
 
+TEST(GraphLayout, KeepsWorkingTreeOnItsParentsLaneAtTheTop)
+{
+    // Newer heads sort between the Working tree and @; they branch off to
+    // the right while the Working tree and @ share the first lane.
+    const HistoryItem working_tree = MakeWorkingTreeHistoryItem(7, "active");
+    const std::vector<GraphRow> rows = BuildGraphLayout({{working_tree.id, working_tree.parents},
+        {"newer", {"base"}}, {"newest-child", {"active"}}, {"active", {"base"}}, {"base", {}}},
+        working_tree.id);
+    ASSERT_EQ(rows.size(), 5U);
+    EXPECT_EQ(rows[0].column, 0);
+    EXPECT_EQ(rows[0].track, 0);
+    EXPECT_EQ(rows[3].column, 0);
+    EXPECT_EQ(rows[3].track, 0);
+    EXPECT_EQ(rows[0].parent_columns, (std::vector<int>{0}));
+    EXPECT_GT(rows[1].column, 0);
+    EXPECT_GT(rows[2].column, 0);
+    EXPECT_EQ(rows[4].column, 0);
+}
+
 TEST(GraphLayout, MaintainsUniqueContinuousLanesAcrossComplexDag)
 {
     const std::vector<GraphNode> nodes{{"merge", {"a", "b", "c"}}, {"a", {"d", "e"}},

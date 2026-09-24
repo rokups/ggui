@@ -168,16 +168,12 @@ void Application::ApplyEvent(Event event)
                     {
                         const auto working_tree = std::ranges::find_if(history_view->items,
                             [](const HistoryItem& item) { return item.kind == HistoryItemKind::WorkingTree; });
+                        // The Working tree always heads the list. As the preferred
+                        // tip it takes the first lane, and its parent @ keeps that
+                        // lane, so other heads branch off to its right.
                         if (working_tree == history_view->items.end())
-                        {
-                            const auto active = std::ranges::find_if(history_view->items,
-                                [&](const HistoryItem& item) {
-                                    return item.kind == HistoryItemKind::Commit && item.revision.oid == active_commit;
-                                });
-                            history_view->items.insert(
-                                active == history_view->items.end() ? history_view->items.begin() : active,
+                            history_view->items.insert(history_view->items.begin(),
                                 MakeWorkingTreeHistoryItem(_snapshot->repository_generation, active_commit));
-                        }
                     }
                     const std::string preferred_tip = _snapshot->has_worktree
                         ? MakeWorkingTreeHistoryItem(_snapshot->repository_generation, active_commit).id
