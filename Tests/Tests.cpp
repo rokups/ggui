@@ -718,9 +718,9 @@ TEST(RevisionHelpers, MarksRemoteAncestryAsPushed)
         {"root", {}, {}, {}, {}, 0, false, false, false},
     };
     MarkPushedRevisions(revisions,
-        {{"main", "origin", "tip", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
+        {{"main", "origin", "tip", GG_NAMED_REF_REMOTE_BRANCH, true, false},
             {"release", "origin", "tip", GG_NAMED_REF_REMOTE_TAG, true, false},
-            {"missing", "origin", "absent", GG_NAMED_REF_REMOTE_BOOKMARK, true, false}});
+            {"missing", "origin", "absent", GG_NAMED_REF_REMOTE_BRANCH, true, false}});
     EXPECT_TRUE(revisions[0].pushed);
     EXPECT_FALSE(revisions[1].pushed);
     EXPECT_TRUE(revisions[2].pushed);
@@ -752,7 +752,7 @@ TEST(RevisionHelpers, KeepsUnchangedAncestorsLockedAcrossARewrite)
 
     std::vector<Revision> revisions{{oid(root.get()), {}, {}, {}, {}, 0, false, false, false}};
     MarkPushedRevisions(
-        revisions, {{"main", "origin", oid(tip.get()), GG_NAMED_REF_REMOTE_BOOKMARK, true, false}}, git.get());
+        revisions, {{"main", "origin", oid(tip.get()), GG_NAMED_REF_REMOTE_BRANCH, true, false}}, git.get());
     EXPECT_TRUE(revisions.front().pushed);
 }
 
@@ -766,8 +766,10 @@ TEST(RepositoryEngine, OpensWithoutScanningAndRefreshesOnRequest)
     EXPECT_TRUE(opened->has_worktree);
     EXPECT_EQ(opened->worktree_state, RepoSnapshot::WorktreeState::Unscanned);
     EXPECT_TRUE(opened->status.empty());
-    EXPECT_TRUE(opened->working_copy.empty());
+    // @ is Git's HEAD as soon as the repository is adopted.
     EXPECT_FALSE(opened->head.empty());
+    EXPECT_EQ(opened->working_copy, opened->head);
+    EXPECT_EQ(opened->head_branch, "main");
     EXPECT_TRUE(opened->revisions.empty());
     std::this_thread::sleep_for(100ms);
     const auto open_events = engine.PollEvents();
@@ -777,7 +779,7 @@ TEST(RepositoryEngine, OpensWithoutScanningAndRefreshesOnRequest)
     ASSERT_EQ(opened->remotes.size(), 1U);
     EXPECT_EQ(opened->remotes.front().name, "origin");
     EXPECT_EQ(opened->remotes.front().fetch_url, "https://example.test/repository.git");
-    EXPECT_TRUE(opened->can_undo);
+    EXPECT_FALSE(opened->can_undo);
     EXPECT_FALSE(opened->can_redo);
     std::ofstream(repository.path / "tracked.txt") << "changed\n";
     engine.Enqueue(Refresh{true, {}, true});
@@ -790,7 +792,7 @@ TEST(RepositoryEngine, OpensWithoutScanningAndRefreshesOnRequest)
     EXPECT_EQ(refreshed->status.front().path, "tracked.txt");
     EXPECT_EQ(refreshed->status.front().status, GIT_DELTA_MODIFIED);
     EXPECT_EQ(refreshed->head, opened->head);
-    EXPECT_TRUE(refreshed->working_copy.empty());
+    EXPECT_EQ(refreshed->working_copy, refreshed->head);
     engine.Enqueue(LoadDiff{MakeWorkingTreeHistoryItem(refreshed->repository_generation,
                                 refreshed->head).id,
         "tracked.txt"});
@@ -1828,8 +1830,8 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     git_reference_free(raw_main);
     bare.reset();
 
-    engine.Enqueue(RemoteBookmarkDelete{"main", "origin"});
-    EXPECT_TRUE(WaitForTerminal(engine, "delete remote bookmark").finished);
+    engine.Enqueue(RemoteBranchDelete{"main", "origin"});
+    EXPECT_TRUE(WaitForTerminal(engine, "delete remote branch").finished);
     CheckGit(git_repository_open_bare(&raw_remote, remote.path.string().c_str()));
     bare.reset(raw_remote);
     raw_main = nullptr;
@@ -1848,7 +1850,7 @@ TEST(RepositoryEngine, PushesAndFetchesLocalRemotes)
     ASSERT_NE(deleted, nullptr);
 }
 
-TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
+TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBranch)
 {
     TemporaryRepository repository;
     RemovePath remote{repository.path.string() + "-fetch-bare"};
@@ -1870,10 +1872,10 @@ TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
                               .c_str()),
         0);
 
-    const auto bookmark_target = [](const RepoSnapshot& snapshot, gg_named_ref_kind kind) {
+    const auto branch_target = [](const RepoSnapshot& snapshot, gg_named_ref_kind kind) {
         const auto ref = std::ranges::find_if(snapshot.refs, [&](const NamedRef& candidate) {
             return candidate.kind == kind && candidate.name == "main"
-                && (kind != GG_NAMED_REF_REMOTE_BOOKMARK || candidate.remote == "origin");
+                && (kind != GG_NAMED_REF_REMOTE_BRANCH || candidate.remote == "origin");
         });
         return ref == snapshot.refs.end() ? std::string{} : ref->target;
     };
@@ -1884,24 +1886,24 @@ TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
         return !snapshot.revisions.empty();
     });
     ASSERT_NE(opened, nullptr);
-    const std::string local_before = bookmark_target(*opened, GG_NAMED_REF_LOCAL_BOOKMARK);
+    const std::string local_before = branch_target(*opened, GG_NAMED_REF_LOCAL_BRANCH);
     ASSERT_FALSE(local_before.empty());
     EXPECT_TRUE(std::ranges::none_of(
         opened->revisions, [](const Revision& revision) { return revision.description == "remote"; }));
 
     engine.Enqueue(Fetch{"origin", false});
     const auto fetched = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        const std::string remote_target = bookmark_target(snapshot, GG_NAMED_REF_REMOTE_BOOKMARK);
+        const std::string remote_target = branch_target(snapshot, GG_NAMED_REF_REMOTE_BRANCH);
         return snapshot.generation > opened->generation && !remote_target.empty()
             && std::ranges::any_of(snapshot.revisions,
                 [&](const Revision& revision) { return revision.oid == remote_target; });
     });
     ASSERT_NE(fetched, nullptr);
-    EXPECT_EQ(bookmark_target(*fetched, GG_NAMED_REF_LOCAL_BOOKMARK), local_before);
-    const std::string remote_after_fetch = bookmark_target(*fetched, GG_NAMED_REF_REMOTE_BOOKMARK);
+    EXPECT_EQ(branch_target(*fetched, GG_NAMED_REF_LOCAL_BRANCH), local_before);
+    const std::string remote_after_fetch = branch_target(*fetched, GG_NAMED_REF_REMOTE_BRANCH);
     EXPECT_NE(remote_after_fetch, local_before);
     const auto fetched_remote = std::ranges::find_if(fetched->refs, [](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin";
+        return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == "main" && ref.remote == "origin";
     });
     ASSERT_NE(fetched_remote, fetched->refs.end());
     EXPECT_TRUE(fetched_remote->desync_known);
@@ -1916,17 +1918,17 @@ TEST(RepositoryEngine, FetchShowsRemoteCommitsAndPullMovesLocalBookmark)
             });
     });
     ASSERT_NE(synchronized, nullptr);
-    EXPECT_EQ(bookmark_target(*synchronized, GG_NAMED_REF_LOCAL_BOOKMARK), local_before);
+    EXPECT_EQ(branch_target(*synchronized, GG_NAMED_REF_LOCAL_BRANCH), local_before);
 
     engine.Enqueue(Fetch{"origin", true});
     const auto pulled = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > synchronized->generation
-            && bookmark_target(snapshot, GG_NAMED_REF_LOCAL_BOOKMARK) == remote_after_fetch;
+            && branch_target(snapshot, GG_NAMED_REF_LOCAL_BRANCH) == remote_after_fetch;
     });
     ASSERT_NE(pulled, nullptr);
 }
 
-TEST(RepositoryEngine, ForcePushesDivergedBookmark)
+TEST(RepositoryEngine, ForcePushesDivergedBranch)
 {
     TemporaryRepository repository;
     RemovePath remote{repository.path.string() + "-force-bare"};
@@ -1974,7 +1976,7 @@ TEST(RepositoryEngine, ForcePushesDivergedBookmark)
     EXPECT_NE(git_oid_equal(&local_oid, &remote_oid), 0);
 }
 
-TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
+TEST(RepositoryEngine, ReconcilesDivergedBranchAndPushesNormally)
 {
     TemporaryRepository repository;
     RemovePath remote{repository.path.string() + "-reconcile-bare"};
@@ -2008,22 +2010,22 @@ TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
 
     const auto relation = [](const RepoSnapshot& snapshot) {
         const auto local = std::ranges::find_if(snapshot.refs, [](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main";
         });
         const auto remote_ref = std::ranges::find_if(snapshot.refs, [](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin";
+            return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == "main" && ref.remote == "origin";
         });
         return local == snapshot.refs.end() || remote_ref == snapshot.refs.end()
-            ? BookmarkRelation::Unavailable
-            : ClassifyBookmarkRelation(snapshot, local->target, remote_ref->target);
+            ? BranchRelation::Unavailable
+            : ClassifyBranchRelation(snapshot, local->target, remote_ref->target);
     };
     const auto tips = [](const RepoSnapshot& snapshot) {
         std::pair<std::string, std::string> result;
         for (const NamedRef& ref : snapshot.refs)
         {
-            if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main")
+            if (ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main")
                 result.first = ref.target;
-            if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin")
+            if (ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == "main" && ref.remote == "origin")
                 result.second = ref.target;
         }
         return result;
@@ -2032,12 +2034,12 @@ TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
     RepositoryEngine engine;
     engine.Enqueue(OpenRepository{repository.path.string()});
     const auto opened = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return relation(snapshot) == BookmarkRelation::LocalAhead;
+        return relation(snapshot) == BranchRelation::LocalAhead;
     });
     ASSERT_NE(opened, nullptr);
     engine.Enqueue(Fetch{"origin", true});
     const auto diverged = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > opened->generation && relation(snapshot) == BookmarkRelation::Diverged;
+        return snapshot.generation > opened->generation && relation(snapshot) == BranchRelation::Diverged;
     });
     ASSERT_NE(diverged, nullptr);
     const auto [local_tip, remote_tip] = tips(*diverged);
@@ -2046,19 +2048,19 @@ TEST(RepositoryEngine, ReconcilesDivergedBookmarkAndPushesNormally)
 
     engine.Enqueue(Rebase{local_tip, remote_tip, true});
     const auto reconciled = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > diverged->generation && relation(snapshot) == BookmarkRelation::LocalAhead;
+        return snapshot.generation > diverged->generation && relation(snapshot) == BranchRelation::LocalAhead;
     });
     ASSERT_NE(reconciled, nullptr);
     ASSERT_TRUE(reconciled->can_undo);
 
     engine.Enqueue(Undo{});
     const auto undone = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > reconciled->generation && relation(snapshot) == BookmarkRelation::Diverged;
+        return snapshot.generation > reconciled->generation && relation(snapshot) == BranchRelation::Diverged;
     });
     ASSERT_NE(undone, nullptr);
     engine.Enqueue(Redo{});
     ASSERT_NE(WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
-        return snapshot.generation > undone->generation && relation(snapshot) == BookmarkRelation::LocalAhead;
+        return snapshot.generation > undone->generation && relation(snapshot) == BranchRelation::LocalAhead;
     }), nullptr);
 
     engine.Enqueue(Push{"main", "origin"});
@@ -2106,9 +2108,9 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
         std::pair<std::string, std::string> result;
         for (const NamedRef& ref : snapshot.refs)
         {
-            if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main")
+            if (ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main")
                 result.first = ref.target;
-            if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == "main" && ref.remote == "origin")
+            if (ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == "main" && ref.remote == "origin")
                 result.second = ref.target;
         }
         return result;
@@ -2125,7 +2127,7 @@ TEST(RepositoryEngine, ReconciliationKeepsLogicalConflictsLocalAndBlocksPush)
     const auto diverged = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         const auto [local, remote_ref] = refs(snapshot);
         return snapshot.generation > opened->generation && !local.empty() && !remote_ref.empty()
-            && ClassifyBookmarkRelation(snapshot, local, remote_ref) == BookmarkRelation::Diverged;
+            && ClassifyBranchRelation(snapshot, local, remote_ref) == BranchRelation::Diverged;
     });
     ASSERT_NE(diverged, nullptr);
     const auto [local_tip, remote_tip] = refs(*diverged);
@@ -2627,7 +2629,7 @@ TEST(RepositoryEngine, ClosesAndReopensWithoutWatcherEvents)
     EXPECT_EQ(reopened_diff->after, "changed while closed\n");
 }
 
-TEST(RepositoryEngine, RenamesBookmarksWithoutOverwriting)
+TEST(RepositoryEngine, RenamesBranchesWithoutOverwriting)
 {
     TemporaryRepository repository;
     RepositoryEngine engine;
@@ -2636,30 +2638,30 @@ TEST(RepositoryEngine, RenamesBookmarksWithoutOverwriting)
     ASSERT_NE(opened, nullptr);
     const std::string revision = opened->revisions.back().oid;
 
-    engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {"taken"}, revision, {}});
+    engine.Enqueue(Branch{GG_BRANCH_CREATE, {"taken"}, revision, {}});
     ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& value) {
         return std::ranges::any_of(value.refs, [](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "taken";
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "taken";
         });
     }), nullptr);
-    engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {"main"}, {}, "renamed"});
+    engine.Enqueue(Branch{GG_BRANCH_RENAME, {"main"}, {}, "renamed"});
     const auto renamed = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
         return std::ranges::any_of(value.refs, [](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "renamed";
+                   return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "renamed";
                })
             && std::ranges::none_of(value.refs, [](const NamedRef& ref) {
-                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+                return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main";
             });
     });
     ASSERT_NE(renamed, nullptr);
 
-    engine.Enqueue(Bookmark{GG_BOOKMARK_RENAME, {"renamed"}, {}, "taken"});
-    const TerminalEvent conflict = WaitForTerminal(engine, "bookmark");
+    engine.Enqueue(Branch{GG_BRANCH_RENAME, {"renamed"}, {}, "taken"});
+    const TerminalEvent conflict = WaitForTerminal(engine, "branch");
     EXPECT_FALSE(conflict.finished);
     EXPECT_NE(conflict.message.find("already exists"), std::string::npos);
 }
 
-TEST(RepositoryEngine, MovesBookmarksBackwardsOnlyWhenAllowed)
+TEST(RepositoryEngine, MovesBranchesBackwardsOnlyWhenAllowed)
 {
     TemporaryRepository repository;
     std::ofstream(repository.path / "tracked.txt") << "child\n";
@@ -2672,7 +2674,7 @@ TEST(RepositoryEngine, MovesBookmarksBackwardsOnlyWhenAllowed)
     const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return value.revisions.size() >= 2; });
     ASSERT_NE(opened, nullptr);
     const auto main = std::ranges::find_if(opened->refs, [](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main";
     });
     ASSERT_NE(main, opened->refs.end());
     const auto tip = std::ranges::find(opened->revisions, main->target, &Revision::oid);
@@ -2680,15 +2682,15 @@ TEST(RepositoryEngine, MovesBookmarksBackwardsOnlyWhenAllowed)
     ASSERT_FALSE(tip->parents.empty());
     const std::string parent = tip->parents.front();
 
-    engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {"main"}, parent, {}});
-    const TerminalEvent rejected = WaitForTerminal(engine, "bookmark");
+    engine.Enqueue(Branch{GG_BRANCH_MOVE, {"main"}, parent, {}});
+    const TerminalEvent rejected = WaitForTerminal(engine, "branch");
     EXPECT_FALSE(rejected.finished);
-    EXPECT_NE(rejected.message.find("refusing to move bookmark"), std::string::npos);
+    EXPECT_NE(rejected.message.find("refusing to move branch"), std::string::npos);
 
-    engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {"main"}, parent, {}, true});
+    engine.Enqueue(Branch{GG_BRANCH_MOVE, {"main"}, parent, {}, true});
     const auto moved = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return std::ranges::any_of(snapshot.refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main" && ref.target == parent;
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main" && ref.target == parent;
         });
     });
     ASSERT_NE(moved, nullptr);
@@ -2780,20 +2782,20 @@ TEST(RepositoryEngine, MovesLinesOnlyIntoChosenChildAndUndoesAtomically)
     });
     ASSERT_NE(chosen, nullptr);
     // Pin the selected side branch as a history head. Undo clears identity
-    // aliases under the V4 operation format; the bookmark must restore exactly.
-    engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {"chosen-child"}, chosen->working_copy, {}});
-    const auto bookmarked = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+    // aliases under the V4 operation format; the branch must restore exactly.
+    engine.Enqueue(Branch{GG_BRANCH_CREATE, {"chosen-child"}, chosen->working_copy, {}});
+    const auto branched = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         return snapshot.generation > chosen->generation
             && std::ranges::any_of(snapshot.refs, [&](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "chosen-child"
+                   return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "chosen-child"
                        && ref.target == chosen->working_copy;
                });
     });
-    ASSERT_NE(bookmarked, nullptr);
+    ASSERT_NE(branched, nullptr);
     engine.Enqueue(NewChange{"sibling", {source}, {}, {}, false});
     const auto sibling = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
         const auto working = FindRevision(snapshot, snapshot.working_copy);
-        return snapshot.generation > bookmarked->generation && working != snapshot.revisions.end()
+        return snapshot.generation > branched->generation && working != snapshot.revisions.end()
             && working->description == "sibling";
     });
     ASSERT_NE(sibling, nullptr);
@@ -2808,7 +2810,7 @@ TEST(RepositoryEngine, MovesLinesOnlyIntoChosenChildAndUndoesAtomically)
     ASSERT_NE(rewritten_sibling, moved->revisions.end());
     ASSERT_NE(rewritten_chosen, moved->revisions.end());
     EXPECT_TRUE(std::ranges::any_of(moved->refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "chosen-child"
+        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "chosen-child"
             && ref.target == rewritten_chosen->oid;
     }));
     engine.Enqueue(LoadDiff{rewritten_sibling->oid, "tracked.txt", false,
@@ -2833,7 +2835,7 @@ TEST(RepositoryEngine, MovesLinesOnlyIntoChosenChildAndUndoesAtomically)
     EXPECT_NE(std::ranges::find(undone->revisions, source, &Revision::oid), undone->revisions.end());
     EXPECT_NE(std::ranges::find(undone->revisions, chosen->working_copy, &Revision::oid), undone->revisions.end());
     EXPECT_TRUE(std::ranges::any_of(undone->refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "chosen-child"
+        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "chosen-child"
             && ref.target == chosen->working_copy;
     }));
 }
@@ -3006,39 +3008,39 @@ TEST(RepositoryEngine, MovesFileIntoMergeChildThroughEitherParentWithoutLosingRe
         ASSERT_EQ(source_revision->parents.size(), 1U);
         const std::string source = source_revision->oid;
         // Materialize both merge parents in the bounded history view instead
-        // of relying on an unbookmarked second parent being expanded.
-        engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {"move-source"}, source, {}});
-        const auto source_bookmarked = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        // of relying on an unbranched second parent being expanded.
+        engine.Enqueue(Branch{GG_BRANCH_CREATE, {"move-source"}, source, {}});
+        const auto source_branched = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
             return snapshot.generation > opened->generation
                 && std::ranges::any_of(snapshot.refs, [&](const NamedRef& ref) {
-                       return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "move-source"
+                       return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "move-source"
                            && ref.target == source;
                    });
         });
-        ASSERT_NE(source_bookmarked, nullptr);
+        ASSERT_NE(source_branched, nullptr);
         engine.Enqueue(NewChange{"other parent", {source_revision->parents.front()}, {}, {}, false});
         const auto other = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
             const auto working = FindRevision(snapshot, snapshot.working_copy);
-            return snapshot.generation > source_bookmarked->generation && working != snapshot.revisions.end()
+            return snapshot.generation > source_branched->generation && working != snapshot.revisions.end()
                 && working->description == "other parent";
         });
         ASSERT_NE(other, nullptr);
-        engine.Enqueue(Bookmark{GG_BOOKMARK_CREATE, {"other-parent"}, other->working_copy, {}});
-        const auto other_bookmarked = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        engine.Enqueue(Branch{GG_BRANCH_CREATE, {"other-parent"}, other->working_copy, {}});
+        const auto other_branched = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
             return snapshot.generation > other->generation
                 && std::ranges::any_of(snapshot.refs, [&](const NamedRef& ref) {
-                       return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "other-parent"
+                       return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "other-parent"
                            && ref.target == other->working_copy;
                    });
         });
-        ASSERT_NE(other_bookmarked, nullptr);
+        ASSERT_NE(other_branched, nullptr);
         const std::vector<std::string> parents = source_first
             ? std::vector<std::string>{source, other->working_copy}
             : std::vector<std::string>{other->working_copy, source};
         engine.Enqueue(NewChange{"merge child", parents, {}, {}, false});
         const auto child = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
             const auto working = FindRevision(snapshot, snapshot.working_copy);
-            return snapshot.generation > other_bookmarked->generation && working != snapshot.revisions.end()
+            return snapshot.generation > other_branched->generation && working != snapshot.revisions.end()
                 && working->description == "merge child" && working->parents == parents;
         });
         ASSERT_NE(child, nullptr);
@@ -3065,7 +3067,7 @@ TEST(RepositoryEngine, MovesFileIntoMergeChildThroughEitherParentWithoutLosingRe
         EXPECT_FALSE(rewritten_child->conflicted);
         EXPECT_NE(std::ranges::find(moved->revisions, other->working_copy, &Revision::oid), moved->revisions.end());
         EXPECT_TRUE(std::ranges::any_of(moved->refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "other-parent"
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "other-parent"
                 && ref.target == other->working_copy;
         }));
         engine.Enqueue(LoadDiff{rewritten_child->oid, "tracked.txt", false, DiffOptions{.context_lines = -1}});
@@ -3807,7 +3809,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Describe{"missing", "description"}, "describe"},
         {Metaedit{"missing", "description", "Author <author@example.test>"}, "metaedit"},
         {Edit{"missing"}, "edit"},
-        {MoveChange{GG_MOVE_PREVIOUS, 1, true, true}, "move"},
+        {MoveChange{GG_MOVE_PREVIOUS, 1, true}, "move"},
         {Commit{"commit"}, "commit"},
         {Amend{"missing", "amended"}, "amend"},
         {TrackPaths{{"untracked.txt"}, true}, "track paths"},
@@ -3819,7 +3821,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {Split{"missing", "selected", {"tracked.txt"}}, "split"},
         {Squash{"missing-source", "missing-destination", "combined"}, "squash"},
         {Abandon{{"missing"}, true, true, {}}, "abandon"},
-        {RemoteBookmarkDelete{"missing", "missing"}, "delete remote bookmark"},
+        {RemoteBranchDelete{"missing", "missing"}, "delete remote branch"},
         {AddRemote{"origin", "https://example.test/duplicate.git"}, "add remote"},
         {DeleteRemote{"missing"}, "delete remote"},
         {Restore{"missing-from", "missing-into", {"tracked.txt"}}, "restore"},
@@ -3832,7 +3834,7 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
         {RevertFile{}, "revert file"},
         {DeleteFile{"../outside"}, "delete file"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
-        {Bookmark{GG_BOOKMARK_RENAME, {"missing"}, "missing", "renamed"}, "bookmark"},
+        {Branch{GG_BRANCH_RENAME, {"missing"}, "missing", "renamed"}, "branch"},
         {Tag{GG_TAG_SET, {"coverage-tag"}, "missing", true}, "tag"},
         {Undo{}, "undo"},
         {Redo{}, "redo"},

@@ -66,12 +66,14 @@ inline constexpr ImU32 kRowHover = IM_COL32(28, 34, 43, 255);
 inline constexpr ImU32 kRowSelected = IM_COL32(33, 52, 74, 255);
 inline constexpr ImU32 kRowBorder = IM_COL32(48, 54, 61, 180);
 inline constexpr ImU32 kGraphBackground = IM_COL32(18, 22, 29, 255);
-inline constexpr ImU32 kBadgeBookmark = IM_COL32(9, 105, 218, 235);
-inline constexpr ImU32 kBadgeBookmarkSynced = IM_COL32(31, 136, 61, 235);
-inline constexpr ImU32 kBadgeBookmarkDiverged = IM_COL32(219, 109, 40, 235);
+inline constexpr ImU32 kBadgeBranch = IM_COL32(9, 105, 218, 235);
+inline constexpr ImU32 kBadgeBranchSynced = IM_COL32(31, 136, 61, 235);
+inline constexpr ImU32 kBadgeBranchDiverged = IM_COL32(219, 109, 40, 235);
 inline constexpr ImU32 kBadgeTag = IM_COL32(88, 70, 155, 235);
 inline constexpr ImU32 kBadgeRemote = IM_COL32(66, 68, 90, 235);
 inline constexpr ImU32 kBadgeWorkingCopy = IM_COL32(31, 136, 61, 235);
+// Outline of the branch HEAD is attached to.
+inline constexpr ImU32 kBadgeCurrentOutline = IM_COL32(120, 230, 140, 255);
 inline constexpr ImU32 kStatusAdded = IM_COL32(46, 160, 67, 255);
 inline constexpr ImU32 kStatusModified = IM_COL32(210, 153, 34, 255);
 inline constexpr ImU32 kStatusDeleted = IM_COL32(248, 81, 73, 255);
@@ -158,19 +160,19 @@ bool IsSymlinkMode(unsigned int mode);
 bool IsSubmoduleMode(unsigned int mode);
 std::string FormatFileMode(unsigned int mode);
 const char* ModeKind(unsigned int mode);
-ImU32 BookmarkBadgeColor(std::string_view name, const std::vector<NamedRef>& refs);
+ImU32 BranchBadgeColor(std::string_view name, const std::vector<NamedRef>& refs);
 ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs);
 std::string ReferenceLabel(const NamedRef& ref);
 std::pair<std::string, std::size_t> ReferenceBadgeLabel(
     const NamedRef& ref, const std::vector<NamedRef>& refs);
 const Remote* DefaultRemote(const RepoSnapshot& snapshot);
-const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revision);
-std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark);
+const NamedRef* BranchAt(const RepoSnapshot& snapshot, const std::string& revision);
+std::string RemoteForBranch(const RepoSnapshot& snapshot, std::string_view branch);
 std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name, gg_named_ref_kind kind);
 // Badge text wider than kBadgeMaxTextWidth keeps its end and elides its start.
 float BadgeWidth(std::string_view label);
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,
-    std::size_t dimmed_prefix = 0);
+    std::size_t dimmed_prefix = 0, ImU32 outline = 0);
 void DrawElidedText(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view text, ImU32 color);
 bool DrawTextWithin(ImDrawList* draw, ImVec2 position, float maximum_x, std::string_view text, ImU32 color);
 void DrawElidedBadge(ImDrawList* draw, ImVec2 cursor, float center_y, float maximum_x, std::string_view label,

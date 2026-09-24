@@ -572,7 +572,7 @@ void RepositoryEngine::Impl::MoveWorkingTreeFile(const MoveFiles& command)
     Check(git_index_write_tree_to(&tree_oid, index.get(), git.get()), "write file transfer tree");
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
-    Check(gg_repository_amend_tree_worktree(&mutation.value, gg, OidString(active_oid).c_str(), &tree_oid, &operation),
+    Check(gg_repository_amend_tree(&mutation.value, gg, OidString(active_oid).c_str(), &tree_oid, &operation),
         "move file between Working tree and active commit");
     PublishWorktreeChanges({path}, true);
 }
@@ -670,7 +670,7 @@ void RepositoryEngine::Impl::MoveDiffSelection(const MoveDiffLines& command, boo
         const git_oid replacement_tree = WriteAmendedTree(git.get(), active_oid, command.path, partial);
         Mutation mutation;
         gg_operation_options operation = OperationOptions();
-        Check(gg_repository_amend_tree_worktree(&mutation.value, gg, OidString(active_oid).c_str(),
+        Check(gg_repository_amend_tree(&mutation.value, gg, OidString(active_oid).c_str(),
                   &replacement_tree, &operation),
             "move lines between Working tree and active commit");
         PublishWorktreeChanges({command.path}, true);

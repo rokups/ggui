@@ -170,29 +170,29 @@ std::vector<Event> RepositoryEngine::PollEvents()
     return result;
 }
 
-BookmarkRelation ClassifyBookmarkRelation(
+BranchRelation ClassifyBranchRelation(
     const RepoSnapshot& snapshot, std::string_view local, std::string_view remote)
 {
     git_repository* raw = nullptr;
     if (git_repository_open_ext(&raw, snapshot.root.c_str(), GIT_REPOSITORY_OPEN_CROSS_FS, nullptr) != GIT_OK)
-        return BookmarkRelation::Unavailable;
+        return BranchRelation::Unavailable;
     RepositoryInternal::GitRepositoryPtr repository(raw);
     git_oid local_oid{};
     git_oid remote_oid{};
     const git_oid_t type = git_repository_oid_type(repository.get());
     if (git_oid_fromstr(&local_oid, std::string(local).c_str(), type) != GIT_OK
         || git_oid_fromstr(&remote_oid, std::string(remote).c_str(), type) != GIT_OK)
-        return BookmarkRelation::Unavailable;
+        return BranchRelation::Unavailable;
     if (git_oid_equal(&local_oid, &remote_oid) != 0)
-        return BookmarkRelation::Synchronized;
+        return BranchRelation::Synchronized;
     const int local_is_ancestor = git_graph_descendant_of(repository.get(), &remote_oid, &local_oid);
     const int remote_is_ancestor = git_graph_descendant_of(repository.get(), &local_oid, &remote_oid);
-    if (local_is_ancestor < 0 || remote_is_ancestor < 0) return BookmarkRelation::Unavailable;
+    if (local_is_ancestor < 0 || remote_is_ancestor < 0) return BranchRelation::Unavailable;
     if (local_is_ancestor != 0)
-        return BookmarkRelation::RemoteAhead;
+        return BranchRelation::RemoteAhead;
     if (remote_is_ancestor != 0)
-        return BookmarkRelation::LocalAhead;
-    return BookmarkRelation::Diverged;
+        return BranchRelation::LocalAhead;
+    return BranchRelation::Diverged;
 }
 
 void RepositoryEngine::Cancel()
@@ -329,7 +329,7 @@ void MarkPushedRevisions(
     }
     std::vector<std::string> pending;
     for (const NamedRef& ref : refs)
-        if (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK || ref.kind == GG_NAMED_REF_REMOTE_TAG)
+        if (ref.kind == GG_NAMED_REF_REMOTE_BRANCH || ref.kind == GG_NAMED_REF_REMOTE_TAG)
             pending.push_back(ref.target);
     if (repository != nullptr)
     {

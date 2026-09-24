@@ -564,7 +564,7 @@ void Application::LoadSettings()
         _recent_repositories.clear();
         for (auto path = loaded_recent_repositories.rbegin(); path != loaded_recent_repositories.rend(); ++path)
             RememberRepository(*path);
-        _repository_visible_bookmarks = json.value("visibleBookmarks", decltype(_repository_visible_bookmarks){});
+        _repository_visible_branches = json.value("visibleBranches", decltype(_repository_visible_branches){});
         _repository_selected_tags = json.value("selectedTags", decltype(_repository_selected_tags){});
         _repository_selected_remotes = json.value("selectedRemotes", decltype(_repository_selected_remotes){});
         _default_layout = json.value("defaultLayout", true);
@@ -590,7 +590,7 @@ void Application::SaveSettings()
     {
         std::filesystem::create_directories(_settings_path.parent_path());
         const nlohmann::json json{{"recentRepositories", _recent_repositories},
-            {"visibleBookmarks", _repository_visible_bookmarks},
+            {"visibleBranches", _repository_visible_branches},
             {"selectedTags", _repository_selected_tags},
             {"selectedRemotes", _repository_selected_remotes}, {"defaultLayout", _default_layout},
             {"diffSideBySide", _diff_side_by_side}, {"diffWhitespaceMode", WhitespaceModeIndex(_diff_whitespace_mode)},

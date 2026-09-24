@@ -81,9 +81,9 @@ const std::vector<std::string>& Application::SelectedRevisionsForTest() const
     return _selected_revisions;
 }
 
-const std::vector<std::string>& Application::VisibleBookmarksForTest() const
+const std::vector<std::string>& Application::VisibleBranchesForTest() const
 {
-    return _visible_bookmarks;
+    return _visible_branches;
 }
 
 const std::vector<std::string>& Application::SelectedTagsForTest() const
@@ -236,9 +236,9 @@ void Application::ShowWorkspaceRenameForTest()
     OpenDialog(Dialog::WorkspaceRename);
 }
 
-void Application::ShowBookmarkRenameForTest(const std::string& name)
+void Application::ShowBranchRenameForTest(const std::string& name)
 {
-    OpenDialog(Dialog::BookmarkRename);
+    OpenDialog(Dialog::BranchRename);
     _input_primary = name;
     _input_secondary = name;
 }
@@ -246,7 +246,7 @@ void Application::ShowBookmarkRenameForTest(const std::string& name)
 void Application::SetSnapshotForTest(RepoSnapshot snapshot)
 {
     _test_snapshot_mode = true;
-    _pending_created_bookmark.clear();
+    _pending_created_branch.clear();
 #ifdef GGUI_TESTING
     _engine.SetCommandsSuppressedForTest(true);
 #endif
@@ -343,12 +343,12 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _history_requested_filter.clear();
     _history_anchor.clear();
     _history_expansion_pending.clear();
-    _visible_bookmarks.clear();
-    _visible_bookmarks_user_selected = false;
+    _visible_branches.clear();
+    _visible_branches_user_selected = false;
     _selected_tags.clear();
     _selected_remotes.clear();
     _selected_remotes_user_selected = false;
-    _built_bookmarks.clear();
+    _built_branches.clear();
 }
 
 bool Application::HistoryLoadPendingForTest() const
@@ -461,9 +461,9 @@ std::pair<std::string, std::size_t> Application::ReferenceBadgeLabelForTest(
     return ReferenceBadgeLabel(ref, refs);
 }
 
-unsigned int Application::BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
+unsigned int Application::BranchColorForTest(const std::string& name, const std::vector<NamedRef>& refs)
 {
-    return BookmarkBadgeColor(name, refs);
+    return BranchBadgeColor(name, refs);
 }
 
 std::string Application::FormatTimestampForTest(std::int64_t timestamp)

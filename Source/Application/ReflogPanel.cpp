@@ -95,10 +95,10 @@ void Application::RenderReflog()
                 if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "Reveal old commit", nullptr,
                         entry.old_commit_available && !entry.old_hash.empty()))
                     RevealRevision(entry.old_hash);
-                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark from old commit...", nullptr,
+                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create branch from old commit...", nullptr,
                         entry.old_commit_available && !entry.old_hash.empty()))
                 {
-                    OpenDialog(Dialog::Bookmark);
+                    OpenDialog(Dialog::Branch);
                     _input_secondary = entry.old_hash;
                 }
                 ImGui::EndPopup();
@@ -122,10 +122,10 @@ void Application::RenderReflog()
                 if (ActionMenuItem(ICON_MS_OPEN_IN_NEW, "Reveal new commit", nullptr,
                         entry.new_commit_available && !entry.new_hash.empty()))
                     RevealRevision(entry.new_hash);
-                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark from new commit...", nullptr,
+                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create branch from new commit...", nullptr,
                         entry.new_commit_available && !entry.new_hash.empty()))
                 {
-                    OpenDialog(Dialog::Bookmark);
+                    OpenDialog(Dialog::Branch);
                     _input_secondary = entry.new_hash;
                 }
                 ImGui::EndPopup();

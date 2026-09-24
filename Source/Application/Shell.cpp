@@ -146,7 +146,7 @@ void Application::RenderFrame()
     else
     {
         SetupDockspace();
-        if (_show_bookmarks) RenderBookmarks();
+        if (_show_branches) RenderBranches();
         if (_show_tags) RenderTags();
         if (_show_workspaces) RenderWorkspaces();
         if (_show_remotes) RenderRemotes();
@@ -206,7 +206,7 @@ void Application::SetupDockspace()
         ImGuiID change_list = 0;
         ImGuiID change_information = 0;
         ImGui::DockBuilderSplitNode(changes, ImGuiDir_Down, 0.40f, &change_information, &change_list);
-        ImGui::DockBuilderDockWindow("Bookmarks", reference_top);
+        ImGui::DockBuilderDockWindow("Branches", reference_top);
         ImGui::DockBuilderDockWindow("Tags", reference_top);
         ImGui::DockBuilderDockWindow("Workspaces", reference_bottom);
         ImGui::DockBuilderDockWindow("Remotes", reference_bottom);
@@ -308,7 +308,7 @@ void Application::RenderMenuBar()
     {
         if (_snapshot != nullptr)
         {
-            ImGui::MenuItem("Bookmarks", nullptr, &_show_bookmarks);
+            ImGui::MenuItem("Branches", nullptr, &_show_branches);
             ImGui::MenuItem("Tags", nullptr, &_show_tags);
             ImGui::MenuItem("Workspaces", nullptr, &_show_workspaces);
             ImGui::MenuItem("Remotes", nullptr, &_show_remotes);
@@ -332,7 +332,7 @@ void Application::RenderMenuBar()
         if (ActionMenuItem(ICON_MS_HOME, "Reset layout"))
         {
             _default_layout = true;
-            _show_bookmarks = _show_tags = _show_workspaces = _show_remotes = true;
+            _show_branches = _show_tags = _show_workspaces = _show_remotes = true;
             _show_history = _show_changes = _show_change_info = _show_diff = true;
             _show_reflog = _show_blame = false;
             _show_operations = false;
@@ -405,7 +405,7 @@ void Application::RenderSelectedChangeActions(const std::string& revision, bool 
     if (ActionMenuItem(ICON_MS_EDIT, "Edit", "E", enabled))
     {
         select();
-        EnqueueAction(Edit{revision});
+        EnqueueAction(Edit{CheckoutTarget(revision)});
     }
     const std::string duplicate_label = IconLabel(ICON_MS_CONTENT_COPY, "Duplicate");
     if (ImGui::BeginMenu(duplicate_label.c_str(), enabled))
@@ -582,13 +582,28 @@ void Application::RenderToolbar()
         OpenExternalPath(_snapshot->root, "Repository directory"); // GCOV_EXCL_LINE: external application handoff
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\nOpen repository folder.", _snapshot->root.c_str());
 
-    // Current commit and bookmark are stable context. Activity is appended
+    // Current commit and branch are stable context. Activity is appended
     // after them and never replaces repository context that is already known.
     if (!current_commit.empty())
     {
         ImGui::SameLine();
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.30f, 0.78f, 0.42f, 1.0f));
         ImGui::BeginGroup();
+        // Git-like context: the checked-out branch, or a detached HEAD.
+        if (_snapshot->head_branch.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, kTextMuted);
+            ImGui::TextUnformatted(ICON_MS_CALL_SPLIT " detached");
+            ImGui::PopStyleColor();
+        }
+        else
+        {
+            ImGui::TextUnformatted(ICON_MS_BOOKMARK " ");
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextUnformatted(_snapshot->head_branch.data(),
+                _snapshot->head_branch.data() + _snapshot->head_branch.size());
+        }
+        ImGui::SameLine();
         TextLabelledId(_snapshot->working_copy.empty() ? "HEAD " : "@ ", current_commit,
             RevisionPrefix(current_commit), CommitIdColor(true));
         ImGui::EndGroup();

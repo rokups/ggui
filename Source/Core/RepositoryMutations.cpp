@@ -29,6 +29,7 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 options.insert_before = before.Get();
                 options.insert_after = after.Get();
                 options.no_edit = value.no_edit;
+                options.detach = value.detach;
                 Mutate("create change", [&](auto* out, auto* operation) {
                     return gg_repository_new_change(out, gg, &options, operation);
                 });
@@ -59,27 +60,29 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
             },
             [&](const Edit& value) {
                 Mutate("edit change", [&](auto* out, auto* operation) {
-                    return gg_repository_edit_worktree(out, gg, value.revision.c_str(), operation);
+                    return gg_repository_edit(out, gg, value.revision.c_str(), operation);
                 });
             },
             [&](const MoveChange& value) {
                 gg_move_options options = GG_MOVE_OPTIONS_INIT;
                 options.direction = value.direction;
                 options.offset = value.offset;
-                options.edit = value.edit;
                 options.conflict = value.conflict;
                 Mutate("move working copy", [&](auto* out, auto* operation) {
                     return gg_repository_move(out, gg, &options, operation);
                 });
             },
             [&](const Commit& value) {
+                gg_commit_options options = GG_COMMIT_OPTIONS_INIT;
+                options.message = value.message.c_str();
+                options.message_provided = 1;
                 CaptureWorktree("commit working tree", [&](auto* out, auto* operation) {
-                    return gg_repository_commit_worktree(out, gg, value.message.c_str(), operation);
+                    return gg_repository_commit(out, gg, &options, operation);
                 });
             },
             [&](const Amend& value) {
                 CaptureWorktree("amend commit", [&](auto* out, auto* operation) {
-                    return gg_repository_amend_worktree(out, gg, value.revision.c_str(),
+                    return gg_repository_amend(out, gg, value.revision.c_str(),
                         value.message.empty() ? nullptr : value.message.c_str(), operation);
                 });
             },
@@ -249,26 +252,26 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 gg_abandon_options options = GG_ABANDON_OPTIONS_INIT;
                 const StringArray revisions(value.revisions);
                 options.revisions = revisions.Get();
-                options.retain_bookmarks = value.retain_bookmarks;
+                options.retain_branches = value.retain_branches;
                 options.restore_descendants = value.restore_descendants;
                 Mutate("abandon change", [&](auto* out, auto* operation) {
                     return gg_repository_abandon(out, gg, &options, operation);
                 });
                 try
                 {
-                    for (const RemoteBookmarkDelete& bookmark : value.remote_bookmarks)
-                        RemoveRemoteBookmark(bookmark, false);
+                    for (const RemoteBranchDelete& branch : value.remote_branches)
+                        RemoveRemoteBranch(branch, false);
                 }
                 catch (const std::exception& error)
                 {
                     PublishSnapshot();
-                    throw std::runtime_error(std::string("Changes abandoned locally; remote bookmark deletion failed: ")
+                    throw std::runtime_error(std::string("Changes abandoned locally; remote branch deletion failed: ")
                         + error.what() + ". Local history can be undone; remote deletions cannot.");
                 }
-                if (!value.remote_bookmarks.empty())
+                if (!value.remote_branches.empty())
                     PublishSnapshot();
             },
-            [&](const RemoteBookmarkDelete& value) { RemoveRemoteBookmark(value, true); },
+            [&](const RemoteBranchDelete& value) { RemoveRemoteBranch(value, true); },
             [&](const AddRemote& value) {
                 git_remote* raw_remote = nullptr;
                 Check(git_remote_create(&raw_remote, git.get(), value.name.c_str(), value.url.c_str()), "add remote");
@@ -322,8 +325,8 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                     return gg_repository_simplify_parents(out, gg, &options, operation);
                 });
             },
-            [&](const Bookmark& value) {
-                gg_bookmark_options options = GG_BOOKMARK_OPTIONS_INIT;
+            [&](const Branch& value) {
+                gg_branch_options options = GG_BRANCH_OPTIONS_INIT;
                 std::vector<std::string> names = value.names;
                 if (!value.rename_to.empty())
                     names.push_back(value.rename_to);
@@ -332,8 +335,8 @@ void RepositoryEngine::Impl::DispatchMutation(const Command& command)
                 options.names = array.Get();
                 options.revision = value.revision.c_str();
                 options.allow_backwards = value.allow_backwards;
-                Mutate("update bookmark", [&](auto* out, auto* operation) {
-                    return gg_repository_bookmark(out, gg, &options, operation);
+                Mutate("update branch", [&](auto* out, auto* operation) {
+                    return gg_repository_branch(out, gg, &options, operation);
                 });
             },
             [&](const Tag& value) {
@@ -481,12 +484,12 @@ std::string CommandName(const Command& command)
             [](const Reorder&) { return "reorder"; },
             [](const Split&) { return "split"; }, [](const Squash&) { return "squash"; },
             [](const Abandon&) { return "abandon"; },
-            [](const RemoteBookmarkDelete&) { return "delete remote bookmark"; },
+            [](const RemoteBranchDelete&) { return "delete remote branch"; },
             [](const Restore&) { return "restore"; },
             [](const MoveFiles&) { return "move files"; },
             [](const MoveDiffLines&) { return "move diff lines"; },
             [](const RevertDiffLines&) { return "revert diff lines"; },
-            [](const SimplifyParents&) { return "simplify parents"; }, [](const Bookmark&) { return "bookmark"; },
+            [](const SimplifyParents&) { return "simplify parents"; }, [](const Branch&) { return "branch"; },
             [](const Tag&) { return "tag"; }, [](const Undo&) { return "undo"; }, [](const Redo&) { return "redo"; },
             [](const RestoreOperation&) { return "restore operation"; },
             [](const WorkspaceAdd&) { return "add workspace"; },

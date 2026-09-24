@@ -48,7 +48,7 @@ void MarkPushedRevisions(
     std::vector<Revision>& revisions, const std::vector<NamedRef>& refs, git_repository* repository = nullptr);
 std::string FirstLine(const std::string& value);
 
-enum class BookmarkRelation
+enum class BranchRelation
 {
     Unavailable,
     Synchronized,
@@ -57,7 +57,7 @@ enum class BookmarkRelation
     Diverged,
 };
 
-BookmarkRelation ClassifyBookmarkRelation(
+BranchRelation ClassifyBranchRelation(
     const RepoSnapshot& snapshot, std::string_view local, std::string_view remote);
 
 } // namespace Ggui

@@ -66,9 +66,9 @@ void Application::UpdateGraphBuild()
 {
     if (_snapshot == nullptr) return;
     EnsureRemoteSelection();
-    EnsureVisibleBookmarkSelection();
+    EnsureVisibleBranchSelection();
     EnsureTagSelection();
-    const std::string key = VisibleBookmarksKey();
+    const std::string key = VisibleBranchesKey();
     const auto now = std::chrono::steady_clock::now();
     if (_history_observed_filter != _graph_filter)
     {
@@ -82,7 +82,7 @@ void Application::UpdateGraphBuild()
         && _history_requested_key == key && _history_requested_filter == _graph_filter)
         return;
     HistoryQuery query;
-    query.bookmarks = _visible_bookmarks;
+    query.branches = _visible_branches;
     query.tags = _selected_tags;
     query.remotes = _selected_remotes;
     query.search = _graph_filter;
@@ -164,7 +164,7 @@ void Application::RenderHistory()
     if (!ImGui::Begin("History", &_show_history)) { ImGui::End(); return; }
     const bool actions_locked = !_active_operation.empty();
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##graph filter", "Search changes, IDs, bookmarks, tags", &_graph_filter);
+    ImGui::InputTextWithHint("##graph filter", "Search changes, IDs, branches, tags", &_graph_filter);
     UpdateGraphBuild();
     ImGui::BeginChild("graph scroll", {}, ImGuiChildFlags_Borders);
     const bool history_window_hovered = ImGui::IsWindowHovered();
@@ -199,10 +199,10 @@ void Application::RenderHistory()
         && !io.KeyCtrl && !io.KeySuper;
     if (action_hotkeys)
     {
-        if (!io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N))
-            CreateChange(_selected_revision);
+        if (!io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_N))
+            CreateChange(_selected_revision, io.KeyAlt);
         else if (!io.KeyAlt && !io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_E))
-            EnqueueAction(Edit{_selected_revision});
+            EnqueueAction(Edit{CheckoutTarget(_selected_revision)});
         else if (!io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_D))
             EnqueueAction(Duplicate{_selected_revision, io.KeyShift});
         else if (!io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_S))
@@ -530,8 +530,10 @@ void Application::RenderHistory()
             {
                 std::string label;
                 ImU32 color = 0;
-                bool bookmark = false;
+                bool branch = false;
                 bool local = false;
+                bool current = false;
+                bool elsewhere = false;
                 std::string remotes;
             };
             std::vector<HistoryBadge> badges;
@@ -543,17 +545,28 @@ void Application::RenderHistory()
                     auto [label, dimmed_prefix] = ReferenceBadgeLabel(ref, _snapshot->refs);
                     (void)dimmed_prefix;
                     if (label.empty()) continue;
-                    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-                        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-                    const gg_named_ref_kind local_kind = bookmark
-                        ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
-                    const gg_named_ref_kind remote_kind = bookmark
-                        ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
-                    HistoryBadge badge{std::move(label), RefBadgeColor(ref, _snapshot->refs), bookmark,
+                    const bool branch = ref.kind == GG_NAMED_REF_LOCAL_BRANCH
+                        || ref.kind == GG_NAMED_REF_REMOTE_BRANCH;
+                    const gg_named_ref_kind local_kind = branch
+                        ? GG_NAMED_REF_LOCAL_BRANCH : GG_NAMED_REF_LOCAL_TAG;
+                    const gg_named_ref_kind remote_kind = branch
+                        ? GG_NAMED_REF_REMOTE_BRANCH : GG_NAMED_REF_REMOTE_TAG;
+                    HistoryBadge badge{std::move(label), RefBadgeColor(ref, _snapshot->refs), branch,
                         std::ranges::any_of(_snapshot->refs, [&](const NamedRef& candidate) {
                             return candidate.kind == local_kind && candidate.name == ref.name
                                 && candidate.target == ref.target;
-                        }), {}};
+                        }), false, false, {}};
+                    for (const NamedRef& candidate : _snapshot->refs)
+                        if (candidate.kind == GG_NAMED_REF_LOCAL_BRANCH && candidate.name == ref.name
+                            && candidate.target == ref.target)
+                        {
+                            badge.current = candidate.current;
+                            badge.elsewhere = !candidate.workspace.empty();
+                        }
+                    // Branches another workspace has checked out cannot be
+                    // checked out or moved here; show them muted.
+                    if (badge.elsewhere)
+                        badge.color = (badge.color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 110);
                     std::vector<std::string> remotes;
                     for (const NamedRef& candidate : _snapshot->refs)
                         if (candidate.kind == remote_kind && candidate.name == ref.name
@@ -597,7 +610,8 @@ void Application::RenderHistory()
             for (const HistoryBadge& badge : badges)
             {
                 const ImVec2 badge_start = cursor;
-                DrawBadge(draw, cursor, center, badge.label, badge.color);
+                DrawBadge(draw, cursor, center, badge.label, badge.color, 0,
+                    badge.current ? kBadgeCurrentOutline : 0);
                 if (ImGui::IsMouseHoveringRect(
                         {badge_start.x, minimum.y}, {cursor.x, maximum.y}))
                     hovered_badge = &badge;
@@ -614,21 +628,21 @@ void Application::RenderHistory()
 #endif
             }
 
-            // A left-button drag that starts on a local bookmark pill moves
-            // that bookmark instead of the change.
+            // A left-button drag that starts on a local branch pill moves
+            // that branch instead of the change.
             if (ImGui::IsItemActivated())
             {
-                if (hovered_badge != nullptr && hovered_badge->bookmark && hovered_badge->local
+                if (hovered_badge != nullptr && hovered_badge->branch && hovered_badge->local
                     && ImGui::GetCurrentContext()->ActiveIdMouseButton == ImGuiMouseButton_Left)
-                    _history_bookmark_drag = hovered_badge->label;
+                    _history_branch_drag = hovered_badge->label;
                 else
-                    _history_bookmark_drag.clear();
+                    _history_branch_drag.clear();
             }
-            if (!actions_locked && !_history_bookmark_drag.empty()
+            if (!actions_locked && !_history_branch_drag.empty()
                 && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
             {
-                ImGui::SetDragDropPayload("GGUI_BOOKMARK",
-                    _history_bookmark_drag.c_str(), _history_bookmark_drag.size() + 1);
+                ImGui::SetDragDropPayload("GGUI_BRANCH",
+                    _history_branch_drag.c_str(), _history_branch_drag.size() + 1);
                 ImGui::EndDragDropSource();
             }
             else if (!actions_locked && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceNoPreviewTooltip))
@@ -652,7 +666,7 @@ void Application::RenderHistory()
             bool hovered_copy = false;
             bool hovered_file_drop = false;
             bool hovered_action_drop = false;
-            bool hovered_bookmark_drop = false;
+            bool hovered_branch_drop = false;
             if (!actions_locked && ImGui::BeginDragDropTarget())
             {
                 const float ratio = (ImGui::GetMousePos().y - minimum.y) / kRowHeight;
@@ -690,15 +704,15 @@ void Application::RenderHistory()
                             DropTooltip(*hovered_drop, hovered_entire_branch), revision.oid, hint);
                     }
                 }
-                else if (dragging != nullptr && dragging->IsDataType("GGUI_BOOKMARK"))
+                else if (dragging != nullptr && dragging->IsDataType("GGUI_BRANCH"))
                 {
                     const std::string_view name(static_cast<const char*>(dragging->Data));
-                    hovered_bookmark_drop = std::ranges::none_of(_snapshot->refs, [&](const NamedRef& ref) {
-                        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name
+                    hovered_branch_drop = std::ranges::none_of(_snapshot->refs, [&](const NamedRef& ref) {
+                        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == name
                             && ref.target == revision.oid;
                     });
-                    if (hovered_bookmark_drop)
-                        RenderRevisionTooltip("Move bookmark to", revision.oid, name);
+                    if (hovered_branch_drop)
+                        RenderRevisionTooltip("Move branch to", revision.oid, name);
                 }
                 hovered_action_drop = dragging != nullptr && dragging->IsDataType("GGUI_CHANGE_ACTION");
                 if (hovered_action_drop)
@@ -733,18 +747,18 @@ void Application::RenderHistory()
                         _open_drop_actions = true;
                     }
                 }
-                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_BOOKMARK"))
+                if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("GGUI_BRANCH"))
                 {
                     const std::string_view name(static_cast<const char*>(payload->Data));
-                    const auto bookmark = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
-                        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+                    const auto branch = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+                        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == name;
                     });
-                    if (bookmark != _snapshot->refs.end())
-                        MoveBookmark(*bookmark, revision.oid);
+                    if (branch != _snapshot->refs.end())
+                        MoveBranch(*branch, revision.oid);
                 }
                 ImGui::EndDragDropTarget();
             }
-            if (hovered_file_drop || hovered_bookmark_drop)
+            if (hovered_file_drop || hovered_branch_drop)
             {
                 const float marker_left = dot_x - std::min(kDotRadius, lane_width * 0.35f) - 5.0f;
                 draw->AddRect({marker_left, minimum.y + 1.0f}, {maximum.x - 1.0f, maximum.y - 1.0f},
@@ -782,47 +796,61 @@ void Application::RenderHistory()
             {
                 ImGui::BeginDisabled(actions_locked);
                 if (ActionMenuItem(ICON_MS_ADD, "New", "N")) { SelectRevision(revision.oid); CreateChange(revision.oid); }
+                if (ActionMenuItem(ICON_MS_CALL_SPLIT, "New detached", "Alt+N"))
+                { SelectRevision(revision.oid); CreateChange(revision.oid, true); }
                 RenderSelectedChangeActions(revision.oid, true);
                 ImGui::Separator();
-                const NamedRef* bookmark = BookmarkAt(*_snapshot, revision.oid);
-                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create bookmark..."))
-                { SelectRevision(revision.oid); OpenDialog(Dialog::Bookmark); }
-                const bool can_move_bookmark = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid;
-                });
-                const std::string move_bookmark = IconLabel(ICON_MS_MOVE_ITEM, "Move bookmark here");
-                if (ImGui::BeginMenu(move_bookmark.c_str(), can_move_bookmark))
+                const NamedRef* branch = BranchAt(*_snapshot, revision.oid);
+                const auto checkout_here = [&](const NamedRef& ref) {
+                    return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target == revision.oid
+                        && ref.workspace.empty() && !ref.current;
+                };
+                if (std::ranges::count_if(_snapshot->refs, checkout_here) > 1
+                    && ImGui::BeginMenu(TempIconLabel(ICON_MS_LOGIN, "Check out")))
                 {
                     for (const NamedRef& ref : _snapshot->refs)
-                        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target != revision.oid
+                        if (checkout_here(ref) && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
+                        { SelectRevision(revision.oid); EnqueueAction(Edit{ref.name}); }
+                    ImGui::EndMenu();
+                }
+                if (ActionMenuItem(ICON_MS_BOOKMARK_ADD, "Create branch..."))
+                { SelectRevision(revision.oid); OpenDialog(Dialog::Branch); }
+                const bool can_move_branch = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
+                    return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target != revision.oid;
+                });
+                const std::string move_branch = IconLabel(ICON_MS_MOVE_ITEM, "Move branch here");
+                if (ImGui::BeginMenu(move_branch.c_str(), can_move_branch))
+                {
+                    for (const NamedRef& ref : _snapshot->refs)
+                        if (ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target != revision.oid
                             && ActionMenuItem(ICON_MS_BOOKMARK, ref.name))
-                            MoveBookmark(ref, revision.oid);
+                            MoveBranch(ref, revision.oid);
                     ImGui::EndMenu();
                 }
                 const auto local_here = [&](const NamedRef& ref) {
-                    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision.oid;
+                    return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target == revision.oid;
                 };
                 if (std::ranges::count_if(_snapshot->refs, local_here) == 1)
-                    RenderBookmarkDeleteMenu(bookmark->name);
-                else if (ImGui::BeginMenu(TempIconLabel(ICON_MS_DELETE, "Delete bookmark"), bookmark != nullptr))
+                    RenderBranchDeleteMenu(branch->name);
+                else if (ImGui::BeginMenu(TempIconLabel(ICON_MS_DELETE, "Delete branch"), branch != nullptr))
                 {
                     for (const NamedRef& ref : _snapshot->refs)
                         if (local_here(ref))
-                            RenderBookmarkDeleteMenu(ref.name, true);
+                            RenderBranchDeleteMenu(ref.name, true);
                     ImGui::EndMenu();
                 }
 
                 ImGui::Separator();
-                const std::string remote = bookmark == nullptr ? "" : RemoteForBookmark(*_snapshot, bookmark->name);
+                const std::string remote = branch == nullptr ? "" : RemoteForBranch(*_snapshot, branch->name);
                 if (ActionMenuItem(ICON_MS_CLOUD_UPLOAD, "Push", nullptr,
-                        bookmark != nullptr && !remote.empty()))
-                    _engine.Enqueue(Push{bookmark->name, remote});
+                        branch != nullptr && !remote.empty()))
+                    _engine.Enqueue(Push{branch->name, remote});
                 if (ActionMenuItem(ICON_MS_PUBLISH, "Push to...", nullptr,
-                        bookmark != nullptr && !_snapshot->remotes.empty()))
+                        branch != nullptr && !_snapshot->remotes.empty()))
                 {
                     OpenDialog(Dialog::PushTo);
                     _input_primary = remote;
-                    _input_secondary = bookmark->name;
+                    _input_secondary = branch->name;
                 }
                 ImGui::EndDisabled();
                 ImGui::Separator();
@@ -850,7 +878,7 @@ void Application::RenderHistory()
                 ImGui::BeginTooltip();
                 if (hovered_badge != nullptr)
                 {
-                    ImGui::Text("%s: %s", hovered_badge->bookmark ? "Bookmark" : "Tag",
+                    ImGui::Text("%s: %s", hovered_badge->branch ? "Branch" : "Tag",
                         hovered_badge->label.c_str());
                     ImGui::Text("Local: %s", hovered_badge->local ? "yes" : "no");
                     ImGui::Text("Remotes: %s", hovered_badge->remotes.empty()

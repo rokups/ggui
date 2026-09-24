@@ -274,8 +274,8 @@ struct RepositoryEngine::Impl
     void ClonePath(const CloneRepository& command);
     git_remote_callbacks RemoteCallbacks();
     void FetchRemote(const Fetch& command);
-    void PushBookmark(const Push& command);
-    void RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish);
+    void PushBranch(const Push& command);
+    void RemoveRemoteBranch(const RemoteBranchDelete& command, bool publish);
     void Sync(bool report_progress = true);
     std::shared_ptr<RepoSnapshot> ReadSnapshot(bool include_worktree = false, bool history_changed = false,
         const std::vector<std::string>& status_paths = {});

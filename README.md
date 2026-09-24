@@ -106,9 +106,10 @@ failure paths; compiler-attributed brace-only lines are ignored.
 ## Workflow
 
 Open, initialize, or clone a repository, then use the graph, changes, diff,
-operation log, bookmarks, tags, workspaces, and sparse-checkout panels. The
-Change menu exposes gg's local change operations. A newly opened plain Git
-repository needs **New** before it has an active gg change.
+operation log, branches, tags, workspaces, and sparse-checkout panels. The
+Change menu exposes gg's local change operations. The active commit `@` is
+Git's `HEAD`; the toolbar shows the checked-out branch next to it, or
+**detached** when `HEAD` is not on a branch.
 
 History includes a virtual **Working tree** row for filesystem changes relative
 to the active commit (`@`). Select that row and choose **Commit** to commit the
@@ -138,7 +139,7 @@ Right-clicking a line offers the same per-line actions, and blame can be
 filtered by author, commit, subject, or content. The optional **Reflog** panel
 shows the HEAD move history,
 including commits retained only by the reflog; hashes can be revealed, copied,
-or preserved as a bookmark.
+or preserved as a branch.
 Conflicted files stay in the normal Changes list with a red **C**. Their diff
 shows the stored conflict markers. Double-click a conflict, or use its context
 menu, to open the configured Git merge tool with base, local, and remote
@@ -157,7 +158,7 @@ revert.
 
 Use **F6** and **Shift+F6** to move to the next or previous changed file. The
 navigation respects the active Changes filter and stops at the first and last
-matching file. Repository, workspace, file, history, and bookmark context
+matching file. Repository, workspace, file, history, and branch context
 menus provide portable open, copy, and rename actions. **Ctrl+W** closes the
 current repository without changing it and returns to the recent-repository
 welcome screen.
@@ -169,30 +170,37 @@ open another ggui window. Opening a native linked worktree adopts it into gg.
 Rows identify the current, primary, unmanaged, and stale states. Context actions
 can reveal the working change, rename the selected managed workspace, and
 safely remove a linked worktree or clean stale metadata after confirmation.
-Removal snapshots recoverable tracked changes and refuses unsafe files, locks,
-and conflicts; deleting the worktree directory itself is not undoable.
+Removal refuses uncommitted changes, unsafe files, locks, and conflicts; deleting the worktree directory itself is not undoable.
 
-The Bookmarks panel controls which branches are visible in History: click to
+The Branches panel controls which branches are visible in History: click to
 add or remove a branch, or Ctrl-click to show only that branch. At least one
-bookmark stays selected whenever bookmarks exist.
-Local unnamed heads are always included, so switching the active gg change
-does not hide another unbookmarked line of work.
+branch stays selected whenever branches exist.
+Unnamed heads you created (with **Alt+N**, detached commits, or duplication) are
+always included, whatever the selection, so switching the active change never
+hides an unbranched line of work. Heads that only Git internals still reference
+are not shown. The checked-out branch is outlined, in both History pills and
+the Branches panel; branches checked out in another workspace are muted.
 No tags are selected by default. Select tags in the Tags panel to ensure their
 tagged history is found and revealed, or Ctrl-click to surface only one.
-Tags and bookmarks on commits already present in History are always shown as
+Tags and branches on commits already present in History are always shown as
 pills regardless of selection, with distinct local and remote colors. Distant tagged history stays behind collapsed
-region rows, including the path that connects it back to selected bookmark
+region rows, including the path that connects it back to selected branch
 history.
-Bookmark, tag, and remote selections are remembered per repository.
-In History, **Up/Down** select the adjacent visible change and **N** creates a
-new child of the selected change. Author email is available as a tooltip and
+Branch, tag, and remote selections are remembered per repository.
+In History, **Up/Down** select the adjacent visible change. **N** creates a
+new child of the selected change: on `@` it continues the checked-out branch,
+and on the tip of a branch it checks that branch out and advances it. **Alt+N**
+creates the child without moving any branch, leaving `HEAD` detached on a new
+unnamed head. **E** checks out the selected change, attaching `HEAD` when it is
+the tip of exactly one branch. Author email is available as a tooltip and
 the author row's context menu supports copying or editing its identity.
 History rows show each change's current Git commit ID. IDs retained from prior
 rewrites remain searchable, keep selections attached across refreshes, and are
 available from the change-information and copy menus as aliases.
-Fetching updates remote bookmarks and shows their commits in History without
-moving local bookmarks. Pulling additionally fast-forwards eligible tracked
-local bookmarks, which can also be moved explicitly from a History row.
+Fetching updates remote branches and shows their commits in History without
+moving local branches. Pulling additionally fast-forwards eligible tracked
+local branches; the checked-out branch moves only together with a clean
+working tree. Branches can also be moved explicitly from a History row.
 
 Left-drag a graph row onto the top of another row to reorder before it, onto
 the middle to squash, or onto the bottom to rebase. Drop below the final row
@@ -201,8 +209,8 @@ a popup menu. Every graph drop shows a confirmation preview and remains
 undoable through gg's operation history.
 Right-click **Rebase** to use that row as the destination for rebasing **@**
 and all of its descendants.
-When a tracked local and remote bookmark have both advanced, right-click the
-bookmark and choose **Reconcile with remote/bookmark...** to rebase the local-only
+When a tracked local and remote branch have both advanced, right-click the
+branch and choose **Reconcile with remote/branch...** to rebase the local-only
 branch onto the fetched remote tip. Reconciliation remains undoable and any
 logical conflicts use the existing conflict workflow before the next push.
 
@@ -214,7 +222,8 @@ demand and are never persisted.
 Common shortcuts: **Ctrl+O** open repository, **Ctrl+W** close repository,
 **Ctrl+N** new change, **Ctrl+Z/Ctrl+Y** undo/redo, **F5** refresh,
 **Shift+F6/F6** previous/next changed file, **Up/Down** previous/next history
-item, **N** new child of the selected change.
+item, **N** new child of the selected change (advances its branch), **Alt+N**
+new detached child, **E** check out the selected change.
 
 Graph rendering was adapted from the ImGit graph lane renderer; the
 surrounding application architecture is new.

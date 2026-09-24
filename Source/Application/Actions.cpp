@@ -379,31 +379,31 @@ std::vector<std::string> Application::SelectedParentRevisions() const
     return parents;
 }
 
-void Application::MoveBookmark(const NamedRef& bookmark, const std::string& revision)
+void Application::MoveBranch(const NamedRef& branch, const std::string& revision)
 {
-    if (bookmark.kind != GG_NAMED_REF_LOCAL_BOOKMARK || bookmark.target == revision)
+    if (branch.kind != GG_NAMED_REF_LOCAL_BRANCH || branch.target == revision)
         return;
-    const BookmarkRelation relation = ClassifyBookmarkRelation(*_snapshot, bookmark.target, revision);
-    if (relation == BookmarkRelation::LocalAhead || relation == BookmarkRelation::Diverged)
+    const BranchRelation relation = ClassifyBranchRelation(*_snapshot, branch.target, revision);
+    if (relation == BranchRelation::LocalAhead || relation == BranchRelation::Diverged)
     {
-        OpenDialog(Dialog::ConfirmBookmarkMove);
-        _input_primary = bookmark.name;
-        _input_secondary = bookmark.target;
+        OpenDialog(Dialog::ConfirmBranchMove);
+        _input_primary = branch.name;
+        _input_secondary = branch.target;
         _input_tertiary = revision;
         _dialog_snapshot_generation = _snapshot->generation;
     }
     else
-        _engine.Enqueue(Bookmark{GG_BOOKMARK_MOVE, {bookmark.name}, revision, {}});
+        _engine.Enqueue(Branch{GG_BRANCH_MOVE, {branch.name}, revision, {}});
 }
 
-void Application::RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes)
+void Application::RequestBranchDelete(const std::string& name, bool local, std::vector<std::string> remotes)
 {
-    OpenDialog(Dialog::ConfirmBookmarkDelete);
-    if (_dialog == Dialog::ConfirmBookmarkDelete)
-        _pending_bookmark_delete = {name, local, std::move(remotes)};
+    OpenDialog(Dialog::ConfirmBranchDelete);
+    if (_dialog == Dialog::ConfirmBranchDelete)
+        _pending_branch_delete = {name, local, std::move(remotes)};
 }
 
-void Application::CreateChange(const std::string& parent)
+void Application::CreateChange(const std::string& parent, bool detach)
 {
     if (!_active_operation.empty() || _snapshot == nullptr || IsWorkingTreeRevision(parent)
         || (parent.empty() && !CanCreateChange()))
@@ -412,21 +412,45 @@ void Application::CreateChange(const std::string& parent)
         : !parent.empty()                              ? parent
         : _selected_revisions.size() == 1              ? _selected_revisions.front()
                                                         : "";
+    const Revision* selected = ResolveSnapshotRevision(*_snapshot, selected_revision, _history_revisions);
+    const std::string selected_oid = selected == nullptr ? selected_revision : selected->oid;
     // Preserve the working-copy shorthand once a gg workspace exists.
     // Resolving that shorthand to its object ID needlessly sends the core
     // through alias resolution (and touches alias reflogs). Before the first
     // gg change exists, however, the toolbar's conceptual "@" is Git HEAD and
     // must be passed as the selected object ID.
-    const std::vector<std::string> create_parents = parent.empty() ? SelectedParentRevisions()
-        : parent == "@" && !_snapshot->working_copy.empty()        ? std::vector<std::string>{"@"}
-                                                                   : std::vector{selected_revision};
-    const Revision* selected = ResolveSnapshotRevision(*_snapshot, selected_revision, _history_revisions);
-    const std::string selected_oid = selected == nullptr ? selected_revision : selected->oid;
-    NewChange create{{}, create_parents, {}, {}, false};
-    std::vector<std::string> bookmarks;
+    const bool on_working_copy = !_snapshot->working_copy.empty()
+        && (parent == "@" || selected_oid == _snapshot->working_copy);
+    // Git-like New: a change on @ continues the checked-out branch, and a
+    // change on the tip of one free local branch checks that branch out and
+    // continues it. Anything else, or Alt+N, forks a detached unnamed head.
+    std::string continued_branch;
+    bool named_parent = false;
     for (const NamedRef& ref : _snapshot->refs)
-        if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == selected_oid)
-            bookmarks.push_back(ref.name);
+    {
+        if (ref.kind != GG_NAMED_REF_LOCAL_BRANCH || ref.target != selected_oid)
+            continue;
+        named_parent = true;
+        if (!ref.workspace.empty())
+            continue;
+        continued_branch = continued_branch.empty() ? ref.name : std::string{};
+        if (ref.current)
+        {
+            continued_branch = ref.name;
+            break;
+        }
+    }
+    std::vector<std::string> create_parents;
+    if (parent.empty() && _selected_revisions.size() != 1)
+        create_parents = SelectedParentRevisions();
+    else if (on_working_copy && (detach || _snapshot->head_branch.empty() || continued_branch.empty()
+                                    || continued_branch == _snapshot->head_branch))
+        create_parents = {"@"};
+    else if (!detach && !continued_branch.empty())
+        create_parents = {continued_branch};
+    else
+        create_parents = {selected_oid};
+    NewChange create{{}, std::move(create_parents), {}, {}, false, detach};
 
     std::vector<Command> commands;
     commands.emplace_back(std::move(create));
@@ -435,19 +459,35 @@ void Application::CreateChange(const std::string& parent)
     // its child exists, splice that placeholder out so repeated New actions
     // continue the same change instead of building an empty stack. Pushed
     // history (including pushed descendants) and other workspaces must stay
-    // intact because abandoning it would rewrite protected history.
+    // intact because abandoning it would rewrite protected history, and a
+    // detached New must leave the branches on its parent where they are.
     const bool another_workspace = std::ranges::any_of(_snapshot->workspaces,
         [&](const Workspace& workspace) {
             return !workspace.current && workspace.working_copy == selected_oid;
         });
     if (selected != nullptr && !selected->parents.empty() && selected->empty
         && selected->description.empty() && !selected->pushed && !another_workspace
-        && !RewritesLockedCommit(selected_oid))
+        && !(detach && named_parent) && !RewritesLockedCommit(selected_oid))
         commands.emplace_back(Abandon{{selected_oid}, true, false, {}});
-
-    if (!bookmarks.empty())
-        commands.emplace_back(Bookmark{GG_BOOKMARK_ADVANCE, std::move(bookmarks), "@", {}});
     QueueCommands(std::move(commands), {}, {});
+}
+
+std::string Application::CheckoutTarget(const std::string& revision) const
+{
+    if (_snapshot == nullptr)
+        return revision;
+    const Revision* resolved = ResolveSnapshotRevision(*_snapshot, revision, _history_revisions);
+    const std::string& oid = resolved == nullptr ? revision : resolved->oid;
+    const NamedRef* branch = nullptr;
+    for (const NamedRef& ref : _snapshot->refs)
+    {
+        if (ref.kind != GG_NAMED_REF_LOCAL_BRANCH || ref.target != oid || !ref.workspace.empty())
+            continue;
+        if (branch != nullptr)
+            return revision;
+        branch = &ref;
+    }
+    return branch == nullptr ? revision : branch->name;
 }
 
 bool Application::IsLocked(const std::string& identifier) const
@@ -675,7 +715,7 @@ void Application::RequestAbandonRevisions(const std::string& revision)
                     _abandon_revisions.push_back(candidate.oid);
         _abandon_revisions_revision = revision;
         _abandon_revisions_complete = true;
-        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        _abandon_remote_branches = RemoteBranchesAt(_abandon_revisions);
         _abandon_modifies_locked = std::ranges::any_of(
             _abandon_revisions, [this](const std::string& oid) { return IsLocked(oid); });
         return;
@@ -713,7 +753,7 @@ void Application::PollAbandonRevisions()
         _abandon_revisions = std::move(revisions);
         _abandon_revisions_revision = completed;
         _abandon_revisions_complete = true;
-        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        _abandon_remote_branches = RemoteBranchesAt(_abandon_revisions);
         const std::unordered_set<std::string> abandoned(
             _abandon_revisions.begin(), _abandon_revisions.end());
         _abandon_modifies_locked = std::ranges::any_of(_history_revisions, [&](const Revision& revision) {
@@ -722,7 +762,7 @@ void Application::PollAbandonRevisions()
                     [&](const std::string& alias) { return abandoned.contains(alias); }));
         });
         _input_flag = _input_flag || std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH
                 && std::ranges::find(_abandon_revisions, ref.target) != _abandon_revisions.end();
         });
     }
@@ -730,24 +770,24 @@ void Application::PollAbandonRevisions()
         RequestAbandonRevisions(_abandon_revisions_requested);
 }
 
-std::vector<RemoteBookmarkDelete> Application::RemoteBookmarksAt(
+std::vector<RemoteBranchDelete> Application::RemoteBranchesAt(
     const std::vector<std::string>& revisions) const
 {
-    std::vector<RemoteBookmarkDelete> result;
+    std::vector<RemoteBranchDelete> result;
     const std::unordered_set<std::string> revision_set(revisions.begin(), revisions.end());
     for (const NamedRef& local : _snapshot->refs)
     {
-        if (local.kind != GG_NAMED_REF_LOCAL_BOOKMARK
+        if (local.kind != GG_NAMED_REF_LOCAL_BRANCH
             || !revision_set.contains(local.target))
             continue;
         for (const NamedRef& remote : _snapshot->refs)
         {
-            if (remote.kind != GG_NAMED_REF_REMOTE_BOOKMARK || remote.name != local.name
+            if (remote.kind != GG_NAMED_REF_REMOTE_BRANCH || remote.name != local.name
                 || remote.target != local.target || remote.remote.empty())
                 continue;
-            const RemoteBookmarkDelete deletion{local.name, remote.remote};
-            if (std::ranges::none_of(result, [&](const RemoteBookmarkDelete& existing) {
-                    return existing.bookmark == deletion.bookmark && existing.remote == deletion.remote;
+            const RemoteBranchDelete deletion{local.name, remote.remote};
+            if (std::ranges::none_of(result, [&](const RemoteBranchDelete& existing) {
+                    return existing.branch == deletion.branch && existing.remote == deletion.remote;
                 }))
                 result.push_back(deletion);
         }
@@ -775,7 +815,7 @@ void Application::RequestAbandon(const std::string& revision, bool include_desce
             RequestAbandonRevisions(revision);
         const std::vector<std::string>& revisions = _abandon_revisions;
         _input_flag = std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH
                 && std::ranges::find(revisions, ref.target) != revisions.end();
         });
     }
@@ -830,8 +870,8 @@ bool Application::CanSubmitDialog() const
     switch (_dialog)
     {
     case Dialog::Clone: return HasText(_input_primary) && HasText(_input_secondary);
-    case Dialog::ConfirmBookmarkDelete:
-        return _snapshot != nullptr && (_pending_bookmark_delete.local || !_pending_bookmark_delete.remotes.empty());
+    case Dialog::ConfirmBranchDelete:
+        return _snapshot != nullptr && (_pending_branch_delete.local || !_pending_branch_delete.remotes.empty());
     case Dialog::Rebase:
         return HasText(_input_primary) && _snapshot != nullptr
             && _snapshot->generation == _dialog_snapshot_generation
@@ -844,17 +884,17 @@ bool Application::CanSubmitDialog() const
     case Dialog::Abandon:
         return !_input_flag_tertiary
             || (_abandon_revisions_complete && _abandon_revisions_revision == _dialog_revision);
-    case Dialog::Bookmark:
+    case Dialog::Branch:
     case Dialog::Tag:
         // Creating a ref only needs its target to exist. Background refreshes
         // must not invalidate the dialog as they do for rewriting operations.
         return HasText(_input_primary) && _snapshot != nullptr
             && (HasText(_input_secondary)
                 || ResolveSnapshotRevision(*_snapshot, _dialog_revision, _history_revisions) != nullptr);
-    case Dialog::BookmarkRename:
+    case Dialog::BranchRename:
         return HasText(_input_primary) && _input_primary != _input_secondary && _snapshot != nullptr
             && std::ranges::none_of(_snapshot->refs, [this](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
+                   return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == _input_primary;
                });
     case Dialog::WorkspaceAdd:
     case Dialog::WorkspaceRename:
@@ -864,20 +904,20 @@ bool Application::CanSubmitDialog() const
     case Dialog::Reconcile:
         return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
             && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary
+                   return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == _input_primary
                        && ref.target == _input_tertiary;
                })
             && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.tracked
+                   return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.tracked
                        && ref.name == _input_primary && ref.remote == _input_secondary
                        && ref.target == _input_filesets;
                })
-            && ClassifyBookmarkRelation(*_snapshot, _input_tertiary, _input_filesets)
-                == BookmarkRelation::Diverged;
-    case Dialog::ConfirmBookmarkMove:
+            && ClassifyBranchRelation(*_snapshot, _input_tertiary, _input_filesets)
+                == BranchRelation::Diverged;
+    case Dialog::ConfirmBranchMove:
         return _snapshot != nullptr && _snapshot->generation == _dialog_snapshot_generation
             && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
-                   return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary
+                   return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == _input_primary
                        && ref.target == _input_secondary;
                });
     case Dialog::ConfirmDrop:
@@ -974,8 +1014,8 @@ void Application::ResetRepositoryState()
     _history_refs_by_revision.clear();
     _selected_revision.clear();
     _selected_revisions.clear();
-    _visible_bookmarks.clear();
-    _visible_bookmarks_user_selected = false;
+    _visible_branches.clear();
+    _visible_branches_user_selected = false;
     _selected_tags.clear();
     _selected_remotes.clear();
     _selected_remotes_user_selected = false;
@@ -988,20 +1028,20 @@ void Application::ResetRepositoryState()
     _file_comparison = false;
     _open_save_patch = false;
     _open_apply_patch = false;
-    _bookmark_filter.clear();
+    _branch_filter.clear();
     _tag_filter.clear();
     _reflog_filter.clear();
     _changes_filter.clear();
     _graph_filter.clear();
     _built_filter.clear();
-    _built_bookmarks.clear();
+    _built_branches.clear();
     _diff_loading = false;
     _blame_loading = false;
     _background_activities.clear();
     _default_layout = true;
     _status_message.clear();
     _error_message.clear();
-    _pending_created_bookmark.clear();
+    _pending_created_branch.clear();
     if (_window != nullptr)
         SDL_SetWindowTitle(_window, "ggui");
 }

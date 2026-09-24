@@ -38,7 +38,7 @@ void Application::OpenDialog(Dialog dialog)
         ? (IsWorkingTreeRevision(_selected_revision) ? _selected_revision : CurrentCommit(*_snapshot))
         : _selected_revision;
     // Refs cannot point at the virtual working tree; target the commit below it.
-    if ((dialog == Dialog::Bookmark || dialog == Dialog::Tag) && _snapshot != nullptr
+    if ((dialog == Dialog::Branch || dialog == Dialog::Tag) && _snapshot != nullptr
         && IsWorkingTreeRevision(_dialog_revision))
         _dialog_revision = CurrentCommit(*_snapshot);
     _dialog_snapshot_generation = _snapshot == nullptr ? 0 : _snapshot->generation;
@@ -56,7 +56,7 @@ void Application::OpenDialog(Dialog dialog)
         _abandon_revisions_revision = _dialog_revision;
         _abandon_revisions_requested.clear();
         _abandon_revisions_complete = false;
-        _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+        _abandon_remote_branches = RemoteBranchesAt(_abandon_revisions);
         _abandon_modifies_locked = RewritesLockedCommit(_dialog_revision);
     }
     if (dialog == Dialog::Metaedit)
@@ -177,13 +177,13 @@ void Application::RenderDialogs()
     constexpr std::array popup_titles{"Action###ggui action", "Clone repository###ggui action",
         "Commit or amend###ggui action", "Edit metadata###ggui action", "Rebase change###ggui action", "Squash changes###ggui action",
         "Split change###ggui action", "Abandon change###ggui action", "Restore files###ggui action",
-        "Create bookmark###ggui action", "Rename bookmark###ggui action", "Create tag###ggui action", "Add remote###ggui action",
+        "Create branch###ggui action", "Rename branch###ggui action", "Create tag###ggui action", "Add remote###ggui action",
         "Add workspace###ggui action", "Rename workspace###ggui action", "Remove workspace###ggui action",
-        "Push bookmark###ggui action",
-        "Reconcile bookmark###ggui action", "Credentials###ggui action",
+        "Push branch###ggui action",
+        "Reconcile branch###ggui action", "Credentials###ggui action",
         "Confirm operation###ggui action",
         "Locked commit warning###ggui action",
-        "Force bookmark move###ggui action", "Delete bookmark###ggui action"};
+        "Force branch move###ggui action", "Delete branch###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
     ImGui::SetNextWindowSizeConstraints(
@@ -235,7 +235,7 @@ void Application::RenderDialogs()
     {
         TextLabelledId("Change (@): ", _input_secondary, RevisionPrefix(_input_secondary),
             CommitIdColor(_input_secondary == _snapshot->working_copy));
-        DialogInput("Destination", "commit ID or bookmark", &_input_primary, focus_first);
+        DialogInput("Destination", "commit ID or branch", &_input_primary, focus_first);
         const Revision* source = RebaseSource();
         if (source == nullptr)
             ImGui::TextDisabled("The @ change is unavailable.");
@@ -268,7 +268,7 @@ void Application::RenderDialogs()
         else
             DialogInput("Into", "defaults to parent", &_input_secondary, focus_first);
         if (!_input_secondary.empty() && ResolveSnapshotRevision(*_snapshot, _input_secondary, _history_revisions) == nullptr)
-            ImGui::TextDisabled("Enter an unambiguous commit ID, bookmark, @ ancestor, or parents(revision).");
+            ImGui::TextDisabled("Enter an unambiguous commit ID, branch, @ ancestor, or parents(revision).");
         DialogMultiline("Combined description", &_input_primary, 90.0f);
         break;
     case Dialog::Split:
@@ -302,7 +302,7 @@ void Application::RenderDialogs()
                 _abandon_revisions_revision = _dialog_revision;
                 _abandon_revisions_requested.clear();
                 _abandon_revisions_complete = false;
-                _abandon_remote_bookmarks = RemoteBookmarksAt(_abandon_revisions);
+                _abandon_remote_branches = RemoteBranchesAt(_abandon_revisions);
                 _abandon_modifies_locked = RewritesLockedCommit(_dialog_revision);
             }
         }
@@ -315,34 +315,34 @@ void Application::RenderDialogs()
             else
                 ImGui::TextDisabled("Calculating affected changes...");
         }
-        ImGui::Checkbox("Retain bookmarks", &_input_flag);
-        if (!_abandon_remote_bookmarks.empty())
+        ImGui::Checkbox("Retain branches", &_input_flag);
+        if (!_abandon_remote_branches.empty())
         {
-            ImGui::Checkbox("Also delete bookmark from remote", &_input_flag_secondary);
+            ImGui::Checkbox("Also delete branch from remote", &_input_flag_secondary);
             if (_input_flag_secondary)
             {
-                ImGui::TextWrapped("Deleting a remote bookmark cannot be undone here.");
-                for (const RemoteBookmarkDelete& bookmark : _abandon_remote_bookmarks)
-                    ImGui::TextDisabled("%s/%s", bookmark.remote.c_str(), bookmark.bookmark.c_str());
+                ImGui::TextWrapped("Deleting a remote branch cannot be undone here.");
+                for (const RemoteBranchDelete& branch : _abandon_remote_branches)
+                    ImGui::TextDisabled("%s/%s", branch.remote.c_str(), branch.branch.c_str());
             }
         }
         break;
     }
-    case Dialog::Bookmark:
-        DialogInput("Name", "bookmark name", &_input_primary, focus_first);
+    case Dialog::Branch:
+        DialogInput("Name", "branch name", &_input_primary, focus_first);
         DialogInput("Revision", "defaults to selected change", &_input_secondary);
         break;
-    case Dialog::BookmarkRename:
+    case Dialog::BranchRename:
     {
-        ImGui::Text("Bookmark: %s", _input_secondary.c_str());
-        DialogInput("New name", "bookmark name", &_input_primary, focus_first);
+        ImGui::Text("Branch: %s", _input_secondary.c_str());
+        DialogInput("New name", "branch name", &_input_primary, focus_first);
         const bool conflict = _snapshot != nullptr && std::ranges::any_of(_snapshot->refs, [this](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == _input_primary;
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == _input_primary;
         });
         if (_input_primary == _input_secondary)
             ImGui::TextDisabled("Choose a different name.");
         else if (conflict)
-            ImGui::TextDisabled("A local bookmark already uses this name.");
+            ImGui::TextDisabled("A local branch already uses this name.");
         break;
     }
     case Dialog::Tag:
@@ -374,7 +374,7 @@ void Application::RenderDialogs()
         ImGui::TextWrapped("The linked worktree directory will be deleted. Recoverable tracked changes are retained in operation history, but filesystem deletion is not undoable.");
         break;
     case Dialog::PushTo:
-        ImGui::Text("Bookmark: %s", _input_secondary.c_str());
+        ImGui::Text("Branch: %s", _input_secondary.c_str());
         ImGui::TextUnformatted("Remote");
         if (focus_first)
             ImGui::SetKeyboardFocusHere();
@@ -391,22 +391,22 @@ void Application::RenderDialogs()
         {
             ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
                 "Warning: force push can overwrite remote history.");
-            ImGui::TextWrapped("Remote commits that are not in the local bookmark may become unreachable.");
+            ImGui::TextWrapped("Remote commits that are not in the local branch may become unreachable.");
         }
         break;
     case Dialog::Reconcile:
-        ImGui::Text("Bookmark: %s", _input_primary.c_str());
+        ImGui::Text("Branch: %s", _input_primary.c_str());
         TextLabelledId("Local tip: ", _input_tertiary, RevisionPrefix(_input_tertiary),
             CommitIdColor(_input_tertiary == _snapshot->working_copy));
         TextLabelledId(("Remote tip (" + _input_secondary + "): ").c_str(), _input_filesets,
             RevisionPrefix(_input_filesets), CommitIdColor(_input_filesets == _snapshot->working_copy));
         ImGui::Spacing();
         ImGui::TextWrapped("gg will rebase the local-only branch onto the fetched remote tip and move the local "
-                           "bookmark atomically. This rewrites local changes, may produce logical conflicts, and can "
+                           "branch atomically. This rewrites local changes, may produce logical conflicts, and can "
                            "be undone.");
         if (_snapshot->generation != _dialog_snapshot_generation)
             ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
-                "Repository changed. Close this dialog and inspect the updated bookmark tips.");
+                "Repository changed. Close this dialog and inspect the updated branch tips.");
         break;
     case Dialog::Credentials:
         ImGui::TextWrapped("Credentials requested by %s", _credential_request.url.c_str());
@@ -452,26 +452,26 @@ void Application::RenderDialogs()
         ImGui::TextWrapped("%s", _locked_warning.c_str());
         ImGui::TextWrapped("Locked commits have already been pushed. Continuing can make local history diverge from the remote and require a force push.");
         break;
-    case Dialog::ConfirmBookmarkMove:
-        ImGui::Text("Bookmark: %s", _input_primary.c_str());
+    case Dialog::ConfirmBranchMove:
+        ImGui::Text("Branch: %s", _input_primary.c_str());
         TextLabelledId("Current tip: ", _input_secondary, RevisionPrefix(_input_secondary),
             CommitIdColor(_input_secondary == _snapshot->working_copy));
         TextLabelledId("Target: ", _input_tertiary, RevisionPrefix(_input_tertiary),
             CommitIdColor(_input_tertiary == _snapshot->working_copy));
-        ImGui::TextWrapped("This moves the bookmark backwards or sideways. Commits reachable only from its current "
+        ImGui::TextWrapped("This moves the branch backwards or sideways. Commits reachable only from its current "
                            "tip may become unreachable. The operation remains undoable.");
         if (_snapshot->generation != _dialog_snapshot_generation)
             ImGui::TextColored(ImVec4(1.0f, 0.48f, 0.24f, 1.0f),
-                "Repository changed. Close this dialog and inspect the bookmark again.");
+                "Repository changed. Close this dialog and inspect the branch again.");
         break;
-    case Dialog::ConfirmBookmarkDelete:
-        ImGui::Text("Bookmark: %s", _pending_bookmark_delete.name.c_str());
-        if (_pending_bookmark_delete.local)
-            ImGui::BulletText("Local bookmark");
-        for (const std::string& remote : _pending_bookmark_delete.remotes)
-            ImGui::BulletText("Remote bookmark %s/%s", remote.c_str(), _pending_bookmark_delete.name.c_str());
-        if (!_pending_bookmark_delete.remotes.empty())
-            ImGui::TextWrapped("Deleting a remote bookmark cannot be undone here.");
+    case Dialog::ConfirmBranchDelete:
+        ImGui::Text("Branch: %s", _pending_branch_delete.name.c_str());
+        if (_pending_branch_delete.local)
+            ImGui::BulletText("Local branch");
+        for (const std::string& remote : _pending_branch_delete.remotes)
+            ImGui::BulletText("Remote branch %s/%s", remote.c_str(), _pending_branch_delete.name.c_str());
+        if (!_pending_branch_delete.remotes.empty())
+            ImGui::TextWrapped("Deleting a remote branch cannot be undone here.");
         break;
     case Dialog::None: break; // GCOV_EXCL_LINE: RenderDialogs returns before switching on None
     }
@@ -502,7 +502,7 @@ void Application::RenderDialogs()
     const bool cancel_shortcut = ImGui::IsKeyPressed(ImGuiKey_Escape);
     const bool focus_submit = _dialog == Dialog::ConfirmDrop || _dialog == Dialog::Reconcile;
     const bool focus_cancel = _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmLocked
-        || _dialog == Dialog::ConfirmBookmarkMove || _dialog == Dialog::ConfirmBookmarkDelete
+        || _dialog == Dialog::ConfirmBranchMove || _dialog == Dialog::ConfirmBranchDelete
         || _dialog == Dialog::WorkspaceRemove;
     if (focus_first && focus_submit)
         ImGui::SetKeyboardFocusHere();
@@ -510,14 +510,14 @@ void Application::RenderDialogs()
     const char* submit_label = _dialog == Dialog::Commit ? (_input_mode == 0 ? "Commit" : "Amend")
         : _dialog == Dialog::PushTo ? "Push"
         : _dialog == Dialog::WorkspaceRemove ? "Remove"
-        : _dialog == Dialog::ConfirmBookmarkDelete ? "Delete"
+        : _dialog == Dialog::ConfirmBranchDelete ? "Delete"
         : _dialog == Dialog::Reconcile ? "Reconcile"
-        : _dialog == Dialog::ConfirmBookmarkMove ? "Force move"
+        : _dialog == Dialog::ConfirmBranchMove ? "Force move"
         : _dialog == Dialog::ConfirmDrop || _dialog == Dialog::ConfirmLocked ? "Confirm"
                                                                             : "Apply";
     const bool dangerous_submit = modifies_locked || (_dialog == Dialog::PushTo && _input_flag)
-        || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBookmarkMove
-        || _dialog == Dialog::ConfirmBookmarkDelete || _dialog == Dialog::WorkspaceRemove;
+        || _dialog == Dialog::Abandon || _dialog == Dialog::ConfirmBranchMove
+        || _dialog == Dialog::ConfirmBranchDelete || _dialog == Dialog::WorkspaceRemove;
     const bool submit = (dangerous_submit ? DangerButton(submit_label, ImVec2(110.0f, 0.0f))
                                           : ImGui::Button(submit_label, ImVec2(110.0f, 0.0f)))
         || (submit_shortcut && !operation_blocks_submit && can_submit);
@@ -566,20 +566,20 @@ void Application::SubmitDialog()
         const std::vector<std::string> revisions = _input_flag_tertiary
             ? _abandon_revisions : std::vector<std::string>{_dialog_revision};
         EnqueueAction(Abandon{revisions, _input_flag, false,
-            _input_flag_secondary ? RemoteBookmarksAt(revisions)
-                                  : std::vector<RemoteBookmarkDelete>{}});
+            _input_flag_secondary ? RemoteBranchesAt(revisions)
+                                  : std::vector<RemoteBranchDelete>{}});
         break;
     }
     case Dialog::Restore:
         EnqueueAction(Restore{_input_primary, _dialog_revision, SplitLines(_input_filesets)});
         break;
-    case Dialog::Bookmark:
-        _pending_created_bookmark = _input_primary;
-        EnqueueAction(Bookmark{GG_BOOKMARK_CREATE, {_input_primary},
+    case Dialog::Branch:
+        _pending_created_branch = _input_primary;
+        EnqueueAction(Branch{GG_BRANCH_CREATE, {_input_primary},
             _input_secondary.empty() ? _dialog_revision : _input_secondary, {}});
         break;
-    case Dialog::BookmarkRename:
-        EnqueueAction(Bookmark{GG_BOOKMARK_RENAME, {_input_secondary}, {}, _input_primary});
+    case Dialog::BranchRename:
+        EnqueueAction(Branch{GG_BRANCH_RENAME, {_input_secondary}, {}, _input_primary});
         break;
     case Dialog::Tag:
         EnqueueAction(Tag{GG_TAG_SET, {_input_primary},
@@ -644,20 +644,20 @@ void Application::SubmitDialog()
             _change_info_dirty = false;
         _pending_change_info_save = false;
         break;
-    case Dialog::ConfirmBookmarkMove:
-        EnqueueAction(Bookmark{GG_BOOKMARK_MOVE, {_input_primary}, _input_tertiary, {}, true});
+    case Dialog::ConfirmBranchMove:
+        EnqueueAction(Branch{GG_BRANCH_MOVE, {_input_primary}, _input_tertiary, {}, true});
         break;
-    case Dialog::ConfirmBookmarkDelete:
+    case Dialog::ConfirmBranchDelete:
     {
         std::vector<Command> commands;
-        for (const std::string& remote : _pending_bookmark_delete.remotes)
-            commands.emplace_back(RemoteBookmarkDelete{_pending_bookmark_delete.name, remote});
-        if (_pending_bookmark_delete.local)
-            commands.emplace_back(Bookmark{GG_BOOKMARK_DELETE, {_pending_bookmark_delete.name}, {}, {}});
+        for (const std::string& remote : _pending_branch_delete.remotes)
+            commands.emplace_back(RemoteBranchDelete{_pending_branch_delete.name, remote});
+        if (_pending_branch_delete.local)
+            commands.emplace_back(Branch{GG_BRANCH_DELETE, {_pending_branch_delete.name}, {}, {}});
         if (EnqueueAction(std::move(commands.front())))
             for (Command& command : commands | std::views::drop(1))
                 _engine.Enqueue(std::move(command));
-        _pending_bookmark_delete = {};
+        _pending_branch_delete = {};
         break;
     }
     case Dialog::None: break; // GCOV_EXCL_LINE: no dialog can submit None

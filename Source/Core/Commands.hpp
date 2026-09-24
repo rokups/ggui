@@ -36,7 +36,7 @@ struct ExpandHistoryRegion
     bool merge_history = false;
 };
 struct Fetch { std::string remote; bool tracked_only = false; };
-struct Push { std::string bookmark; std::string remote; bool force = false; };
+struct Push { std::string branch; std::string remote; bool force = false; };
 struct AddRemote { std::string name; std::string url; };
 struct DeleteRemote { std::string name; };
 
@@ -87,6 +87,8 @@ struct NewChange
     std::vector<std::string> insert_before;
     std::vector<std::string> insert_after;
     bool no_edit = false;
+    // Leave the current branch in place; HEAD detaches at the new change.
+    bool detach = false;
 };
 struct Describe { std::string revision; std::string message; };
 struct Metaedit { std::string revision; std::optional<std::string> message; std::string author; };
@@ -95,7 +97,6 @@ struct MoveChange
 {
     gg_move_direction direction = GG_MOVE_NEXT;
     std::uint64_t offset = 1;
-    bool edit = false;
     bool conflict = false;
 };
 struct Commit { std::string message; };
@@ -119,13 +120,13 @@ struct Squash
     bool descendants = false;
     bool message_provided = false;
 };
-struct RemoteBookmarkDelete { std::string bookmark; std::string remote; };
+struct RemoteBranchDelete { std::string branch; std::string remote; };
 struct Abandon
 {
     std::vector<std::string> revisions;
-    bool retain_bookmarks = false;
+    bool retain_branches = false;
     bool restore_descendants = false;
-    std::vector<RemoteBookmarkDelete> remote_bookmarks;
+    std::vector<RemoteBranchDelete> remote_branches;
 };
 struct Restore { std::string from; std::string into; std::vector<std::string> filesets; };
 struct MoveFiles { std::string source; std::string destination; std::vector<std::string> filesets; };
@@ -138,9 +139,9 @@ struct MoveDiffLines
 };
 struct RevertDiffLines { std::string source; std::string path; std::vector<DiffLine> lines; };
 struct SimplifyParents { std::vector<std::string> revisions; };
-struct Bookmark
+struct Branch
 {
-    gg_bookmark_action action = GG_BOOKMARK_CREATE;
+    gg_branch_action action = GG_BRANCH_CREATE;
     std::vector<std::string> names;
     std::string revision;
     std::string rename_to;
@@ -186,8 +187,8 @@ struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, RebuildHistory,
     ExpandHistoryRegion, Fetch, Push,
     AddRemote, DeleteRemote, LoadDiff, LoadFileContent, LoadBlame, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
-    Describe, Metaedit, Edit, MoveChange, Commit, Amend, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBookmarkDelete, Restore,
-    MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Bookmark, Tag, Undo, Redo, RestoreOperation,
+    Describe, Metaedit, Edit, MoveChange, Commit, Amend, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBranchDelete, Restore,
+    MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Branch, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, WorkspaceRemove, TrackPaths, UntrackPaths, ChmodPaths>;
 
 std::string CommandName(const Command& command);

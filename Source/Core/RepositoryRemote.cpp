@@ -106,14 +106,14 @@ void RepositoryEngine::Impl::FetchRemote(const Fetch& command)
     PublishSnapshot();
 }
 
-void RepositoryEngine::Impl::PushBookmark(const Push& command)
+void RepositoryEngine::Impl::PushBranch(const Push& command)
 {
     Sync();
     transfer_phase = "push";
-    const std::vector<std::string> bookmarks{command.bookmark};
-    const StringArray bookmark_names(bookmarks);
+    const std::vector<std::string> branches{command.branch};
+    const StringArray branch_names(branches);
     gg_push_options options = GG_PUSH_OPTIONS_INIT;
-    options.bookmarks = bookmark_names.Get();
+    options.branches = branch_names.Get();
     options.remote = command.remote.c_str();
     TransportPlan plan;
     Check(gg_repository_plan_push(&plan.value, gg, &options), "plan push");
@@ -140,14 +140,14 @@ void RepositoryEngine::Impl::PushBookmark(const Push& command)
         plan.value.push_options.strings, plan.value.push_options.count};
     ssh_agent_attempted = false;
     credential_attempts = 0;
-    Check(git_remote_push(remote.get(), &refspecs, &push_options), "push bookmark");
+    Check(git_remote_push(remote.get(), &refspecs, &push_options), "push branch");
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
     Check(gg_repository_complete_push(&mutation.value, gg, &plan.value, &operation), "complete push");
     PublishSnapshot();
 }
 
-void RepositoryEngine::Impl::RemoveRemoteBookmark(const RemoteBookmarkDelete& command, bool publish)
+void RepositoryEngine::Impl::RemoveRemoteBranch(const RemoteBranchDelete& command, bool publish)
 {
     Sync();
     transfer_phase = "push";
@@ -155,7 +155,7 @@ void RepositoryEngine::Impl::RemoveRemoteBookmark(const RemoteBookmarkDelete& co
     git_remote* raw_remote = nullptr;
     Check(git_remote_lookup(&raw_remote, git.get(), remote_name.c_str()), "find remote");
     std::unique_ptr<git_remote, decltype(&git_remote_free)> remote(raw_remote, git_remote_free);
-    std::string destination = "refs/heads/" + command.bookmark;
+    std::string destination = "refs/heads/" + command.branch;
     std::string deletion = ":" + destination;
     char* deletion_value = deletion.data();
     git_strarray refspecs{&deletion_value, 1};
@@ -163,19 +163,19 @@ void RepositoryEngine::Impl::RemoveRemoteBookmark(const RemoteBookmarkDelete& co
     push_options.callbacks = RemoteCallbacks();
     ssh_agent_attempted = false;
     credential_attempts = 0;
-    Check(git_remote_push(remote.get(), &refspecs, &push_options), "delete remote bookmark");
+    Check(git_remote_push(remote.get(), &refspecs, &push_options), "delete remote branch");
 
     std::string source;
     gg_refspec refspec{remote_name.data(), source.data(), destination.data(), {}, false};
     std::array<std::string, 2> deleted_refs{
-        "refs/gg/tracking/bookmarks/" + remote_name + "/" + command.bookmark,
-        "refs/remotes/" + remote_name + "/" + command.bookmark};
+        "refs/gg/tracking/branches/" + remote_name + "/" + command.branch,
+        "refs/remotes/" + remote_name + "/" + command.branch};
     std::array<char*, 2> deleted_values{deleted_refs[0].data(), deleted_refs[1].data()};
     gg_transport_plan plan{GG_OPTIONS_VERSION, true, &refspec, 1,
         {deleted_values.data(), deleted_values.size()}, {nullptr, 0}};
     Mutation mutation;
     gg_operation_options operation = OperationOptions();
-    Check(gg_repository_complete_push(&mutation.value, gg, &plan, &operation), "complete bookmark deletion");
+    Check(gg_repository_complete_push(&mutation.value, gg, &plan, &operation), "complete branch deletion");
     if (publish)
         PublishSnapshot();
 }

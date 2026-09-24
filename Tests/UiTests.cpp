@@ -326,16 +326,16 @@ RepoSnapshot RichSnapshot()
     };
     snapshot.revisions.front().author_email = "merger@example.test";
     snapshot.refs = {
-        {"coverage-bookmark", {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, true, true},
-        {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, false, false},
+        {"coverage-branch", {}, "merge", GG_NAMED_REF_LOCAL_BRANCH, true, true},
+        {"feature", {}, "left", GG_NAMED_REF_LOCAL_BRANCH, false, false},
         {"coverage-tag", {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false},
         {"coverage-tag", "origin", "left", GG_NAMED_REF_REMOTE_TAG, true, false},
         {"remote-tag", "upstream", "base", GG_NAMED_REF_REMOTE_TAG, true, false},
-        {"remote-bookmark", {}, "right", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
-        {"remote-bookmark", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
-        {"remote-only", "upstream", "base", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
-        {"diverged", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK, true, false},
-        {"diverged", "origin", "right", GG_NAMED_REF_REMOTE_BOOKMARK, true, false},
+        {"remote-branch", {}, "right", GG_NAMED_REF_LOCAL_BRANCH, true, false},
+        {"remote-branch", "origin", "right", GG_NAMED_REF_REMOTE_BRANCH, true, false},
+        {"remote-only", "upstream", "base", GG_NAMED_REF_REMOTE_BRANCH, true, false},
+        {"diverged", {}, "left", GG_NAMED_REF_LOCAL_BRANCH, true, false},
+        {"diverged", "origin", "right", GG_NAMED_REF_REMOTE_BRANCH, true, false},
     };
     snapshot.status = {
         {{}, "added.txt", GIT_DELTA_ADDED, false},
@@ -442,17 +442,17 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         ImGuiWindow* operations = ImGui::FindWindowByName("Operations");
         IM_CHECK(operations == nullptr || !operations->Active);
-        ImGuiWindow* bookmarks = WaitForWindow(context, "Bookmarks");
-        IM_CHECK_NE(bookmarks, nullptr);
+        ImGuiWindow* branches = WaitForWindow(context, "Branches");
+        IM_CHECK_NE(branches, nullptr);
         ImGuiWindow* tags = WaitForWindow(context, "Tags");
         ImGuiWindow* workspaces = WaitForWindow(context, "Workspaces");
         ImGuiWindow* remotes = WaitForWindow(context, "Remotes");
         IM_CHECK_NE(tags, nullptr);
         IM_CHECK_NE(workspaces, nullptr);
         IM_CHECK_NE(remotes, nullptr);
-        IM_CHECK_EQ(tags->DockNode, bookmarks->DockNode);
+        IM_CHECK_EQ(tags->DockNode, branches->DockNode);
         IM_CHECK_EQ(remotes->DockNode, workspaces->DockNode);
-        IM_CHECK_NE(workspaces->DockNode, bookmarks->DockNode);
+        IM_CHECK_NE(workspaces->DockNode, branches->DockNode);
         ImGuiWindow* changes = ImGui::FindWindowByName("Changes");
         ImGuiWindow* change_information = ImGui::FindWindowByName("Change information");
         ImGuiWindow* diff = ImGui::FindWindowByName("Diff");
@@ -535,12 +535,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(empty_change->empty);
         const std::size_t revision_count = Application::Instance().HistoryRevisionsForTest().size();
         IM_CHECK(Application::Instance().ActiveOperationForTest().empty());
-        const auto advanced_bookmark = std::ranges::find_if(
+        const auto advanced_branch = std::ranges::find_if(
             Application::Instance().SnapshotForTest()->refs, [](const NamedRef& ref) {
-                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "main";
+                return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "main";
             });
-        IM_CHECK_NE(advanced_bookmark, Application::Instance().SnapshotForTest()->refs.end());
-        IM_CHECK_EQ(advanced_bookmark->target, empty_working_copy);
+        IM_CHECK_NE(advanced_branch, Application::Instance().SnapshotForTest()->refs.end());
+        IM_CHECK_EQ(advanced_branch->target, empty_working_copy);
         // The virtual Working tree stays selected across the new active commit.
         IM_CHECK_EQ(Application::Instance().SelectedRevisionsForTest(),
             std::vector<std::string>{MakeWorkingTreeHistoryItem(
@@ -607,7 +607,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             OpenAndCancel(context, path.c_str());
         }
 
-        for (const char* panel : {"Bookmarks", "Tags", "Workspaces", "Remotes", "History", "Changes",
+        for (const char* panel : {"Branches", "Tags", "Workspaces", "Remotes", "History", "Changes",
                  "Change information", "Diff"})
         {
             const std::string path = std::string("//##MainMenuBar/View/") + panel;
@@ -627,8 +627,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->MenuClick("//##MainMenuBar/Repository/Refresh");
         context->Yield(3);
 
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/Create bookmark");
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/Create branch");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Cancel");
@@ -870,16 +870,16 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         }
         context->KeyPress(ImGuiKey_Escape);
 
-        FocusWindow(context, "Bookmarks");
-        IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("##bookmark filter").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        FocusWindow(context, "Branches");
+        IM_CHECK((context->ItemInfo("**/Create branch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("##branch filter").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("**/feature");
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
         context->ItemClick("**/feature", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Reveal commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Delete local bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Delete local branch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
 
         FocusWindow(context, "Tags");
@@ -916,8 +916,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(2);
         context->SetRef("ggui dockspace");
         IM_CHECK((context->ItemInfo("Commit").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        FocusWindow(context, "Bookmarks");
-        IM_CHECK((context->ItemInfo("**/Create bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        FocusWindow(context, "Branches");
+        IM_CHECK((context->ItemInfo("**/Create branch").ItemFlags & ImGuiItemFlags_Disabled) == 0);
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "ShowsConcurrentBackgroundActivity");
@@ -1016,7 +1016,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         UiRepository repository;
         const std::string base = repository.RevisionId("HEAD");
         const std::string main_tip = NavigationCommit(repository, "Main tip", {base});
-        // Forks at base, where the unselected "ancient" bookmark is shared history.
+        // Forks at base, where the unselected "ancient" branch is shared history.
         const std::string manual = NavigationCommit(repository, "Manual branch", {base});
         const std::string parked = NavigationCommit(repository, "Parked", {main_tip});
         const std::string at = NavigationCommit(repository, "At", {parked});
@@ -1030,6 +1030,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         repository.Git("checkout --detach " + at);
         for (const std::string& head : {manual, at_child, feature_child})
             repository.Git("update-ref refs/gg/visible-heads/" + head + " " + head);
+        // Only Git internals reference this head; it is never shown.
+        const std::string internal = NavigationCommit(repository, "Internal", {main_tip});
+        repository.Git("update-ref refs/gg/aliases/" + internal + " " + internal);
         IM_CHECK(OpenNavigationRepository(context, repository));
         const auto wait_for_history = [&](std::vector<std::string> expected) {
             std::ranges::sort(expected);
@@ -1039,21 +1042,21 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 return !application.HistoryLoadPendingForTest() && actual == expected;
             });
         };
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->KeyDown(ImGuiMod_Ctrl);
         context->ItemClick("**/main");
         context->KeyUp(ImGuiMod_Ctrl);
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"main"});
-        // The manual branch has no bookmark of its own and the child of @ is
-        // built on @, so both stay visible. The feature branch is hidden with
-        // its bookmark.
-        IM_CHECK(wait_for_history({base, main_tip, manual, parked, at, at_child}));
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"main"});
+        // Unnamed heads the user created are always visible, even the one on
+        // top of the unselected feature branch (which brings its own history
+        // along); the alias-only head is not.
+        IM_CHECK(wait_for_history({base, main_tip, manual, parked, at, at_child, feature_tip, feature_child}));
         context->ItemClick("**/feature");
         IM_CHECK(wait_for_history({base, main_tip, manual, parked, at, at_child, feature_tip, feature_child}));
         application.ClearSnapshotForTest();
     };
 
-    test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBookmarkBranches");
+    test = IM_REGISTER_TEST(engine, "Navigation", "VisibleBranches");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
@@ -1062,7 +1065,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const std::string main_child = NavigationCommit(repository, "Main child", {main_tip});
         const std::string feature_tip = NavigationCommit(repository, "Feature tip", {base});
         const std::string feature_child = NavigationCommit(repository, "Feature child", {feature_tip});
-        const std::string other_tip = NavigationCommit(repository, "Other bookmarked branch", {main_tip});
+        const std::string other_tip = NavigationCommit(repository, "Other branched branch", {main_tip});
         repository.Git("update-ref refs/heads/main " + main_tip);
         repository.Git("update-ref refs/heads/feature " + feature_tip);
         repository.Git("update-ref refs/heads/other " + other_tip);
@@ -1078,34 +1081,34 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 return !application.HistoryLoadPendingForTest() && actual == expected;
             });
         };
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"main"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"main"});
         IM_CHECK(wait_for_history({base, main_tip, main_child}));
-        FocusWindow(context, "Bookmarks");
-        ImGuiWindow* bookmarks = ImGui::FindWindowByName("Bookmarks");
-        IM_CHECK_NE(bookmarks, nullptr);
-        const auto list = std::ranges::find_if(bookmarks->DC.ChildWindows, [](const ImGuiWindow* child) {
-            return std::string_view(child->Name).find("bookmark list") != std::string_view::npos;
+        FocusWindow(context, "Branches");
+        ImGuiWindow* branches = ImGui::FindWindowByName("Branches");
+        IM_CHECK_NE(branches, nullptr);
+        const auto list = std::ranges::find_if(branches->DC.ChildWindows, [](const ImGuiWindow* child) {
+            return std::string_view(child->Name).find("branch list") != std::string_view::npos;
         });
-        IM_CHECK(list != bookmarks->DC.ChildWindows.end());
-        IM_CHECK_LE(context->ItemInfo("##bookmark filter").RectFull.Max.y, (*list)->Pos.y);
+        IM_CHECK(list != branches->DC.ChildWindows.end());
+        IM_CHECK_LE(context->ItemInfo("##branch filter").RectFull.Max.y, (*list)->Pos.y);
         context->ItemClick("**/feature");
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), (std::vector<std::string>{"main", "feature"}));
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), (std::vector<std::string>{"main", "feature"}));
         IM_CHECK(wait_for_history({base, main_tip, main_child, feature_tip, feature_child}));
         context->ItemClick("**/main");
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
-        // Working-copy ancestry remains visible independently of selected bookmarks.
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"feature"});
+        // Working-copy ancestry remains visible independently of selected branches.
         IM_CHECK(wait_for_history({base, main_tip, main_child, feature_tip, feature_child}));
         context->ItemClick("**/feature");
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"feature"});
         context->ItemClick("**/main");
         context->KeyDown(ImGuiMod_Ctrl);
         context->ItemClick("**/feature");
         context->KeyUp(ImGuiMod_Ctrl);
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"feature"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"feature"});
         application.ClearSnapshotForTest();
     };
 
-    test = IM_REGISTER_TEST(engine, "Navigation", "RemoteAndBookmarkSelection");
+    test = IM_REGISTER_TEST(engine, "Navigation", "RemoteAndBranchSelection");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
@@ -1122,13 +1125,13 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         repository.Git("update-ref refs/gg/workspaces/default " + merge);
         IM_CHECK(OpenNavigationRepository(context, repository));
         IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"origin"});
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"origin-only"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"origin-only"});
         IM_CHECK(WaitNavigation(context, [&] {
             const auto visible = application.VisibleHistoryRevisionsForTest();
             return std::ranges::find(visible, merge) != visible.end()
                 && std::ranges::find(visible, origin_tip) != visible.end();
         }));
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         IM_CHECK(context->ItemExists("**/local"));
         IM_CHECK(context->ItemExists("**/origin-only"));
         IM_CHECK(!context->ItemExists("**/upstream-only"));
@@ -1143,7 +1146,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
         context->ItemClick("**/upstream");
         IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"upstream-only"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"upstream-only"});
         IM_CHECK(WaitNavigation(context, [&] {
             const auto visible = application.VisibleHistoryRevisionsForTest();
             return !application.HistoryLoadPendingForTest()
@@ -1151,7 +1154,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 && std::ranges::find(visible, upstream_tip) != visible.end()
                 && std::ranges::find(visible, origin_tip) != visible.end();
         }));
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         IM_CHECK(context->ItemExists("**/local"));
         IM_CHECK(!context->ItemExists("**/origin-only"));
         IM_CHECK(context->ItemExists("**/upstream-only"));
@@ -1159,7 +1162,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(OpenNavigationRepository(context, other));
         IM_CHECK(OpenNavigationRepository(context, repository));
         IM_CHECK_EQ(application.SelectedRemotesForTest(), std::vector<std::string>{"upstream"});
-        IM_CHECK_EQ(application.VisibleBookmarksForTest(), std::vector<std::string>{"upstream-only"});
+        IM_CHECK_EQ(application.VisibleBranchesForTest(), std::vector<std::string>{"upstream-only"});
         UiRepository no_origin;
         no_origin.Git("remote add first " + Quote(no_origin.Path().string()));
         no_origin.Git("remote add second " + Quote(no_origin.Path().string()));
@@ -1251,7 +1254,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         for (int index = 598; index >= 0; --index)
             revisions[index] = NavigationCommit(repository, "Revision " + std::to_string(index), {revisions[index + 1]});
         repository.Git("update-ref refs/heads/main " + revisions[0]);
-        repository.Git("update-ref refs/heads/deep-bookmark " + revisions[550]);
+        repository.Git("update-ref refs/heads/deep-branch " + revisions[550]);
         repository.Git("tag deep-tag " + revisions[500]);
         repository.Git("checkout --detach " + revisions[1]);
         repository.Git("update-ref refs/gg/workspaces/default " + revisions[0]);
@@ -1261,8 +1264,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
         // Search highlights matches while retaining the bounded graph context.
         IM_CHECK(!application.VisibleHistoryRevisionsForTest().empty());
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/deep-bookmark", ImGuiMouseButton_Right);
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/deep-branch", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Reveal commit");
         IM_CHECK(WaitNavigation(context, [&] {
@@ -1361,14 +1364,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(!application.HistoryLoadPendingForTest());
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "PushBookmarkDialog");
+    test = IM_REGISTER_TEST(engine, "Application", "PushBranchDialog");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
         application.SelectRevisionForTest("left");
         context->Yield(2);
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/coverage-bookmark", ImGuiMouseButton_Right);
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/coverage-branch", ImGuiMouseButton_Right);
         context->Yield();
         context->SetRef("//$FOCUSED");
         context->ItemClick("**/Push to...");
@@ -1376,7 +1379,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(dialog, nullptr);
         context->SetRef("ggui action");
         IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Remote").ID);
-        IM_CHECK(RenderedTextContains(context, "Bookmark: coverage-bookmark"));
+        IM_CHECK(RenderedTextContains(context, "Branch: coverage-branch"));
         IM_CHECK(context->ItemExists("Force push"));
         IM_CHECK(!RenderedTextContains(context, "Warning: force push can overwrite remote history."));
         context->ItemClick("Force push");
@@ -1395,7 +1398,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(dialog == nullptr || !dialog->Active);
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "CreateBookmarkFromGraph");
+    test = IM_REGISTER_TEST(engine, "Application", "CreateBranchFromGraph");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         application.SetSnapshotForTest(RichSnapshot());
@@ -1405,7 +1408,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("History");
         context->ItemClick(rows.front(), ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Create bookmark...");
+        context->ItemClick("**/Create branch...");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK_EQ(application.SelectedRevisionsForTest().size(), 1U);
@@ -1416,7 +1419,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "CreateBookmarkFromRepositoryHistory");
+    test = IM_REGISTER_TEST(engine, "Application", "CreateBranchFromRepositoryHistory");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
@@ -1428,7 +1431,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("History");
         context->ItemClick(rows.front(), ImGuiMouseButton_Right);
         context->Yield();
-        context->ItemClick("**/Create bookmark...");
+        context->ItemClick("**/Create branch...");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemInputValue("Name", "from-history");
@@ -1438,24 +1441,24 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(WaitNavigation(context, [&] {
             const auto snapshot = application.SnapshotForTest();
             return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [&](const NamedRef& ref) {
-                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "from-history" && ref.target == base;
+                return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "from-history" && ref.target == base;
             });
         }));
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "DeleteBookmarkRequiresConfirmation");
+    test = IM_REGISTER_TEST(engine, "Application", "DeleteBranchRequiresConfirmation");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
         repository.Git("branch doomed");
         IM_CHECK(OpenNavigationRepository(context, repository));
-        const auto bookmark_exists = [&] {
+        const auto branch_exists = [&] {
             const auto snapshot = application.SnapshotForTest();
             return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [](const NamedRef& ref) {
-                return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "doomed";
+                return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "doomed";
             });
         };
-        IM_CHECK(bookmark_exists());
+        IM_CHECK(branch_exists());
         const auto request_delete = [&] {
             const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
             IM_CHECK_RETV(!rows.empty(), false);
@@ -1463,10 +1466,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(rows.front(), ImGuiMouseButton_Right);
             context->Yield();
             context->SetRef("//$FOCUSED");
-            context->MenuClick("Delete bookmark/doomed (local)");
+            context->MenuClick("Delete branch/doomed (local)");
             IM_CHECK_RETV(WaitForWindow(context, "ggui action") != nullptr, false);
             context->SetRef("ggui action");
-            IM_CHECK_RETV(RenderedTextContains(context, "Local bookmark"), false);
+            IM_CHECK_RETV(RenderedTextContains(context, "Local branch"), false);
             return true;
         };
 
@@ -1474,25 +1477,25 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
         context->Yield(3);
         IM_CHECK(!ActionDialogOpen());
-        IM_CHECK(bookmark_exists());
+        IM_CHECK(branch_exists());
 
         IM_CHECK(request_delete());
         context->ItemClick("Delete");
-        IM_CHECK(WaitNavigation(context, [&] { return !bookmark_exists(); }));
+        IM_CHECK(WaitNavigation(context, [&] { return !branch_exists(); }));
 
-        // A lone local bookmark is deleted directly instead of via a submenu.
+        // A lone local branch is deleted directly instead of via a submenu.
         const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
         IM_CHECK(!rows.empty());
         context->SetRef("History");
         context->ItemClick(rows.front(), ImGuiMouseButton_Right);
         context->Yield();
         context->SetRef("//$FOCUSED");
-        IM_CHECK(!context->ItemExists("Delete bookmark"));
-        IM_CHECK(context->ItemExists("Delete local bookmark"));
+        IM_CHECK(!context->ItemExists("Delete branch"));
+        IM_CHECK(context->ItemExists("Delete local branch"));
         context->KeyPress(ImGuiKey_Escape);
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "DeleteLocalAndRemoteBookmark");
+    test = IM_REGISTER_TEST(engine, "Application", "DeleteLocalAndRemoteBranch");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository remote_owner;
@@ -1503,14 +1506,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         repository.Git("branch doomed");
         repository.Git("push origin doomed");
         IM_CHECK(OpenNavigationRepository(context, repository));
-        const auto bookmark_exists = [&](gg_named_ref_kind kind) {
+        const auto branch_exists = [&](gg_named_ref_kind kind) {
             const auto snapshot = application.SnapshotForTest();
             return snapshot != nullptr && std::ranges::any_of(snapshot->refs, [&](const NamedRef& ref) {
                 return ref.kind == kind && ref.name == "doomed";
             });
         };
-        IM_CHECK(bookmark_exists(GG_NAMED_REF_LOCAL_BOOKMARK));
-        IM_CHECK(bookmark_exists(GG_NAMED_REF_REMOTE_BOOKMARK));
+        IM_CHECK(branch_exists(GG_NAMED_REF_LOCAL_BRANCH));
+        IM_CHECK(branch_exists(GG_NAMED_REF_REMOTE_BRANCH));
 
         const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
         IM_CHECK(!rows.empty());
@@ -1518,14 +1521,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick(rows.front(), ImGuiMouseButton_Right);
         context->Yield();
         context->SetRef("//$FOCUSED");
-        context->MenuClick("Delete bookmark/doomed/Local & remote");
+        context->MenuClick("Delete branch/doomed/Local & remote");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
-        IM_CHECK(RenderedTextContains(context, "Local bookmark"));
-        IM_CHECK(RenderedTextContains(context, "Remote bookmark origin/doomed"));
+        IM_CHECK(RenderedTextContains(context, "Local branch"));
+        IM_CHECK(RenderedTextContains(context, "Remote branch origin/doomed"));
         context->ItemClick("Delete");
         IM_CHECK(WaitNavigation(context, [&] {
-            return !bookmark_exists(GG_NAMED_REF_LOCAL_BOOKMARK) && !bookmark_exists(GG_NAMED_REF_REMOTE_BOOKMARK)
+            return !branch_exists(GG_NAMED_REF_LOCAL_BRANCH) && !branch_exists(GG_NAMED_REF_REMOTE_BRANCH)
                 && application.ActiveOperationForTest().empty();
         }));
         git_repository* raw_remote = nullptr;
@@ -1536,7 +1539,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         git_repository_free(raw_remote);
     };
 
-    test = IM_REGISTER_TEST(engine, "Interactions", "DragBookmarkPillMovesBookmark");
+    test = IM_REGISTER_TEST(engine, "Interactions", "DragBranchPillMovesBranch");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
@@ -1545,11 +1548,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         const std::string child = repository.RevisionId("HEAD");
         repository.Git("branch movable " + base);
         IM_CHECK(OpenNavigationRepository(context, repository));
-        const auto bookmark_target = [&] {
+        const auto branch_target = [&] {
             const auto snapshot = application.SnapshotForTest();
             if (snapshot != nullptr)
                 for (const NamedRef& ref : snapshot->refs)
-                    if (ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == "movable")
+                    if (ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == "movable")
                         return ref.target;
             return std::string{};
         };
@@ -1565,14 +1568,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->Yield(2);
             context->MouseMoveToPos(target.RectFull.GetCenter());
             context->Yield(2);
-            IM_CHECK_RETV(RenderedTextContains(context, "Move bookmark to"), false);
+            IM_CHECK_RETV(RenderedTextContains(context, "Move branch to"), false);
             context->MouseUp();
             return true;
         };
 
         // Rows are listed newest first: the child, then the base commit.
         IM_CHECK(drag_pill_to_row(0));
-        IM_CHECK(WaitNavigation(context, [&] { return bookmark_target() == child; }));
+        IM_CHECK(WaitNavigation(context, [&] { return branch_target() == child; }));
         IM_CHECK_EQ(application.SelectedRevisionsForTest().size(), 1U);
 
         // Moving it backwards asks for confirmation first.
@@ -1580,7 +1583,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Force move");
-        IM_CHECK(WaitNavigation(context, [&] { return bookmark_target() == base; }));
+        IM_CHECK(WaitNavigation(context, [&] { return branch_target() == base; }));
     };
 
     test = IM_REGISTER_TEST(engine, "Application", "DialogUsabilityAndWholeWorktreeCommit");
@@ -1616,8 +1619,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK(!context->ItemExists("**/Commit only this file"));
 
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/Create bookmark");
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/Create branch");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
@@ -1759,41 +1762,41 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(!Application::SupportsDiffLanguageForTest("README"));
         IM_CHECK_EQ(Application::FileUrlForTest("/tmp/a b\\c#d"), "file:///tmp/a%20b/c%23d");
         IM_CHECK_EQ(Application::ReferenceLabelForTest(
-                        {"feature", {}, "left", GG_NAMED_REF_LOCAL_BOOKMARK}),
+                        {"feature", {}, "left", GG_NAMED_REF_LOCAL_BRANCH}),
             "feature");
         IM_CHECK_EQ(Application::ReferenceLabelForTest(
-                        {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BOOKMARK}),
+                        {"feature", "origin", "left", GG_NAMED_REF_REMOTE_BRANCH}),
             "origin/feature");
         const RepoSnapshot snapshot = RichSnapshot();
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[5], snapshot.refs),
-            std::make_pair(std::string("remote-bookmark"), std::size_t{0}));
+            std::make_pair(std::string("remote-branch"), std::size_t{0}));
         IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[6], snapshot.refs).first.empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[8], snapshot.refs).first, "diverged");
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[9], snapshot.refs).first, "diverged");
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[2], snapshot.refs).first, "coverage-tag");
         IM_CHECK(Application::ReferenceBadgeLabelForTest(snapshot.refs[3], snapshot.refs).first.empty());
         IM_CHECK_EQ(Application::ReferenceBadgeLabelForTest(snapshot.refs[4], snapshot.refs).first, "remote-tag");
-        const std::array bookmark_colors{
-            Application::BookmarkColorForTest("coverage-bookmark", snapshot.refs),
-            Application::BookmarkColorForTest("remote-only", snapshot.refs),
-            Application::BookmarkColorForTest("remote-bookmark", snapshot.refs),
-            Application::BookmarkColorForTest("diverged", snapshot.refs)};
-        for (std::size_t left = 0; left < bookmark_colors.size(); ++left)
-            for (std::size_t right = left + 1; right < bookmark_colors.size(); ++right)
-                IM_CHECK_NE(bookmark_colors[left], bookmark_colors[right]);
+        const std::array branch_colors{
+            Application::BranchColorForTest("coverage-branch", snapshot.refs),
+            Application::BranchColorForTest("remote-only", snapshot.refs),
+            Application::BranchColorForTest("remote-branch", snapshot.refs),
+            Application::BranchColorForTest("diverged", snapshot.refs)};
+        for (std::size_t left = 0; left < branch_colors.size(); ++left)
+            for (std::size_t right = left + 1; right < branch_colors.size(); ++right)
+                IM_CHECK_NE(branch_colors[left], branch_colors[right]);
         std::vector<NamedRef> desynchronized{
-            {"feature", {}, "local", GG_NAMED_REF_LOCAL_BOOKMARK},
-            {"feature", "origin", "remote", GG_NAMED_REF_REMOTE_BOOKMARK, true, false, 3, 2, true}};
+            {"feature", {}, "local", GG_NAMED_REF_LOCAL_BRANCH},
+            {"feature", "origin", "remote", GG_NAMED_REF_REMOTE_BRANCH, true, false, false, {}, 3, 2, true}};
         IM_CHECK_EQ(ApplicationInternal::RefRemotes(
-                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BRANCH),
             "origin -2 +3");
         desynchronized[1].remote_commits = 0;
         IM_CHECK_EQ(ApplicationInternal::RefRemotes(
-                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BRANCH),
             "origin +3");
         desynchronized[1].local_commits = 0;
         IM_CHECK_EQ(ApplicationInternal::RefRemotes(
-                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BOOKMARK),
+                        desynchronized, "feature", GG_NAMED_REF_REMOTE_BRANCH),
             "origin");
         IM_CHECK_EQ(Application::FormatTimestampForTest(0), "Unknown date");
         IM_CHECK_EQ(Application::FormatTimestampForTest(1'700'000'000).size(), 16U);
@@ -2024,10 +2027,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("ggui action");
         IM_CHECK(context->ItemExists("Apply"));
         IM_CHECK(context->ItemExists("Also abandon all descendants (full branch)"));
-        IM_CHECK(context->ItemExists("Also delete bookmark from remote"));
-        IM_CHECK(context->ItemIsChecked("Retain bookmarks"));
+        IM_CHECK(context->ItemExists("Also delete branch from remote"));
+        IM_CHECK(context->ItemIsChecked("Retain branches"));
         IM_CHECK_EQ(GImGui->NavId, context->ItemInfo("Cancel").ID);
-        context->ItemCheck("Also delete bookmark from remote");
+        context->ItemCheck("Also delete branch from remote");
         context->ItemClick("Cancel");
 
         application.SelectRevisionForTest("left");
@@ -2035,8 +2038,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_A);
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
-        IM_CHECK(!context->ItemExists("Also delete bookmark from remote"));
-        IM_CHECK(context->ItemIsChecked("Retain bookmarks"));
+        IM_CHECK(!context->ItemExists("Also delete branch from remote"));
+        IM_CHECK(context->ItemIsChecked("Retain branches"));
         context->ItemClick("Cancel");
 
         application.SelectRevisionForTest("base");
@@ -2210,7 +2213,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield(3);
 
         context->SetRef("History");
-        context->ItemInputValue("##graph filter", "COVERAGE-BOOKMARK");
+        context->ItemInputValue("##graph filter", "COVERAGE-BRANCH");
         context->Yield(2);
         context->ItemInputValue("##graph filter", "change-RIGHT");
         context->Yield(2);
@@ -2253,7 +2256,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/Fetch"));
         IM_CHECK(context->ItemExists("**/Delete remote"));
         context->KeyPress(ImGuiKey_Escape);
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         IM_CHECK(context->ItemExists("**/remote-only"));
         IM_CHECK(context->ItemExists("**/diverged"));
         context->ItemClick("**/feature", ImGuiMouseButton_Right);
@@ -2262,7 +2265,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/Reveal commit");
         context->Yield(2);
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
-        context->ItemClick("**/coverage-bookmark");
+        context->ItemClick("**/coverage-branch");
         context->Yield(2);
 
         context->MenuClick("//##MainMenuBar/View/Operations");
@@ -2355,9 +2358,9 @@ void RegisterUiTests(ImGuiTestEngine* engine)
     test = IM_REGISTER_TEST(engine, "Presentation", "HistoryBadgesElideLongNames");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
-        const std::string bookmark = "feature/" + std::string(80, 'x') + "-tail";
+        const std::string branch = "feature/" + std::string(80, 'x') + "-tail";
         RepoSnapshot snapshot = RichSnapshot();
-        snapshot.refs.push_back({bookmark, {}, "merge", GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
+        snapshot.refs.push_back({branch, {}, "merge", GG_NAMED_REF_LOCAL_BRANCH, false, false});
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(3);
 
@@ -2373,30 +2376,30 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             }
             return nullptr;
         };
-        const ImGuiTestItemInfo* long_badge = badge(bookmark);
-        const ImGuiTestItemInfo* short_badge = badge("coverage-bookmark");
+        const ImGuiTestItemInfo* long_badge = badge(branch);
+        const ImGuiTestItemInfo* short_badge = badge("coverage-branch");
         IM_CHECK(long_badge != nullptr && short_badge != nullptr);
         const float scale = ImGui::GetFontSize() / 16.0f;
         // Badge rects include the spacing that follows each badge.
         const float decoration = (7.0f * 2.0f + 6.0f) * scale;
         IM_CHECK_LE(long_badge->RectFull.GetWidth(), 160.0f * scale + decoration + 1.0f);
-        IM_CHECK_LT(long_badge->RectFull.GetWidth(), ImGui::CalcTextSize(bookmark.c_str()).x);
+        IM_CHECK_LT(long_badge->RectFull.GetWidth(), ImGui::CalcTextSize(branch.c_str()).x);
         IM_CHECK_EQ(short_badge->RectFull.GetWidth(),
-            ImGui::CalcTextSize("coverage-bookmark").x + decoration);
+            ImGui::CalcTextSize("coverage-branch").x + decoration);
     };
 
     test = IM_REGISTER_TEST(engine, "Presentation", "ListElisionTooltips");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         const std::string long_text(80, 'x');
-        const std::string bookmark = "bookmark-" + long_text;
+        const std::string branch = "branch-" + long_text;
         const std::string tag = "tag-" + long_text;
         const std::string workspace = "workspace-" + long_text;
         const std::string remote = "remote-" + long_text;
         const std::string path = "directory/" + long_text + "/file.cpp";
         const std::string long_revision_id(40, 'a');
         RepoSnapshot snapshot = RichSnapshot();
-        snapshot.refs.push_back({bookmark, {}, long_revision_id, GG_NAMED_REF_LOCAL_BOOKMARK, false, false});
+        snapshot.refs.push_back({branch, {}, long_revision_id, GG_NAMED_REF_LOCAL_BRANCH, false, false});
         snapshot.refs.push_back({tag, {}, "left", GG_NAMED_REF_LOCAL_TAG, false, false});
         snapshot.workspaces.push_back({workspace, "/root/" + long_text, "merge", false});
         snapshot.remotes.push_back({remote, "https://fetch.example/" + long_text,
@@ -2405,26 +2408,26 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(std::move(snapshot));
         context->Yield(3);
 
-        const ImGuiWindow* bookmark_tooltip = nullptr;
+        const ImGuiWindow* branch_tooltip = nullptr;
         const auto check_tooltip = [&](const char* window, const std::string& item) {
             FocusWindow(context, window);
             context->MouseMove(("**/" + item).c_str());
             context->Yield(2);
             const ImGuiWindow* tooltip = GImGui->TooltipPreviousWindow;
             IM_CHECK(tooltip != nullptr && (tooltip->Active || tooltip->WasActive));
-            if (item == bookmark)
-                bookmark_tooltip = tooltip;
+            if (item == branch)
+                branch_tooltip = tooltip;
         };
-        check_tooltip("Bookmarks", bookmark);
-        IM_CHECK_NE(bookmark_tooltip, nullptr);
+        check_tooltip("Branches", branch);
+        IM_CHECK_NE(branch_tooltip, nullptr);
         ImGuiTestItemList tooltip_items;
-        const std::string tooltip_path = std::string("//") + bookmark_tooltip->Name;
+        const std::string tooltip_path = std::string("//") + branch_tooltip->Name;
         context->GatherItems(&tooltip_items, tooltip_path.c_str());
         for (int index = 0; index < tooltip_items.GetSize(); ++index)
             IM_CHECK_EQ(std::string(tooltip_items.GetByIndex(index)->DebugLabel).find(long_revision_id),
                 std::string::npos);
         bool colored_id = false;
-        for (const ImDrawVert& vertex : bookmark_tooltip->DrawList->VtxBuffer)
+        for (const ImDrawVert& vertex : branch_tooltip->DrawList->VtxBuffer)
             colored_id |= vertex.col == IM_COL32(47, 129, 247, 255);
         IM_CHECK(colored_id);
         check_tooltip("Tags", tag);
@@ -2480,14 +2483,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         Application::Instance().SetSnapshotForTest(RichSnapshot());
         context->Yield(2);
 
-        FocusWindow(context, "Bookmarks");
-        IM_CHECK_GE(context->ItemInfo("##bookmark filter").RectFull.GetWidth(),
-            context->ItemInfo("**/Create bookmark").RectFull.GetWidth() - 1.0f);
-        context->ItemInputValue("##bookmark filter", "FEATURE");
+        FocusWindow(context, "Branches");
+        IM_CHECK_GE(context->ItemInfo("##branch filter").RectFull.GetWidth(),
+            context->ItemInfo("**/Create branch").RectFull.GetWidth() - 1.0f);
+        context->ItemInputValue("##branch filter", "FEATURE");
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/feature"));
-        IM_CHECK(!context->ItemExists("**/coverage-bookmark"));
-        context->ItemInputValue("##bookmark filter", "");
+        IM_CHECK(!context->ItemExists("**/coverage-branch"));
+        context->ItemInputValue("##branch filter", "");
 
         FocusWindow(context, "Tags");
         IM_CHECK_GE(context->ItemInfo("##tag filter").RectFull.GetWidth(),
@@ -2683,7 +2686,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick("**/Copy name");
             return std::string(ImGui::GetClipboardText());
         };
-        IM_CHECK_EQ(copy_reference_name("Bookmarks", "coverage-bookmark"), "coverage-bookmark");
+        IM_CHECK_EQ(copy_reference_name("Branches", "coverage-branch"), "coverage-branch");
         IM_CHECK_EQ(copy_reference_name("Tags", "coverage-tag"), "coverage-tag");
         IM_CHECK_EQ(copy_reference_name("Remotes", "origin"), "origin");
         IM_CHECK_EQ(copy_reference_name("Workspaces", "current"), "current");
@@ -2706,7 +2709,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK_EQ(std::string(ImGui::GetClipboardText()), "merge");
     };
 
-    test = IM_REGISTER_TEST(engine, "Application", "CloseRepositoryAndRenameBookmark");
+    test = IM_REGISTER_TEST(engine, "Application", "CloseRepositoryAndRenameBranch");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         RepoSnapshot snapshot = RichSnapshot();
@@ -2720,14 +2723,14 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/upstream");
         context->KeyUp(ImGuiMod_Ctrl);
         context->Yield(2);
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/feature", ImGuiMouseButton_Right);
         context->Yield();
         context->ItemClick("**/Rename...");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        context->ItemInputValue("New name", "coverage-bookmark");
+        context->ItemInputValue("New name", "coverage-branch");
         context->Yield();
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->ItemInputValue("New name", "feature-renamed");
@@ -2735,11 +2738,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Apply").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("Cancel");
 
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/remote-only", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Merge into @").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK((context->ItemInfo("**/Rebase @ onto bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Rebase @ onto branch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Rename...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         context->KeyPress(ImGuiKey_Escape);
 
@@ -2753,7 +2756,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("**/retained-repository"));
     };
 
-    test = IM_REGISTER_TEST(engine, "Interactions", "BookmarkContextMenus");
+    test = IM_REGISTER_TEST(engine, "Interactions", "BranchContextMenus");
     test->TestFunc = [](ImGuiTestContext* context) {
         RepoSnapshot snapshot = RichSnapshot();
         snapshot.remotes.push_back({"upstream", "https://example.test/upstream.git", ""});
@@ -2764,26 +2767,26 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/upstream");
         context->KeyUp(ImGuiMod_Ctrl);
         context->Yield(2);
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
 
         context->ItemClick("**/remote-only", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) != 0);
-        IM_CHECK(!context->ItemExists("**/Delete bookmark"));
-        IM_CHECK((context->ItemInfo("**/Delete upstream bookmark").ItemFlags & ImGuiItemFlags_Disabled) == 0);
+        IM_CHECK(!context->ItemExists("**/Delete branch"));
+        IM_CHECK((context->ItemInfo("**/Delete upstream branch").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->KeyPress(ImGuiKey_Escape);
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
 
-        context->ItemClick("**/remote-bookmark", ImGuiMouseButton_Right);
+        context->ItemClick("**/remote-branch", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Merge into @").ItemFlags & ImGuiItemFlags_Disabled) == 0);
-        IM_CHECK((context->ItemInfo("**/Rebase @ onto bookmark").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        IM_CHECK((context->ItemInfo("**/Rebase @ onto branch").ItemFlags & ImGuiItemFlags_Disabled) != 0);
         IM_CHECK((context->ItemInfo("**/Push").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/Push to...").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK(!context->ItemExists("**/reconcile-origin"));
-        IM_CHECK(!context->ItemExists("**/Delete local bookmark"));
-        context->ItemClick("**/Delete bookmark");
+        IM_CHECK(!context->ItemExists("**/Delete local branch"));
+        context->ItemClick("**/Delete branch");
         context->Yield();
         IM_CHECK((context->ItemInfo("**/Local").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         IM_CHECK((context->ItemInfo("**/origin").ItemFlags & ImGuiItemFlags_Disabled) == 0);
@@ -2792,7 +2795,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->KeyPress(ImGuiKey_Escape);
     };
 
-    test = IM_REGISTER_TEST(engine, "Interactions", "DivergedBookmarkReconciliation");
+    test = IM_REGISTER_TEST(engine, "Interactions", "DivergedBranchReconciliation");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();
         UiRepository repository;
@@ -2829,12 +2832,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         for (NamedRef& ref : snapshot.refs) ref.target = real_id(ref.target);
         snapshot.remotes.push_back({"upstream", "https://example.test/upstream.git", ""});
         snapshot.refs.push_back(
-            {"diverged", "upstream", third, GG_NAMED_REF_REMOTE_BOOKMARK, true, false});
+            {"diverged", "upstream", third, GG_NAMED_REF_REMOTE_BRANCH, true, false});
         IM_CHECK_EQ(
-            ClassifyBookmarkRelation(snapshot, left, right), BookmarkRelation::Diverged);
+            ClassifyBranchRelation(snapshot, left, right), BranchRelation::Diverged);
         application.SetSnapshotForTest(snapshot);
         context->Yield(2);
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/diverged", ImGuiMouseButton_Right);
         context->Yield(2);
         IM_CHECK(context->ItemExists("**/Push"));
@@ -2846,7 +2849,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK((context->ItemInfo("Reconcile").ItemFlags & ImGuiItemFlags_Disabled) == 0);
         context->ItemClick("Reconcile");
 
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/diverged", ImGuiMouseButton_Right);
         context->Yield(2);
         context->ItemClick("**/reconcile-origin");
@@ -2860,7 +2863,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Cancel");
 
         application.ApplyEventForTest(OperationStarted{"busy"});
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/diverged", ImGuiMouseButton_Right);
         context->Yield(2);
         IM_CHECK((context->ItemInfo("**/reconcile-origin").ItemFlags & ImGuiItemFlags_Disabled) != 0);
@@ -2946,8 +2949,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         snapshot.repository_generation = 2280;
         snapshot.root = "/tmp/ggui-history-expansion";
         snapshot.head = "c0";
-        snapshot.refs = {{"main", {}, "c12", GG_NAMED_REF_LOCAL_BOOKMARK},
-            {"main", "origin", "c11", GG_NAMED_REF_REMOTE_BOOKMARK},
+        snapshot.refs = {{"main", {}, "c12", GG_NAMED_REF_LOCAL_BRANCH},
+            {"main", "origin", "c11", GG_NAMED_REF_REMOTE_BRANCH},
             {"v1", {}, "c13", GG_NAMED_REF_LOCAL_TAG}};
         application.SetSnapshotForTest(std::move(snapshot));
 
@@ -3001,10 +3004,10 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemExists("//History/**/main"));
         IM_CHECK(context->ItemExists("//History/**/v1"));
         const ImGuiTestItemInfo message = context->ItemInfo("//History/**/Commit c12");
-        const ImGuiTestItemInfo bookmark = context->ItemInfo("//History/**/main");
+        const ImGuiTestItemInfo branch = context->ItemInfo("//History/**/main");
         IM_CHECK(message.ID != 0);
-        IM_CHECK(bookmark.ID != 0);
-        IM_CHECK_GE(bookmark.RectFull.Min.x, message.RectFull.Max.x);
+        IM_CHECK(branch.ID != 0);
+        IM_CHECK_GE(branch.RectFull.Min.x, message.RectFull.Max.x);
         const ImGuiID region_row = context->ItemInfo("**/...").ID;
         context->MouseMove("**/...");
         context->Yield();
@@ -3117,11 +3120,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("Apply");
         context->Yield(2);
 
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/Create bookmark");
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/Create branch");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
-        context->ItemInputValue("Name", "submitted-bookmark");
+        context->ItemInputValue("Name", "submitted-branch");
         context->ItemClick("Apply");
         context->Yield(2);
 
@@ -3620,11 +3623,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         application.SetSnapshotForTest(RichSnapshot());
         context->Yield(4);
 
-        IM_CHECK_EQ(GatherItems(context, "//History", "remote-bookmark").size(), 1U);
+        IM_CHECK_EQ(GatherItems(context, "//History", "remote-branch").size(), 1U);
         IM_CHECK_EQ(GatherItems(context, "//History", "diverged").size(), 2U);
         IM_CHECK_EQ(GatherItems(context, "//History", "coverage-tag").size(), 1U);
         IM_CHECK_EQ(GatherItems(context, "//History", "remote-tag").size(), 1U);
-        IM_CHECK(GatherItems(context, "//History", "origin/remote-bookmark").empty());
+        IM_CHECK(GatherItems(context, "//History", "origin/remote-branch").empty());
 
         const std::vector<ImGuiID> rows = GatherItems(context, "//History", "row");
         IM_CHECK_GE(rows.size(), 2U);
@@ -3707,7 +3710,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
             IM_CHECK(context->ItemExists("**/New"));
-            for (const char* action : {"Create bookmark...", "Short commit ID", "Full commit ID"})
+            for (const char* action : {"Create branch...", "Short commit ID", "Full commit ID"})
                 IM_CHECK(context->ItemExists((std::string("**/") + action).c_str()));
             IM_CHECK(!context->ItemExists("**/Describe..."));
             IM_CHECK(!context->ItemExists("**/Metaedit..."));
@@ -3731,8 +3734,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->KeyUp(ImGuiMod_Shift);
             context->Yield();
             IM_CHECK_LT(context->ItemInfo("**/Simplify parents").RectFull.Min.y,
-                context->ItemInfo("**/Create bookmark...").RectFull.Min.y);
-            IM_CHECK_LT(context->ItemInfo("**/Create bookmark...").RectFull.Min.y,
+                context->ItemInfo("**/Create branch...").RectFull.Min.y);
+            IM_CHECK_LT(context->ItemInfo("**/Create branch...").RectFull.Min.y,
                 context->ItemInfo("**/Short commit ID").RectFull.Min.y);
             context->ItemClick("**/Duplicate");
             context->Yield();
@@ -3746,7 +3749,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
             context->SetRef("History");
             context->ItemClick(rows[0], ImGuiMouseButton_Right);
             context->Yield();
-            context->ItemClick("**/Create bookmark...");
+            context->ItemClick("**/Create branch...");
             IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
             context->SetRef("ggui action");
             context->ItemClick("Cancel");
@@ -3845,12 +3848,12 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(!context->ItemExists("**/Mark non-executable"));
         context->KeyPress(ImGuiKey_Escape);
 
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/coverage-bookmark", ImGuiMouseButton_Right);
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/coverage-branch", ImGuiMouseButton_Right);
         context->Yield();
         IM_CHECK(context->ItemExists("**/Push"));
         IM_CHECK(context->ItemExists("**/Push to..."));
-        context->ItemClick("**/Delete local bookmark");
+        context->ItemClick("**/Delete local branch");
         IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
         context->SetRef("ggui action");
         context->ItemClick("Delete");
@@ -3947,11 +3950,11 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->Yield();
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
 
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->ItemClick("**/feature");
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"merge"});
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
-        // Bookmark toggles filter the graph. Changing the selected commit is
+        // Branch toggles filter the graph. Changing the selected commit is
         // a separate action and retains the file until its diff arrives.
         application.SelectRevisionForTest("left");
         IM_CHECK_EQ(application.SelectedFileForTest(), "modified.txt");
@@ -3961,8 +3964,8 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->SetRef("Changes");
         IM_CHECK_EQ(application.SelectedFileForTest(), "fallback.txt");
 
-        FocusWindow(context, "Bookmarks");
-        context->ItemClick("**/coverage-bookmark");
+        FocusWindow(context, "Branches");
+        context->ItemClick("**/coverage-branch");
         IM_CHECK_EQ(application.SelectedRevisionsForTest(), std::vector<std::string>{"left"});
         IM_CHECK_EQ(application.SelectedFileForTest(), "fallback.txt");
         application.SelectRevisionForTest("merge");
@@ -4633,7 +4636,7 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(context->ItemIsChecked("Also abandon all descendants (full branch)"));
         context->ItemClick("Cancel");
 
-        FocusWindow(context, "Bookmarks");
+        FocusWindow(context, "Branches");
         context->KeyPress(ImGuiMod_Shift | ImGuiKey_S);
         context->Yield(2);
         IM_CHECK(!ActionDialogOpen());

@@ -117,13 +117,14 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
     if (gg_repository_working_copy(&working, gg) == GIT_OK)
         result->working_copy = OidString(working);
 
-    git_reference* raw_head = nullptr;
-    if (git_repository_head(&raw_head, git.get()) == GIT_OK)
-    {
-        std::unique_ptr<git_reference, decltype(&git_reference_free)> head(raw_head, git_reference_free);
-        if (const git_oid* target = git_reference_target(head.get()); target != nullptr)
-            result->head = OidString(*target);
-    }
+    gg_head head{};
+    head.version = GG_OPTIONS_VERSION;
+    Check(gg_repository_head(&head, gg), "read HEAD");
+    if (head.has_target)
+        result->head = OidString(head.target);
+    if (head.attached && head.branch != nullptr)
+        result->head_branch = head.branch;
+    gg_head_dispose(&head);
 
     NamedRefs refs;
     Check(gg_repository_named_refs(&refs.value, gg), "load refs");
@@ -133,14 +134,15 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
         const gg_named_ref& source = refs.value.items[index];
         result->refs.push_back({source.name == nullptr ? "" : source.name,
             source.remote == nullptr ? "" : source.remote, OidString(source.target), source.kind,
-            source.tracked != 0, source.conflicted != 0});
+            source.tracked != 0, source.conflicted != 0, source.current != 0,
+            source.workspace == nullptr ? "" : source.workspace});
     }
     for (NamedRef& remote : result->refs)
     {
-        if (remote.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
+        if (remote.kind != GG_NAMED_REF_REMOTE_BRANCH)
             continue;
         const auto local = std::ranges::find_if(result->refs, [&](const NamedRef& candidate) {
-            return candidate.kind == GG_NAMED_REF_LOCAL_BOOKMARK && candidate.name == remote.name;
+            return candidate.kind == GG_NAMED_REF_LOCAL_BRANCH && candidate.name == remote.name;
         });
         if (local == result->refs.end())
             continue;

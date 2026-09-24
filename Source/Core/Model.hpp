@@ -64,7 +64,7 @@ struct HistoryView
 
 struct HistoryQuery
 {
-    std::vector<std::string> bookmarks;
+    std::vector<std::string> branches;
     std::vector<std::string> tags;
     std::vector<std::string> remotes;
     std::string search;
@@ -76,9 +76,13 @@ struct NamedRef
     std::string name;
     std::string remote;
     std::string target;
-    gg_named_ref_kind kind = GG_NAMED_REF_LOCAL_BOOKMARK;
+    gg_named_ref_kind kind = GG_NAMED_REF_LOCAL_BRANCH;
     bool tracked = false;
     bool conflicted = false;
+    // Local branches: HEAD of this workspace is attached to it.
+    bool current = false;
+    // Local branches: another workspace that has it checked out.
+    std::string workspace{};
     std::size_t local_commits = 0;
     std::size_t remote_commits = 0;
     bool desync_known = false;
@@ -198,6 +202,8 @@ struct RepoSnapshot
     bool has_worktree = true;
     std::string working_copy;
     std::string head;
+    // The local branch HEAD is attached to; empty while detached.
+    std::string head_branch;
     // Compatibility storage for synthetic snapshots injected by UI tests.
     // RepositoryEngine never publishes history here; HistoryReady owns it.
     std::vector<Revision> revisions;

@@ -71,7 +71,7 @@ public:
     std::pair<int, bool> PendingDropActionForTest() const;
     bool PendingDropCopyForTest() const;
     void ShowWorkspaceRenameForTest();
-    void ShowBookmarkRenameForTest(const std::string& name);
+    void ShowBranchRenameForTest(const std::string& name);
     void SetSnapshotForTest(RepoSnapshot snapshot);
     void ClearSnapshotForTest();
     void AddRecentForTest(const std::string& path);
@@ -92,7 +92,7 @@ public:
     static std::string ReferenceLabelForTest(const NamedRef& ref);
     static std::pair<std::string, std::size_t> ReferenceBadgeLabelForTest(
         const NamedRef& ref, const std::vector<NamedRef>& refs);
-    static unsigned int BookmarkColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
+    static unsigned int BranchColorForTest(const std::string& name, const std::vector<NamedRef>& refs);
     static std::string FormatTimestampForTest(std::int64_t timestamp);
     static int DropPlacementForTest(int action);
     static std::string DropTooltipForTest(int action, bool entire_branch = false, bool copy = false);
@@ -102,7 +102,7 @@ public:
     bool HistoryLoadPendingForTest() const;
     bool HistoryExpansionPendingForTest() const;
     void CancelHistorySearchForTest();
-    const std::vector<std::string>& VisibleBookmarksForTest() const;
+    const std::vector<std::string>& VisibleBranchesForTest() const;
     const std::vector<std::string>& SelectedTagsForTest() const;
     const std::vector<std::string>& SelectedRemotesForTest() const;
     std::vector<std::string> VisibleHistoryRevisionsForTest() const;
@@ -128,8 +128,8 @@ private:
         Split,
         Abandon,
         Restore,
-        Bookmark,
-        BookmarkRename,
+        Branch,
+        BranchRename,
         Tag,
         RemoteAdd,
         WorkspaceAdd,
@@ -140,8 +140,8 @@ private:
         Credentials,
         ConfirmDrop,
         ConfirmLocked,
-        ConfirmBookmarkMove,
-        ConfirmBookmarkDelete,
+        ConfirmBranchMove,
+        ConfirmBranchDelete,
     };
 
     enum class DropAction
@@ -161,7 +161,7 @@ private:
         bool copy = false;
     };
 
-    struct PendingBookmarkDelete
+    struct PendingBranchDelete
     {
         std::string name;
         bool local = false;
@@ -192,8 +192,8 @@ private:
     void OpenSettings();
     void ReloadNativeSettings();
     void ForgetRepository(const std::string& path);
-    void RenderBookmarks();
-    void RenderBookmarkDeleteMenu(const std::string& name, bool nested = false);
+    void RenderBranches();
+    void RenderBranchDeleteMenu(const std::string& name, bool nested = false);
     void RenderTags();
     void RenderWorkspaces();
     void RenderRemotes();
@@ -208,14 +208,14 @@ private:
     void RenderRecentRepositories();
     void SetupDockspace();
     void UpdateGraphBuild();
-    void EnsureVisibleBookmarkSelection();
+    void EnsureVisibleBranchSelection();
     void EnsureTagSelection();
     void EnsureRemoteSelection();
     bool IsSelectedRemote(std::string_view remote) const;
-    bool IsVisibleBookmarkRef(const NamedRef& ref) const;
+    bool IsVisibleBranchRef(const NamedRef& ref) const;
     void RestoreRepositorySelections(const std::string& root);
     void RememberRepositorySelections();
-    std::string VisibleBookmarksKey() const;
+    std::string VisibleBranchesKey() const;
     void RebuildIdPrefixes();
     void CancelHistorySearch();
     bool RevealRevisionLoaded() const;
@@ -254,11 +254,15 @@ private:
         const std::string& revision, bool include_descendants) const;
     void RequestAbandonRevisions(const std::string& revision);
     void PollAbandonRevisions();
-    std::vector<RemoteBookmarkDelete> RemoteBookmarksAt(
+    std::vector<RemoteBranchDelete> RemoteBranchesAt(
         const std::vector<std::string>& revisions) const;
-    void RequestBookmarkDelete(const std::string& name, bool local, std::vector<std::string> remotes);
-    void MoveBookmark(const NamedRef& bookmark, const std::string& revision);
-    void CreateChange(const std::string& parent = {});
+    void RequestBranchDelete(const std::string& name, bool local, std::vector<std::string> remotes);
+    void MoveBranch(const NamedRef& branch, const std::string& revision);
+    // Alt+N (detach) never advances a branch; HEAD detaches at the new change.
+    void CreateChange(const std::string& parent = {}, bool detach = false);
+    // Git checkout semantics for Edit: the tip of exactly one free local branch
+    // checks that branch out; anything else is checked out detached.
+    std::string CheckoutTarget(const std::string& revision) const;
     void RequestAbandon(const std::string& revision, bool include_descendants = false);
     void RequestSquash(const std::string& revision, bool include_descendants = false);
     void QueueCommands(std::vector<Command> commands, const std::vector<std::string>& revisions,
@@ -291,7 +295,7 @@ private:
     std::vector<GraphRow> _graph_rows;
     std::size_t _rendered_history_rows = 0;
     int _history_hovered_track = -1;
-    std::string _history_bookmark_drag;
+    std::string _history_branch_drag;
     int _history_hovered_commit_row = -1;
     std::uint64_t _graph_generation = 0;
     std::uint64_t _history_requested_generation = 0;
@@ -304,13 +308,13 @@ private:
     std::string _history_anchor;
     float _history_anchor_offset = 0.0f;
     std::string _history_expansion_pending;
-    std::string _bookmark_filter;
-    std::vector<std::string> _visible_bookmarks;
-    bool _visible_bookmarks_user_selected = false;
+    std::string _branch_filter;
+    std::vector<std::string> _visible_branches;
+    bool _visible_branches_user_selected = false;
     std::vector<std::string> _selected_tags;
     std::vector<std::string> _selected_remotes;
     bool _selected_remotes_user_selected = false;
-    std::unordered_map<std::string, std::vector<std::string>> _repository_visible_bookmarks;
+    std::unordered_map<std::string, std::vector<std::string>> _repository_visible_branches;
     std::unordered_map<std::string, std::vector<std::string>> _repository_selected_tags;
     std::unordered_map<std::string, std::vector<std::string>> _repository_selected_remotes;
     std::string _tag_filter;
@@ -319,7 +323,7 @@ private:
     std::string _graph_filter;
     std::string _recent_filter;
     std::string _built_filter;
-    std::string _built_bookmarks;
+    std::string _built_branches;
     std::string _reveal_revision;
     float _history_scroll_target = -1.0f;
     int _history_scroll_frames = 0;
@@ -351,14 +355,14 @@ private:
     std::string _imgui_ini_path;
     std::string _status_message;
     std::string _error_message;
-    std::string _pending_created_bookmark;
+    std::string _pending_created_branch;
     std::vector<std::string> _abandon_revisions;
     std::string _abandon_revisions_revision;
     std::string _abandon_revisions_requested;
     std::string _abandon_revisions_in_flight;
     bool _abandon_revisions_complete = false;
     std::future<std::vector<std::string>> _abandon_revisions_future;
-    std::vector<RemoteBookmarkDelete> _abandon_remote_bookmarks;
+    std::vector<RemoteBranchDelete> _abandon_remote_branches;
     bool _abandon_modifies_locked = false;
     std::string _active_operation;
     std::map<std::uint64_t, std::string> _background_activities;
@@ -367,7 +371,7 @@ private:
     std::size_t _progress_total = 0;
     CredentialRequest _credential_request;
     PendingDrop _pending_drop;
-    PendingBookmarkDelete _pending_bookmark_delete;
+    PendingBranchDelete _pending_branch_delete;
     bool _open_drop_actions = false;
     bool _open_save_patch = false;
     bool _open_apply_patch = false;
@@ -407,7 +411,7 @@ private:
     bool _running = true;
     bool _default_layout = true;
     bool _dark_theme = true;
-    bool _show_bookmarks = true;
+    bool _show_branches = true;
     bool _show_tags = true;
     bool _show_workspaces = true;
     bool _show_remotes = true;

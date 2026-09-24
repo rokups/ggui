@@ -28,22 +28,22 @@ ImU32 NamedRefBadgeColor(std::string_view name, const std::vector<NamedRef>& ref
     const bool synchronized = std::ranges::all_of(refs, [&](const NamedRef& ref) {
         return ref.kind != remote_kind || ref.name != name || ref.target == local->target;
     });
-    return synchronized ? kBadgeBookmarkSynced : kBadgeBookmarkDiverged;
+    return synchronized ? kBadgeBranchSynced : kBadgeBranchDiverged;
 }
 } // namespace
 
-ImU32 BookmarkBadgeColor(std::string_view name, const std::vector<NamedRef>& refs)
+ImU32 BranchBadgeColor(std::string_view name, const std::vector<NamedRef>& refs)
 {
-    return NamedRefBadgeColor(name, refs, GG_NAMED_REF_LOCAL_BOOKMARK,
-        GG_NAMED_REF_REMOTE_BOOKMARK, kBadgeBookmark);
+    return NamedRefBadgeColor(name, refs, GG_NAMED_REF_LOCAL_BRANCH,
+        GG_NAMED_REF_REMOTE_BRANCH, kBadgeBranch);
 }
 
 ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
 {
-    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-    const gg_named_ref_kind local_kind = bookmark ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
-    const gg_named_ref_kind remote_kind = bookmark ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
+    const bool branch = ref.kind == GG_NAMED_REF_LOCAL_BRANCH
+        || ref.kind == GG_NAMED_REF_REMOTE_BRANCH;
+    const gg_named_ref_kind local_kind = branch ? GG_NAMED_REF_LOCAL_BRANCH : GG_NAMED_REF_LOCAL_TAG;
+    const gg_named_ref_kind remote_kind = branch ? GG_NAMED_REF_REMOTE_BRANCH : GG_NAMED_REF_REMOTE_TAG;
     const bool local_here = std::ranges::any_of(refs, [&](const NamedRef& candidate) {
         return candidate.kind == local_kind && candidate.name == ref.name && candidate.target == ref.target;
     });
@@ -54,23 +54,23 @@ ImU32 RefBadgeColor(const NamedRef& ref, const std::vector<NamedRef>& refs)
     const bool remote_elsewhere = std::ranges::any_of(refs, [&](const NamedRef& candidate) {
         return candidate.kind == remote_kind && candidate.name == ref.name && candidate.target != ref.target;
     });
-    if (remote_elsewhere) return kBadgeBookmarkDiverged;
-    if (remote_here) return kBadgeBookmarkSynced;
-    return bookmark ? kBadgeBookmark : kBadgeTag;
+    if (remote_elsewhere) return kBadgeBranchDiverged;
+    if (remote_here) return kBadgeBranchSynced;
+    return branch ? kBadgeBranch : kBadgeTag;
 }
 
 std::string ReferenceLabel(const NamedRef& ref)
 {
-    return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && !ref.remote.empty()
+    return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && !ref.remote.empty()
         ? ref.remote + "/" + ref.name : ref.name;
 }
 
 std::pair<std::string, std::size_t> ReferenceBadgeLabel(const NamedRef& ref, const std::vector<NamedRef>& refs)
 {
-    const bool bookmark = ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-        || ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK;
-    const gg_named_ref_kind local_kind = bookmark ? GG_NAMED_REF_LOCAL_BOOKMARK : GG_NAMED_REF_LOCAL_TAG;
-    const gg_named_ref_kind remote_kind = bookmark ? GG_NAMED_REF_REMOTE_BOOKMARK : GG_NAMED_REF_REMOTE_TAG;
+    const bool branch = ref.kind == GG_NAMED_REF_LOCAL_BRANCH
+        || ref.kind == GG_NAMED_REF_REMOTE_BRANCH;
+    const gg_named_ref_kind local_kind = branch ? GG_NAMED_REF_LOCAL_BRANCH : GG_NAMED_REF_LOCAL_TAG;
+    const gg_named_ref_kind remote_kind = branch ? GG_NAMED_REF_REMOTE_BRANCH : GG_NAMED_REF_REMOTE_TAG;
     const auto local = std::ranges::find_if(refs, [&](const NamedRef& candidate) {
         return candidate.kind == local_kind && candidate.name == ref.name && candidate.target == ref.target;
     });
@@ -92,23 +92,23 @@ const Remote* DefaultRemote(const RepoSnapshot& snapshot)
                                             : snapshot.remotes.empty() ? nullptr : &snapshot.remotes.front();
 }
 
-const NamedRef* BookmarkAt(const RepoSnapshot& snapshot, const std::string& revision)
+const NamedRef* BranchAt(const RepoSnapshot& snapshot, const std::string& revision)
 {
     const auto tracked = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision && ref.tracked;
+        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target == revision && ref.tracked;
     });
     if (tracked != snapshot.refs.end())
         return &*tracked;
     const auto local = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.target == revision;
+        return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.target == revision;
     });
     return local == snapshot.refs.end() ? nullptr : &*local;
 }
 
-std::string RemoteForBookmark(const RepoSnapshot& snapshot, std::string_view bookmark)
+std::string RemoteForBranch(const RepoSnapshot& snapshot, std::string_view branch)
 {
     const auto tracked = std::ranges::find_if(snapshot.refs, [&](const NamedRef& ref) {
-        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == bookmark
+        return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == branch
             && std::ranges::find(snapshot.remotes, ref.remote, &Remote::name) != snapshot.remotes.end();
     });
     if (tracked != snapshot.refs.end())
@@ -126,7 +126,7 @@ std::string RefRemotes(const std::vector<NamedRef>& refs, std::string_view name,
             continue;
         if (!result.empty()) result += ", ";
         result += ref.remote;
-        if (kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.desync_known)
+        if (kind == GG_NAMED_REF_REMOTE_BRANCH && ref.desync_known)
         {
             if (ref.remote_commits != 0)
                 result += " -" + std::to_string(ref.remote_commits);

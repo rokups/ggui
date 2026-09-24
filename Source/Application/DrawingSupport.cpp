@@ -48,7 +48,7 @@ float BadgeWidth(std::string_view label)
 }
 
 void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_view label, ImU32 color,
-    std::size_t dimmed_prefix)
+    std::size_t dimmed_prefix, ImU32 outline)
 {
     const StartElidedText elided = ElideStart(label, FontPx(kBadgeMaxTextWidth));
     const float text_height = ImGui::GetTextLineHeight();
@@ -58,6 +58,8 @@ void DrawBadge(ImDrawList* draw, ImVec2& cursor, float center_y, std::string_vie
     const ImVec2 minimum(cursor.x, center_y - text_height * 0.5f - pad_top);
     const ImVec2 maximum(cursor.x + elided.width + pad_x * 2.0f, center_y + text_height * 0.5f + pad_bottom);
     draw->AddRectFilled(minimum, maximum, color, FontPx(6.0f));
+    if (outline != 0)
+        draw->AddRect(minimum, maximum, outline, FontPx(6.0f), ImDrawFlags_None, FontPx(1.5f));
     ImVec2 text(minimum.x + pad_x, minimum.y + pad_top);
     if (elided.start != 0)
     {

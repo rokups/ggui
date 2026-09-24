@@ -49,9 +49,9 @@ SDL_GPU renderer.
 - UI navigation fixtures exercise selected-head history with disposable Git
   repositories. Synthetic fixtures are ordered for graph layout, and test
   inspection skips collapsed-region rows.
-- Upstream removed the right-drag action menu, final drop zone, graph bookmark
+- Upstream removed the right-drag action menu, final drop zone, graph branch
   move menu and full-description copy menu. Tests cover the retained row-edge
-  reorder, modifier-based center drops, bookmark creation and commit-ID copy.
+  reorder, modifier-based center drops, branch creation and commit-ID copy.
 - Branch-abandon discovery now uses the core live graph, excluding retained
   operation metadata and superseded revisions. Loaded aliases also update
   selected revision IDs and dependent diff/comparison state.
@@ -90,24 +90,24 @@ Backend names are `gg_repository_*` C API suffixes. GUI dispatch is in
 
 | Action and entry points | Backend | Reviewed behavior | Supporting coverage |
 | --- | --- | --- | --- |
-| New: toolbar, Ctrl+N, N, row menu; selected merge parents | `new_change` | Creates a child over non-empty or pushed parents. An unpushed, undescribed empty parent is consumed after the child is created; protected history and other workspaces are preserved. | Workflow creation/insertion/merge tests; engine creation tests; real UI locked historical parent and multi-parent regressions. |
+| New: toolbar, Ctrl+N, N, Alt+N, row menu; selected merge parents | `new_change` | Creates a child over non-empty or pushed parents. On `@` or a single free branch tip it continues that branch (HEAD attached); Alt+N/`detach` never moves a branch and marks the child as an unnamed user head. An unpushed, undescribed empty parent is consumed after the child is created; protected history and other workspaces are preserved. | Workflow creation/insertion/merge tests; engine creation tests; real UI locked historical parent and multi-parent regressions. |
 | Edit: E/menu | `edit` | Moves workspace to selected change; root editing retains identity through later snapshots. Dirty files are synchronized first. | Workflow edit/navigation; root identity, no-workspace and HEAD-lock regressions. |
 | Previous/Next: menu/toolbar | `move` | Default navigation creates a working change at the selected adjacent revision; ambiguous/missing targets reject cleanly. | Workflow navigation tests, including `NavigationCreatesChangesUnlessEditIsRequested`. |
 | Duplicate Change/Branch: D/Shift+D/menu | `duplicate` | Original graph and refs remain intact. Copies remap their selected parents and workspace only. | `DuplicatesABranchWithoutRewritingTheOriginal`, selected-only duplication test. |
-| Commit; selected filesets | `commit` | Selected contents become committed change; unselected contents remain in a new working child; necessary descendants restack. | `commit_test` selection, description, validation and rename cases. |
+| Commit; selected filesets | `commit` | Selected working-tree contents become a new child of `@` that advances the checked-out branch; unselected edits stay uncommitted. | `commit_test` selection, description, validation and rename cases. |
 | Save message; Edit author | `describe`, `metaedit` | Rewrites selected metadata and necessary descendants. Empty descriptions can be supplied independently of author-only edits. | Metadata/workflow tests; engine `MetadataCanClearDescriptionAndPreserveItForAuthorOnlyEdits`. |
 | Rebase menu/context destination | `rebase` | Rebases @ and descendants; destination remains unchanged. Rebasing to current parent is a no-op. | Workflow rebase; unchanged-parent identity and attached/detached no-workspace regressions. |
 | Alt drop; Alt+Shift branch drop; Reconcile | `rebase` | Single-source mode starts at source; branch mode resolves divergence root. Both restack required descendants. | Engine branch-divergence and reconciliation tests; backend scope regressions. |
 | Reorder before/after: row edges, final drop zone, right-drag menu | `reorder` | Reorders the affected interval while retaining unchanged prefix IDs. Unsupported unrelated/merge/ambiguous stacks reject. | C API atomic/root reorder tests; `ReorderAfterTargetKeepsUnchangedPrefixIdentity`; graph UI warning and context-menu tests. |
 | Squash dialog/center drop; Shift branch squash | `squash_ex` | Moves source changes into destination and restacks affected children. Branch mode consumes selected branch path and restacks side children. | Sibling/descendant targets, overlapping edits, logical conflicts, side children and 16-case exact-state matrix. |
 | Split: Alt+S/menu | `split` | Selected and remaining changes conserve cumulative contents. Parents stay unchanged; explicit source works without a workspace. | Workflow/rewrite split tests; `SplitsAnExplicitRevisionWithoutAWorkspace`. |
-| Abandon/branch: A/Shift+A/dialog | `abandon` | Removes selected changes and restacks descendants. Protects another active workspace's exact revision. Empty replacement gets a fresh identity. | Abandon/retain-bookmark/descendant tests; exact-workspace rejection and fresh replacement regressions. |
+| Abandon/branch: A/Shift+A/dialog | `abandon` | Removes selected changes and restacks descendants. Protects another active workspace's exact revision. Empty replacement gets a fresh identity. | Abandon/retain-branch/descendant tests; exact-workspace rejection and fresh replacement regressions. |
 | Simplify parents | `simplify_parents` | Removes redundant edges while preserving trees; necessary descendants follow. Already-simple revisions remain unchanged; absent-workspace requests reject explicitly. | Dedicated `simplify_parents_test`. |
 | Restore files/all | `restore` | Rewrites destination and descendants; source is read-only. Empty source means selected change's parent. | Dedicated restore tests; engine `RestoreWithoutSourceUsesSelectedChangesParent`. |
 | File drag to graph; Move to parent/child | `move_files` | Transfers selected patch without losing destination edits or changing unrelated history. | C API remote-only/unreferenced endpoints and carrier validation; engine edited-child, rename and merge-child tests. |
 | Move line/selection/hunk to parent/child | Atomic selected transfer API | Transfers only selected deltas; sibling branches do not receive copied changes. Stale contents are checked as well as coordinates. | Engine transfer/topology and `RejectsStaleLineSelectionsWhenNewContentUsesTheSameCoordinates`. |
 | Revert file/hunk; Revert line | Working-copy helpers | Historical source stays unchanged; reverse patch applies to @. Other selected-file edits remain intact. | Engine file/hunk/line revert and original-position preservation tests. |
-| Bookmark create/move/set/advance/rename/delete/forget; tags | `bookmark`, `tag` | Ref-only edits preserve checkout. Rename follows attached HEAD; deleting detaches it; moving its branch detaches at original commit. HEAD-lock failures restore operation/refs. | Remote/tag/API tests; attached bookmark and HEAD-lock regressions with status, disk/index and Undo/Redo assertions. |
+| Branch create/move/set/rename/delete/forget; tags | `branch`, `tag` | Ref-only edits preserve checkout. Creating one branch at a detached `@` attaches HEAD; rename follows attached HEAD; deleting or moving the attached branch detaches at the original commit and marks it as an unnamed head. Branches checked out in another workspace are refused. HEAD-lock failures restore operation/refs. | Remote/tag/API tests; attached branch and HEAD-lock regressions with status, disk/index and Undo/Redo assertions. |
 | Undo/Redo; operation Restore | `undo`, `redo`, `restore_operation` | Synchronizes pending edits before applying operation state; restores graph/HEAD/worktree coherently and respects other workspaces. | Workflow operation/workspace tests; engine pending-edit regression; checkout/HEAD-lock recovery tests. |
 | Fetch/Pull/Push graph updates | Remote APIs | Imported refs establish correct pushed ancestry. Unchanged local ancestor IDs and locked state survive rewrites. | Remote/engine tests and `KeepsUnchangedAncestorsLockedAcrossARewrite`. |
 
@@ -128,7 +128,7 @@ Backend names are `gg_repository_*` C API suffixes. GUI dispatch is in
   first import now shares transactional snapshot recording; its initial Undo
   lineage and dirty-file preservation under HEAD.lock have passing regressions.
   Repeated refresh respects undone/forgotten workspaces and preserves Redo.
-- Fixed attached bookmark HEAD handling for rename, delete, forget, move, set
+- Fixed attached branch HEAD handling for rename, delete, forget, move, set
   and advance, including HEAD-lock rejection and Undo/Redo.
 - Added coherent operation/worktree recovery after checkout failure, including
   partially written files and originally unborn repositories. Checkout uses
@@ -138,7 +138,7 @@ Backend names are `gg_repository_*` C API suffixes. GUI dispatch is in
 - Limited attempted-checkout exemptions to immediate recovery. Terminal
   recovery failure clears the marker; a same-C-API-instance regression verifies
   a subsequent edit cannot overwrite newly untracked precious contents.
-- Ordered local Abandon before optional remote bookmark deletion and added
+- Ordered local Abandon before optional remote branch deletion and added
   explicit reporting of partial remote failure.
 
 ## Review verdict and remaining limits

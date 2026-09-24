@@ -41,10 +41,10 @@ bool Application::IsSelectedRemote(std::string_view remote) const
     return std::ranges::find(_selected_remotes, remote) != _selected_remotes.end();
 }
 
-bool Application::IsVisibleBookmarkRef(const NamedRef& ref) const
+bool Application::IsVisibleBranchRef(const NamedRef& ref) const
 {
-    return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK
-        || (ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && IsSelectedRemote(ref.remote));
+    return ref.kind == GG_NAMED_REF_LOCAL_BRANCH
+        || (ref.kind == GG_NAMED_REF_REMOTE_BRANCH && IsSelectedRemote(ref.remote));
 }
 
 void Application::RestoreRepositorySelections(const std::string& root)
@@ -59,15 +59,15 @@ void Application::RestoreRepositorySelections(const std::string& root)
     }
     EnsureRemoteSelection();
 
-    _visible_bookmarks.clear();
-    _visible_bookmarks_user_selected = false;
-    if (const auto found = _repository_visible_bookmarks.find(root);
-        found != _repository_visible_bookmarks.end())
+    _visible_branches.clear();
+    _visible_branches_user_selected = false;
+    if (const auto found = _repository_visible_branches.find(root);
+        found != _repository_visible_branches.end())
     {
-        _visible_bookmarks = found->second;
-        _visible_bookmarks_user_selected = true;
+        _visible_branches = found->second;
+        _visible_branches_user_selected = true;
     }
-    EnsureVisibleBookmarkSelection();
+    EnsureVisibleBranchSelection();
 
     _selected_tags.clear();
     if (const auto found = _repository_selected_tags.find(root);
@@ -81,7 +81,7 @@ void Application::RememberRepositorySelections()
     if (_snapshot == nullptr || _snapshot->root.empty())
         return;
     _repository_selected_remotes[_snapshot->root] = _selected_remotes;
-    _repository_visible_bookmarks[_snapshot->root] = _visible_bookmarks;
+    _repository_visible_branches[_snapshot->root] = _visible_branches;
     _repository_selected_tags[_snapshot->root] = _selected_tags;
 }
 
@@ -100,22 +100,22 @@ void Application::EnsureTagSelection()
     });
 }
 
-void Application::EnsureVisibleBookmarkSelection()
+void Application::EnsureVisibleBranchSelection()
 {
     if (_snapshot == nullptr)
     {
-        _visible_bookmarks.clear();
+        _visible_branches.clear();
         return;
     }
     const auto exists = [this](const std::string& name) {
         return std::ranges::any_of(_snapshot->refs, [&](const NamedRef& ref) {
-            return ref.name == name && IsVisibleBookmarkRef(ref);
+            return ref.name == name && IsVisibleBranchRef(ref);
         });
     };
-    std::erase_if(_visible_bookmarks, [&](const std::string& name) { return !exists(name); });
-    if (_visible_bookmarks.empty())
-        _visible_bookmarks_user_selected = false;
-    if (_visible_bookmarks_user_selected)
+    std::erase_if(_visible_branches, [&](const std::string& name) { return !exists(name); });
+    if (_visible_branches.empty())
+        _visible_branches_user_selected = false;
+    if (_visible_branches_user_selected)
         return;
 
     const std::string current = CurrentCommit(*_snapshot);
@@ -126,31 +126,31 @@ void Application::EnsureVisibleBookmarkSelection()
     {
         if (!visited.emplace(pending[index]).second)
             continue;
-        const auto bookmark = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
-            return ref.target == pending[index] && IsVisibleBookmarkRef(ref);
+        const auto branch = std::ranges::find_if(_snapshot->refs, [&](const NamedRef& ref) {
+            return ref.target == pending[index] && IsVisibleBranchRef(ref);
         });
-        if (bookmark != _snapshot->refs.end())
-            closest = &*bookmark;
+        if (branch != _snapshot->refs.end())
+            closest = &*branch;
         else if (const auto revision = std::ranges::find(_history_revisions, pending[index], &Revision::oid);
             revision != _history_revisions.end())
             pending.insert(pending.end(), revision->parents.begin(), revision->parents.end());
     }
     if (closest != nullptr)
     {
-        _visible_bookmarks = {closest->name};
+        _visible_branches = {closest->name};
         return;
     }
-    if (!_visible_bookmarks.empty())
+    if (!_visible_branches.empty())
         return;
     const auto first = std::ranges::find_if(
-        _snapshot->refs, [this](const NamedRef& ref) { return IsVisibleBookmarkRef(ref); });
+        _snapshot->refs, [this](const NamedRef& ref) { return IsVisibleBranchRef(ref); });
     if (first != _snapshot->refs.end())
-        _visible_bookmarks.push_back(first->name);
+        _visible_branches.push_back(first->name);
 }
 
-std::string Application::VisibleBookmarksKey() const
+std::string Application::VisibleBranchesKey() const
 {
-    std::vector<std::string> names = _visible_bookmarks;
+    std::vector<std::string> names = _visible_branches;
     std::ranges::sort(names);
     std::string result;
     for (const std::string& name : names)
@@ -171,69 +171,69 @@ std::string Application::VisibleBookmarksKey() const
     return result;
 }
 
-void Application::RenderBookmarks()
+void Application::RenderBranches()
 {
-    if (!ImGui::Begin("Bookmarks", &_show_bookmarks))
+    if (!ImGui::Begin("Branches", &_show_branches))
     {
         ImGui::End();
         return;
     }
 
-    // Create bookmark and filter controls
+    // Create branch and filter controls
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(6.0f, 5.0f));
     const bool actions_locked = !_active_operation.empty();
     ImGui::BeginDisabled(actions_locked);
-    if (ActionButton(ICON_MS_BOOKMARK_ADD, "Create bookmark", ImVec2(-1.0f, 0.0f)))
-        OpenDialog(Dialog::Bookmark);
+    if (ActionButton(ICON_MS_BOOKMARK_ADD, "Create branch", ImVec2(-1.0f, 0.0f)))
+        OpenDialog(Dialog::Branch);
     ImGui::EndDisabled();
     ImGui::SetNextItemWidth(-1.0f);
-    ImGui::InputTextWithHint("##bookmark filter", "Filter bookmarks", &_bookmark_filter);
+    ImGui::InputTextWithHint("##branch filter", "Filter branches", &_branch_filter);
 
     EnsureRemoteSelection();
-    EnsureVisibleBookmarkSelection();
+    EnsureVisibleBranchSelection();
 
-    std::vector<NamedRef> bookmark_refs;
-    std::ranges::copy_if(_snapshot->refs, std::back_inserter(bookmark_refs),
-        [this](const NamedRef& ref) { return IsVisibleBookmarkRef(ref); });
+    std::vector<NamedRef> branch_refs;
+    std::ranges::copy_if(_snapshot->refs, std::back_inserter(branch_refs),
+        [this](const NamedRef& ref) { return IsVisibleBranchRef(ref); });
 
-    // Unique bookmark names
+    // Unique branch names
     std::vector<std::string> names;
-    for (const NamedRef& ref : bookmark_refs)
+    for (const NamedRef& ref : branch_refs)
     {
-        if ((ref.kind != GG_NAMED_REF_LOCAL_BOOKMARK && ref.kind != GG_NAMED_REF_REMOTE_BOOKMARK)
+        if ((ref.kind != GG_NAMED_REF_LOCAL_BRANCH && ref.kind != GG_NAMED_REF_REMOTE_BRANCH)
             || std::ranges::find(names, ref.name) != names.end())
             continue;
         names.push_back(ref.name);
     }
 
-    // Bookmark rows. Keep the controls above fixed while long bookmark lists
+    // Branch rows. Keep the controls above fixed while long branch lists
     // scroll independently.
-    ImGui::BeginChild("bookmark list", {}, ImGuiChildFlags_Borders);
+    ImGui::BeginChild("branch list", {}, ImGuiChildFlags_Borders);
     for (const std::string& name : names)
     {
-        if (!ContainsInsensitive(name, _bookmark_filter))
+        if (!ContainsInsensitive(name, _branch_filter))
             continue;
-        const auto local = std::ranges::find_if(bookmark_refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_LOCAL_BOOKMARK && ref.name == name;
+        const auto local = std::ranges::find_if(branch_refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_LOCAL_BRANCH && ref.name == name;
         });
-        const auto remote_ref = std::ranges::find_if(bookmark_refs, [&](const NamedRef& ref) {
-            return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name;
+        const auto remote_ref = std::ranges::find_if(branch_refs, [&](const NamedRef& ref) {
+            return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == name;
         });
-        const NamedRef& ref = local != bookmark_refs.end() ? *local : *remote_ref;
-        const std::string remotes = RefRemotes(bookmark_refs, name, GG_NAMED_REF_REMOTE_BOOKMARK);
+        const NamedRef& ref = local != branch_refs.end() ? *local : *remote_ref;
+        const std::string remotes = RefRemotes(branch_refs, name, GG_NAMED_REF_REMOTE_BRANCH);
         ImGui::PushID(name.c_str());
         bool elided = false;
-        const auto selected = std::ranges::find(_visible_bookmarks, name);
-        if (BadgedSelectable(name, selected != _visible_bookmarks.end(), 36.0f,
-                BookmarkBadgeColor(name, bookmark_refs), {}, &elided))
+        const auto selected = std::ranges::find(_visible_branches, name);
+        if (BadgedSelectable(name, selected != _visible_branches.end(), 36.0f,
+                BranchBadgeColor(name, branch_refs), {}, &elided))
         {
-            _visible_bookmarks_user_selected = true;
+            _visible_branches_user_selected = true;
             if (ImGui::GetIO().KeyCtrl)
-                _visible_bookmarks = {name};
-            else if (selected == _visible_bookmarks.end())
-                _visible_bookmarks.push_back(name);
-            else if (_visible_bookmarks.size() > 1)
-                _visible_bookmarks.erase(selected);
+                _visible_branches = {name};
+            else if (selected == _visible_branches.end())
+                _visible_branches.push_back(name);
+            else if (_visible_branches.size() > 1)
+                _visible_branches.erase(selected);
             RememberRepositorySelections();
         }
         const bool hovered = ImGui::IsItemHovered();
@@ -241,30 +241,37 @@ void Application::RenderBookmarks()
         const ImVec2 maximum = ImGui::GetItemRectMax();
         elided |= DrawTextWithin(ImGui::GetWindowDrawList(), ImVec2(minimum.x + 12.0f, minimum.y + 21.0f),
             maximum.x - 8.0f, remotes, kTextMuted);
+        const bool checked_out = local != branch_refs.end() && local->current;
+        if (checked_out)
+            ImGui::GetWindowDrawList()->AddRect(minimum, maximum, kBadgeCurrentOutline, FontPx(4.0f),
+                ImDrawFlags_None, FontPx(1.5f));
 
-        // Bookmark context menu
-        if (ImGui::BeginPopupContextItem("bookmark context"))
+        // Branch context menu
+        if (ImGui::BeginPopupContextItem("branch context"))
         {
             if (ActionMenuItem(ICON_MS_VISIBILITY, "Reveal commit")) RevealRevision(ref.target);
             if (ActionMenuItem(ICON_MS_CONTENT_COPY, "Copy name")) ImGui::SetClipboardText(name.c_str());
             ImGui::Separator();
             ImGui::BeginDisabled(actions_locked);
-            const auto tracked = std::ranges::find_if(bookmark_refs, [&](const NamedRef& candidate) {
-                return candidate.kind == GG_NAMED_REF_REMOTE_BOOKMARK && candidate.name == name;
+            if (ActionMenuItem(ICON_MS_LOGIN, "Check out", nullptr,
+                    local != branch_refs.end() && !checked_out && local->workspace.empty()))
+                EnqueueAction(Edit{name});
+            const auto tracked = std::ranges::find_if(branch_refs, [&](const NamedRef& candidate) {
+                return candidate.kind == GG_NAMED_REF_REMOTE_BRANCH && candidate.name == name;
             });
-            const std::string remote = tracked != bookmark_refs.end() ? tracked->remote
+            const std::string remote = tracked != branch_refs.end() ? tracked->remote
                 : _selected_remotes.empty() ? "" : _selected_remotes.front();
-            const bool has_local = local != bookmark_refs.end();
+            const bool has_local = local != branch_refs.end();
             const std::string& current = CurrentCommit(*_snapshot);
-            const BookmarkRelation current_relation = has_local && !current.empty()
-                ? ClassifyBookmarkRelation(*_snapshot, local->target, current)
-                : BookmarkRelation::Unavailable;
+            const BranchRelation current_relation = has_local && !current.empty()
+                ? ClassifyBranchRelation(*_snapshot, local->target, current)
+                : BranchRelation::Unavailable;
             if (ActionMenuItem(ICON_MS_MERGE, "Merge into @", nullptr,
                     has_local && !current.empty() && local->target != current))
                 EnqueueAction(NewChange{{}, {"@", local->target}, {}, {}, false});
-            if (ActionMenuItem(ICON_MS_REBASE, "Rebase @ onto bookmark", nullptr,
-                    current_relation == BookmarkRelation::RemoteAhead
-                        || current_relation == BookmarkRelation::Diverged))
+            if (ActionMenuItem(ICON_MS_REBASE, "Rebase @ onto branch", nullptr,
+                    current_relation == BranchRelation::RemoteAhead
+                        || current_relation == BranchRelation::Diverged))
             {
                 QueueCommands({Rebase{"@", local->target, true}}, {current},
                     "Rebasing @ will rewrite locked commits.");
@@ -283,10 +290,10 @@ void Application::RenderBookmarks()
             {
                 for (const NamedRef& candidate : _snapshot->refs)
                 {
-                    if (candidate.kind != GG_NAMED_REF_REMOTE_BOOKMARK || !candidate.tracked
+                    if (candidate.kind != GG_NAMED_REF_REMOTE_BRANCH || !candidate.tracked
                         || candidate.name != name || candidate.remote.empty()
-                        || ClassifyBookmarkRelation(*_snapshot, local->target, candidate.target)
-                            != BookmarkRelation::Diverged)
+                        || ClassifyBranchRelation(*_snapshot, local->target, candidate.target)
+                            != BranchRelation::Diverged)
                         continue;
                     const std::string label = "Reconcile with " + candidate.remote + "/" + name
                         + "...###reconcile-" + candidate.remote;
@@ -304,20 +311,20 @@ void Application::RenderBookmarks()
             ImGui::Separator();
             if (ActionMenuItem(ICON_MS_EDIT, "Rename...", nullptr, has_local))
             {
-                OpenDialog(Dialog::BookmarkRename);
+                OpenDialog(Dialog::BranchRename);
                 _input_primary = name;
                 _input_secondary = name;
             }
-            RenderBookmarkDeleteMenu(name);
+            RenderBranchDeleteMenu(name);
             ImGui::EndDisabled();
             ImGui::EndPopup();
         }
 
-        // Elided bookmark details
+        // Elided branch details
         if (hovered && elided)
         {
             ImGui::BeginTooltip();
-            ImGui::Text("Bookmark: %s", name.c_str());
+            ImGui::Text("Branch: %s", name.c_str());
             ImGui::Text("Remotes: %s", remotes.empty() ? "(local only)" : remotes.c_str());
             TextLabelledId("Commit: ", ref.target, RevisionPrefix(ref.target),
                 CommitIdColor(ref.target == _snapshot->working_copy));
@@ -330,16 +337,16 @@ void Application::RenderBookmarks()
     ImGui::End();
 }
 
-// Offers every location a bookmark can be deleted from. A bookmark that
+// Offers every location a branch can be deleted from. A branch that
 // exists in one location gets a single item instead of a one-item submenu.
-// Nested menus are labelled by bookmark name for commits with several.
-void Application::RenderBookmarkDeleteMenu(const std::string& name, bool nested)
+// Nested menus are labelled by branch name for commits with several.
+void Application::RenderBranchDeleteMenu(const std::string& name, bool nested)
 {
     const std::vector<NamedRef>& refs = _snapshot->refs;
     // Lists each remote once, without collecting them while the menu is open.
     const auto remote_at = [&](std::size_t index) {
         const NamedRef& ref = refs[index];
-        return ref.kind == GG_NAMED_REF_REMOTE_BOOKMARK && ref.name == name && !ref.remote.empty()
+        return ref.kind == GG_NAMED_REF_REMOTE_BRANCH && ref.name == name && !ref.remote.empty()
             && std::none_of(refs.begin(), refs.begin() + static_cast<std::ptrdiff_t>(index),
                 [&](const NamedRef& earlier) {
                     return earlier.kind == ref.kind && earlier.name == name && earlier.remote == ref.remote;
@@ -357,7 +364,7 @@ void Application::RenderBookmarkDeleteMenu(const std::string& name, bool nested)
     std::size_t remote_count = 0;
     for (std::size_t index = 0; index < refs.size(); ++index)
     {
-        has_local |= refs[index].kind == GG_NAMED_REF_LOCAL_BOOKMARK && refs[index].name == name;
+        has_local |= refs[index].kind == GG_NAMED_REF_LOCAL_BRANCH && refs[index].name == name;
         if (remote_at(index))
         {
             last_remote = &refs[index];
@@ -376,21 +383,21 @@ void Application::RenderBookmarkDeleteMenu(const std::string& name, bool nested)
             ImFormatStringToTempBuffer(&label, nullptr, "%s%s (%.*s)###%s (%.*s)", ICON_MS_BOOKMARK, name.c_str(),
                 location_size, location.data(), name.c_str(), location_size, location.data());
         else
-            ImFormatStringToTempBuffer(&label, nullptr, "%sDelete %.*s bookmark###Delete %.*s bookmark",
+            ImFormatStringToTempBuffer(&label, nullptr, "%sDelete %.*s branch###Delete %.*s branch",
                 ICON_MS_DELETE, location_size, location.data(), location_size, location.data());
         if (ImGui::MenuItem(label))
-            RequestBookmarkDelete(name, has_local, has_local ? std::vector<std::string>{} : all_remotes());
+            RequestBranchDelete(name, has_local, has_local ? std::vector<std::string>{} : all_remotes());
         return;
     }
-    if (!ImGui::BeginMenu(nested ? TempIconLabel(ICON_MS_BOOKMARK, name) : TempIconLabel(ICON_MS_DELETE, "Delete bookmark")))
+    if (!ImGui::BeginMenu(nested ? TempIconLabel(ICON_MS_BOOKMARK, name) : TempIconLabel(ICON_MS_DELETE, "Delete branch")))
         return;
     if (has_local && ActionMenuItem(ICON_MS_BOOKMARK, "Local"))
-        RequestBookmarkDelete(name, true, {});
+        RequestBranchDelete(name, true, {});
     for (std::size_t index = 0; index < refs.size(); ++index)
         if (remote_at(index) && ActionMenuItem(ICON_MS_CLOUD, refs[index].remote))
-            RequestBookmarkDelete(name, false, {refs[index].remote});
+            RequestBranchDelete(name, false, {refs[index].remote});
     if (has_local && ActionMenuItem(ICON_MS_DELETE_SWEEP, remote_count == 1 ? "Local & remote" : "Local & all remotes"))
-        RequestBookmarkDelete(name, true, all_remotes());
+        RequestBranchDelete(name, true, all_remotes());
     ImGui::EndMenu();
 }
 
@@ -642,7 +649,7 @@ void Application::RenderRemotes()
                 _selected_remotes.push_back(remote.name);
             else if (_selected_remotes.size() > 1)
                 _selected_remotes.erase(selected);
-            EnsureVisibleBookmarkSelection();
+            EnsureVisibleBranchSelection();
             RememberRepositorySelections();
         }
         const bool hovered = ImGui::IsItemHovered();
