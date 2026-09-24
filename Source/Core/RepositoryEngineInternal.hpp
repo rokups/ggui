@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string_view>
 #include <thread>
 #include <variant>
@@ -21,6 +22,12 @@
 
 namespace Ggui::RepositoryInternal
 {
+
+// A working-tree status scan stopped by Cancel or by a waiting command.
+struct StatusScanCancelled : std::runtime_error
+{
+    StatusScanCancelled() : std::runtime_error("working-tree scan cancelled") {}
+};
 
 std::string OidString(const git_oid& oid);
 std::string LastGitError(std::string_view fallback);
@@ -248,6 +255,8 @@ struct RepositoryEngine::Impl
     bool worktree_status_stale = false;
     // A background full status scan is due, such as after opening.
     std::atomic_bool worktree_scan_requested = false;
+    // The running status scan is background work that yields to commands.
+    bool background_status_scan = false;
 
     struct BackgroundActivityGuard
     {
@@ -266,6 +275,11 @@ struct RepositoryEngine::Impl
     void Close();
     void Post(Event event);
     static int CancelCallback(void* payload);
+    // Stops a working-tree status scan: on Cancel, and for a background scan
+    // also as soon as another command is waiting, so the scan never holds up
+    // work such as opening another repository.
+    static int StatusCancelCallback(void* payload);
+    bool CommandWaiting();
     static void ProgressCallback(const char* phase, size_t completed, size_t total, void* payload);
     gg_operation_options OperationOptions(bool report_progress = true);
     static int CredentialCallback(

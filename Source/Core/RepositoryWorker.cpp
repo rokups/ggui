@@ -298,6 +298,9 @@ void RepositoryEngine::Impl::Execute(
         || std::holds_alternative<LoadDiff>(command)
         || std::holds_alternative<LoadFileContent>(command)
         || std::holds_alternative<LoadBlame>(command);
+    // Reset before announcing the operation: a Cancel pressed as soon as it
+    // is shown must not be cleared afterwards.
+    cancel_requested = false;
     if (!quiet)
         Post(OperationStarted{name});
     std::optional<BackgroundActivityGuard> background_activity;
@@ -317,7 +320,6 @@ void RepositoryEngine::Impl::Execute(
         std::lock_guard lock(inspector_mutex);
         inspector_requests.clear();
     }
-    cancel_requested = false;
     if (std::holds_alternative<OpenRepository>(command) || std::holds_alternative<InitRepository>(command)
         || std::holds_alternative<CloneRepository>(command))
         Close();
@@ -373,10 +375,28 @@ void RepositoryEngine::Impl::Execute(
                 Sync();
                 PublishSnapshot(true, false, value->paths);
             }
-            else if (!value->paths.empty() && worktree_ready && !worktree_status_stale)
-                PublishSnapshot(true, false, value->paths);
             else
-                PublishSnapshot(true, false);
+            {
+                // Background scans yield to any command that arrives and run
+                // again once the queue is free.
+                background_status_scan = true;
+                struct ScanEnd
+                {
+                    bool& flag;
+                    ~ScanEnd() { flag = false; }
+                } scan_end{background_status_scan};
+                try
+                {
+                    if (!value->paths.empty() && worktree_ready && !worktree_status_stale)
+                        PublishSnapshot(true, false, value->paths);
+                    else
+                        PublishSnapshot(true, false);
+                }
+                catch (const StatusScanCancelled&)
+                {
+                    worktree_scan_requested = gg != nullptr;
+                }
+            }
         }
         else if (std::holds_alternative<RebuildHistory>(command)
             || std::holds_alternative<ExpandHistoryRegion>(command))

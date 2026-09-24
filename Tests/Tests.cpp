@@ -945,6 +945,73 @@ TEST(RepositoryEngine, KeepsWorkingTreeStatusCurrentWithoutExplicitRefresh)
     }), nullptr);
 }
 
+TEST(RepositoryEngine, BackgroundScanYieldsToCommandsAndResumes)
+{
+    // Enough files that the opening scan is still running when commands
+    // arrive; whether or not it is interrupted, status must end up current.
+    TemporaryRepository repository;
+    for (int index = 0; index < 3000; ++index)
+        std::ofstream(repository.path / ("file-" + std::to_string(index) + ".txt")) << index << '\n';
+    const std::string add = "git -C " + Quote(repository.path) + " add -A && git -C " + Quote(repository.path)
+        + " -c maintenance.auto=false -c gc.auto=0 commit -qm files >/dev/null 2>&1";
+    ASSERT_EQ(std::system(add.c_str()), 0);
+    std::ofstream(repository.path / "file-7.txt") << "edited\n";
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto wait_for_scan = [&] {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            for (const Event& event : engine.PollEvents())
+                if (const auto* started = std::get_if<BackgroundActivityStarted>(&event);
+                    started != nullptr && started->name == "Checking working tree")
+                    return true;
+            std::this_thread::sleep_for(1ms);
+        }
+        return false;
+    };
+    // A command queued while the scan runs goes first.
+    ASSERT_TRUE(wait_for_scan());
+    engine.Enqueue(AddRemote{"elsewhere", "https://example.invalid/repository.git"});
+    const auto scanned = WaitForRawSnapshot(engine, [](const RepoSnapshot& snapshot) {
+        return snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(scanned, nullptr);
+    ASSERT_EQ(scanned->status.size(), 1U);
+    EXPECT_EQ(scanned->status.front().path, "file-7.txt");
+
+    // Cancel stops an explicit refresh's scan.
+    engine.Enqueue(Refresh{true, {}, true});
+    bool cancelled = false;
+    const auto cancel_deadline = std::chrono::steady_clock::now() + 5s;
+    while (!cancelled && std::chrono::steady_clock::now() < cancel_deadline)
+    {
+        for (const Event& event : engine.PollEvents())
+        {
+            if (const auto* started = std::get_if<OperationStarted>(&event); started != nullptr
+                && started->name == "refresh")
+                engine.Cancel();
+            else if (const auto* error = std::get_if<ErrorEvent>(&event); error != nullptr)
+                cancelled = error->operation == "refresh" && error->message.find("cancelled") != std::string::npos;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    EXPECT_TRUE(cancelled);
+
+    // Opening another repository does not wait for the first one's scan.
+    TemporaryRepository other;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_TRUE(wait_for_scan());
+    engine.Enqueue(OpenRepository{other.path.string()});
+    const auto reopened = WaitForRawSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready
+            && std::filesystem::equivalent(snapshot.root, other.path);
+    });
+    ASSERT_NE(reopened, nullptr);
+    EXPECT_TRUE(reopened->status.empty());
+}
+
 TEST(RepositoryEngine, InvalidatesHistoryAfterAbandoningANonCurrentChange)
 {
     TemporaryRepository repository;

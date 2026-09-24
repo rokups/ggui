@@ -168,7 +168,16 @@ std::shared_ptr<RepoSnapshot> RepositoryEngine::Impl::ReadSnapshot(
         if (!defer_partial_status)
         {
             Status status;
-            Check(gg_repository_worktree_status(&status.value, gg, &status_options), "load working-tree status");
+            gg_operation_options scan = GG_OPERATION_OPTIONS_INIT;
+            scan.cancel_cb = StatusCancelCallback;
+            scan.payload = this;
+            const int result = gg_repository_worktree_status_ex(&status.value, gg, &status_options, &scan);
+            if (result == GIT_EUSER && StatusCancelCallback(this) != 0)
+            {
+                git_error_clear();
+                throw StatusScanCancelled();
+            }
+            Check(result, "load working-tree status");
             std::vector<StatusEntry> updated;
             updated.reserve(status.value.entry_count);
             for (size_t index = 0; index < status.value.entry_count; ++index)

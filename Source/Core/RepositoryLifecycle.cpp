@@ -123,6 +123,22 @@ int RepositoryEngine::Impl::CancelCallback(void* payload)
     return static_cast<Impl*>(payload)->cancel_requested.load() ? 1 : 0;
 }
 
+bool RepositoryEngine::Impl::CommandWaiting()
+{
+    // Watcher refreshes coalesce into the running one; anything else waits.
+    std::lock_guard lock(queue_mutex);
+    return stopping || std::ranges::any_of(commands, [](const QueuedCommand& queued) {
+        return !std::holds_alternative<Refresh>(queued.command)
+            || std::get<Refresh>(queued.command).foreground;
+    });
+}
+
+int RepositoryEngine::Impl::StatusCancelCallback(void* payload)
+{
+    auto* self = static_cast<Impl*>(payload);
+    return self->cancel_requested.load() || (self->background_status_scan && self->CommandWaiting()) ? 1 : 0;
+}
+
 void RepositoryEngine::Impl::ProgressCallback(const char* phase, size_t completed, size_t total, void* payload)
 {
     static_cast<Impl*>(payload)->Post(
