@@ -309,15 +309,75 @@ void Application::RequestDiff(bool fallback_to_first)
 
 void Application::RequestBlame(const std::string& revision, const std::string& path)
 {
-    if (_snapshot == nullptr || revision.empty() || IsWorkingTreeRevision(revision) || path.empty())
+    if (_snapshot == nullptr || revision.empty() || path.empty())
+        return;
+    if (!_blame_history.empty() && SameDiffRevision(_blame_revision, revision) && _blame_path == path)
+    {
+        _show_blame = true;
+        ReloadBlame();
+        return;
+    }
+    if (!_blame_history.empty())
+    {
+        _blame_history[_blame_history_index].scroll_y = _blame_scroll_y;
+        _blame_history.resize(_blame_history_index + 1);
+    }
+    _blame_history.push_back({revision, path});
+    _blame_history_index = _blame_history.size() - 1;
+    _blame_restore_scroll = 0.0f;
+    LoadBlameView(revision, path, false);
+}
+
+void Application::ReloadBlame()
+{
+    if (_blame_revision.empty() || _blame_path.empty())
+        return;
+    _blame_restore_scroll = -1.0f;
+    LoadBlameView(_blame_revision, _blame_path, true);
+}
+
+bool Application::CanNavigateBlame(int direction) const
+{
+    return direction < 0 ? _blame_history_index > 0
+        : _blame_history_index + 1 < _blame_history.size();
+}
+
+void Application::NavigateBlame(int direction)
+{
+    if (direction == 0 || !CanNavigateBlame(direction))
+        return;
+    _blame_history[_blame_history_index].scroll_y = _blame_scroll_y;
+    _blame_history_index = direction < 0 ? _blame_history_index - 1 : _blame_history_index + 1;
+    const BlameLocation& location = _blame_history[_blame_history_index];
+    _blame_restore_scroll = location.scroll_y;
+    LoadBlameView(location.revision, location.path, false);
+}
+
+void Application::LoadBlameView(const std::string& revision, const std::string& path, bool keep_content)
+{
+    if (_snapshot == nullptr)
         return;
     _blame_revision = revision;
     _blame_path = path;
-    _blame = {};
+    if (!keep_content)
+        _blame = {};
     _blame_loading = true;
     _show_blame = true;
     if (!_engine.Enqueue(LoadBlame{revision, path}))
         _blame_loading = false;
+}
+
+void Application::ClearBlame()
+{
+    _blame = {};
+    _blame_revision.clear();
+    _blame_path.clear();
+    _blame_filter.clear();
+    _blame_loading = false;
+    _blame_history.clear();
+    _blame_history_index = 0;
+    _blame_scroll_y = 0.0f;
+    _blame_restore_scroll = -1.0f;
 }
 
 void Application::ToggleComparison(bool file_comparison)
@@ -991,10 +1051,7 @@ void Application::ResetRepositoryState()
     _history_revisions.clear();
     _diff = {};
     _working_tree_diff_outdated = false;
-    _blame = {};
-    _blame_revision.clear();
-    _blame_path.clear();
-    _blame_filter.clear();
+    ClearBlame();
     _visible_revisions.clear();
     _graph_rows.clear();
     _history_hovered_track = -1;

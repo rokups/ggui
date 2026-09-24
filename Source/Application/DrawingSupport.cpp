@@ -187,10 +187,15 @@ void TextHighlightedId(std::string_view id, std::size_t unique_length, ImU32 pre
 bool HighlightedIdButton(std::string_view id, std::size_t unique_length, ImU32 prefix_color)
 {
     const std::size_t shown = std::min(id.size(), std::max<std::size_t>(8, unique_length));
-    const ImVec2 size = ImGui::CalcTextSize(id.data(), id.data() + shown);
+    // Follow the line's text baseline, such as one aligned to frame padding
+    // for a row that also holds buttons.
+    const float baseline = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
+    ImVec2 size = ImGui::CalcTextSize(id.data(), id.data() + shown);
+    size.y += baseline * 2.0f;
     const std::string item_id(id);
     const bool clicked = ImGui::InvisibleButton(item_id.c_str(), size);
-    DrawHighlightedId(ImGui::GetWindowDrawList(), ImGui::GetItemRectMin(), id, unique_length, prefix_color);
+    DrawHighlightedId(ImGui::GetWindowDrawList(), ImVec2(ImGui::GetItemRectMin().x,
+        ImGui::GetItemRectMin().y + baseline), id, unique_length, prefix_color);
     if (ImGui::IsItemHovered())
         ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     return clicked;

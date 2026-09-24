@@ -157,6 +157,8 @@ struct BlameLine
     std::string summary;
     std::string contents;
     bool boundary = false;
+    // Working-tree blame only: the line is not in any commit yet.
+    bool uncommitted = false;
 
     // The source hunk from which libgit2 traced this line. These values are
     // normally the same as the final commit, but differ when copy tracking
@@ -184,6 +186,9 @@ struct BlameResult
     std::string revision;
     std::string path;
     std::vector<BlameLine> lines;
+    // The file was read from the working tree; viewed_revision is @, the
+    // commit the uncommitted lines are compared against.
+    bool working_tree = false;
     // Metadata for the file snapshot itself. History is intentionally
     // bounded/collapsed in the UI, so blame keeps enough commit information
     // to continue walking parents even when the viewed revision is not

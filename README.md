@@ -137,7 +137,10 @@ click the commit to reveal it, click elsewhere in the gutter to select the
 block, or hover it for exact source/origin metadata. Right-clicking a line
 copies it or its block, and offers **Blame before this change** to inspect the
 file immediately before that change. Blame can be filtered by author, commit,
-subject, or content. The optional **Reflog** panel
+subject, or content. **Back** and **Forward** (or the mouse's side buttons)
+return to earlier blame views at their scroll positions. Working-tree files are
+blamed from disk against `@`: edited and new lines show as **Uncommitted**, and
+blaming before them opens the file as it is in `@`. The optional **Reflog** panel
 shows the HEAD move history,
 including commits retained only by the reflog; hashes can be revealed, copied,
 or preserved as a branch.

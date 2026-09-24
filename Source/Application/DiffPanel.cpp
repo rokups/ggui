@@ -594,10 +594,11 @@ void Application::RenderDiff()
         ImGui::Separator();
         const bool stale = context_revision != _diff.revision || context_path != _diff.path;
         const bool unsupported = stale || unsupported_diff;
-        const bool blame_available = !stale && !unsupported && _diff.selected_status != GIT_DELTA_ADDED
-            && _diff.selected_status != GIT_DELTA_DELETED
-            && _diff.selected_status != GIT_DELTA_UNTRACKED
-            && !_diff.revision.empty() && !IsWorkingTreeRevision(_diff.revision) && !_diff.path.empty();
+        // Working-tree files are blamed from disk against @.
+        const bool blame_available = !stale && !unsupported && _diff.selected_status != GIT_DELTA_DELETED
+            && (IsWorkingTreeRevision(_diff.revision) || (_diff.selected_status != GIT_DELTA_ADDED
+                && _diff.selected_status != GIT_DELTA_UNTRACKED))
+            && !_diff.revision.empty() && !_diff.path.empty();
         ImGui::BeginDisabled(!blame_available);
         if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))
             RequestBlame(_diff.revision, _diff.path);

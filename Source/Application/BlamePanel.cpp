@@ -22,6 +22,18 @@ using namespace ApplicationInternal;
 namespace
 {
 
+class BlameViewer : public TextEditor
+{
+public:
+    // SetText resets scrolling; apply a remembered position instead.
+    void PreserveScrollY(float y)
+    {
+        ensureCursorIsVisible = false;
+        scrollToLineNumber = -1;
+        ImGui::SetNextWindowScroll(ImVec2(-1.0f, y));
+    }
+};
+
 std::string BlameLineText(const BlameLine& line)
 {
     std::string result = line.contents;
@@ -32,7 +44,8 @@ std::string BlameLineText(const BlameLine& line)
 
 bool Matches(const BlameLine& line, std::string_view filter)
 {
-    return filter.empty() || ContainsInsensitive(line.author, filter)
+    return filter.empty() || (line.uncommitted && ContainsInsensitive("uncommitted", filter))
+        || ContainsInsensitive(line.author, filter)
         || ContainsInsensitive(line.author_email, filter)
         || ContainsInsensitive(line.revision, filter)
         || ContainsInsensitive(line.summary, filter)
@@ -76,6 +89,8 @@ ImU32 BlameRevisionColor(const BlameLine& line)
     // Keep the blame column quiet like GitHub/GitLab. The colored rail is an
     // ownership cue, not a second branch graph; boundary lines get the same
     // modified-state accent used elsewhere in the application.
+    if (line.uncommitted)
+        return kStatusModified;
     if (line.revision.empty())
         return kTextMuted;
     return line.boundary ? kStatusModified : kCommitId;
@@ -126,12 +141,14 @@ BlameView BuildBlameView(const std::vector<BlameLine>& lines, std::string_view f
         const BlameLine& line = lines[index];
         if (!Matches(line, filter))
             continue;
-        const bool block_start = result.rows.empty() || result.rows.back().line_index + 1 != index
-            || lines[result.rows.back().line_index].revision != line.revision;
+        const BlameLine* previous = result.rows.empty() ? nullptr : &lines[result.rows.back().line_index];
+        const bool block_start = previous == nullptr || result.rows.back().line_index + 1 != index
+            || previous->revision != line.revision || previous->uncommitted != line.uncommitted;
         if (block_start)
         {
             const std::string timestamp = line.timestamp != 0 ? FormatTimestamp(line.timestamp) : std::string();
-            result.blocks.push_back({result.rows.size(), result.rows.size(), AuthorLabel(line.author),
+            result.blocks.push_back({result.rows.size(), result.rows.size(),
+                line.uncommitted ? std::string() : AuthorLabel(line.author),
                 FirstLine(line.summary), timestamp.substr(0, std::min<std::size_t>(timestamp.size(), 10))});
         }
         result.blocks.back().last_row = result.rows.size();
@@ -149,26 +166,66 @@ void Application::RenderBlame()
 {
     if (!_show_blame)
         return;
-    if (!ImGui::Begin("Blame", &_show_blame))
+    int navigation = 0;
+    std::optional<std::pair<std::string, std::string>> request;
+    if (ImGui::Begin("Blame", &_show_blame))
     {
-        ImGui::End();
-        return;
+        // Mouse Back/Forward buttons (X1/X2) walk the view history like a browser.
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+        {
+            if (ImGui::IsMouseClicked(3))
+                navigation = -1;
+            else if (ImGui::IsMouseClicked(4))
+                navigation = 1;
+        }
+        RenderBlameContents(navigation, request);
     }
+    ImGui::End();
+    if (navigation != 0)
+        NavigateBlame(navigation);
+    else if (request.has_value())
+        RequestBlame(request->first, request->second);
+}
+
+void Application::RenderBlameContents(int& navigation,
+    std::optional<std::pair<std::string, std::string>>& pending_blame)
+{
+    // Back/Forward share the header row with the file identity; the row is
+    // aligned to frame padding so its text sits on the buttons' baseline.
+    ImGui::AlignTextToFramePadding();
+    ImGui::BeginDisabled(!CanNavigateBlame(-1));
+    if (ImGui::Button(ICON_MS_ARROW_BACK "###blame back"))
+        navigation = -1;
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Back to the previous blame view (mouse Back button)");
+    ImGui::SameLine(0.0f, 4.0f);
+    ImGui::BeginDisabled(!CanNavigateBlame(1));
+    if (ImGui::Button(ICON_MS_ARROW_FORWARD "###blame forward"))
+        navigation = 1;
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Forward to the next blame view (mouse Forward button)");
+    ImGui::SameLine(0.0f, 10.0f);
 
     if (_blame_path.empty())
     {
         ImGui::TextDisabled("Select a file to inspect its line history.");
-        ImGui::End();
         return;
     }
 
-    const auto requested_history = std::ranges::find(_history_revisions, _blame_revision, &Revision::oid);
+    // A working-tree view is identified by @, the commit its edits are
+    // compared against, rather than by the virtual Working tree row.
+    const bool working_tree = IsWorkingTreeRevision(_blame_revision);
+    const auto requested_history = working_tree ? _history_revisions.end()
+        : std::ranges::find(_history_revisions, _blame_revision, &Revision::oid);
     const Revision* viewed = requested_history != _history_revisions.end() ? &*requested_history
         : (!_blame.viewed_revision.oid.empty()
-                && (_blame.viewed_revision.oid == _blame_revision || _blame.revision == _blame_revision)
+                && (working_tree || _blame.viewed_revision.oid == _blame_revision
+                    || _blame.revision == _blame_revision)
                 ? &_blame.viewed_revision : nullptr);
     const std::string viewed_oid = viewed != nullptr && !viewed->oid.empty()
-        ? viewed->oid : _blame_revision;
+        ? viewed->oid : (working_tree ? std::string() : _blame_revision);
     const ImU32 viewed_color = CommitIdColor(_snapshot != nullptr && viewed_oid == _snapshot->working_copy);
 
     const auto render_revision_tooltip = [this](std::string_view title, std::string_view revision,
@@ -199,7 +256,16 @@ void Application::RenderBlame()
 
     ImGui::TextUnformatted(_blame_path.c_str());
     ImGui::SameLine(0.0f, 8.0f);
-    ImGui::TextDisabled("@");
+    if (working_tree)
+    {
+        ImGui::TextColored(ImGui::ColorConvertU32ToFloat4(kStatusModified), "Working tree");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The file on disk. Lines that differ from @ are shown as uncommitted.");
+        ImGui::SameLine(0.0f, 5.0f);
+        ImGui::TextDisabled("on");
+    }
+    else
+        ImGui::TextDisabled("@");
     ImGui::SameLine(0.0f, 5.0f);
     if (!viewed_oid.empty())
     {
@@ -216,7 +282,7 @@ void Application::RenderBlame()
         }
     }
     else
-        ImGui::TextDisabled("(unknown)");
+        ImGui::TextDisabled(working_tree ? "(no commits)" : "(unknown)");
     if (viewed != nullptr)
     {
         ImGui::SameLine(0.0f, 10.0f);
@@ -238,29 +304,28 @@ void Application::RenderBlame()
     }
     ImGui::SameLine(0.0f, 12.0f);
     if (ActionButton(ICON_MS_REFRESH, "Refresh", ImVec2(0.0f, 0.0f)))
-        RequestBlame(_blame_revision, _blame_path);
+        ReloadBlame();
 
     ImGui::SetNextItemWidth(-1.0f);
     ImGui::InputTextWithHint("##blame filter", "Filter commits, authors, messages, or source lines",
         &_blame_filter);
 
-    if (_blame_loading)
+    // A reload keeps the previous result on screen until the new one lands.
+    if (_blame_loading && _blame.lines.empty())
     {
         ImGui::TextDisabled("Loading blame...");
-        ImGui::End();
         return;
     }
     if (_blame.lines.empty())
     {
         ImGui::TextDisabled("No blame information is available for this file.");
-        ImGui::End();
         return;
     }
 
     // Persistent blame viewer. The source is shown in the same read-only
     // editor as the diff so it can be selected, searched, and copied; the
     // blame metadata lives in the editor's line decorator gutter.
-    static TextEditor editor;
+    static BlameViewer editor;
     static BlameView view;
     static std::uint64_t loaded_generation = 0;
     static std::string loaded_revision;
@@ -276,11 +341,19 @@ void Application::RenderBlame()
     static std::size_t hovered_row = kNoBlameBlock;
     static std::size_t clicked_row = kNoBlameBlock;
     static bool clicked_revision = false;
+    static float pending_scroll = -1.0f;
 
     if (loaded_generation != _blame.generation || loaded_revision != _blame.revision
         || loaded_path != _blame.path || loaded_lines != _blame.lines.data()
         || loaded_line_count != _blame.lines.size() || loaded_filter != _blame_filter)
     {
+        // Reloads keep the reader's place; navigation restores the position
+        // remembered for that view, and a new filter starts at the top.
+        const bool same_view = loaded_revision == _blame.revision && loaded_path == _blame.path
+            && loaded_filter == _blame_filter;
+        pending_scroll = _blame_restore_scroll >= 0.0f ? _blame_restore_scroll
+            : (same_view ? _blame_scroll_y : 0.0f);
+        _blame_restore_scroll = -1.0f;
         loaded_generation = _blame.generation;
         loaded_revision = _blame.revision;
         loaded_path = _blame.path;
@@ -314,7 +387,6 @@ void Application::RenderBlame()
     if (view.rows.empty())
     {
         ImGui::TextDisabled("No matching lines.");
-        ImGui::End();
         return;
     }
 
@@ -369,7 +441,12 @@ void Application::RenderBlame()
             if (row_index == first)
             {
                 float x = left;
-                if (!line.revision.empty())
+                if (line.uncommitted)
+                {
+                    DrawTextWithin(draw, ImVec2(x, text_y), right, "Uncommitted", kStatusModified);
+                    x += ImGui::CalcTextSize("Uncommitted").x + FontPx(8.0f);
+                }
+                else if (!line.revision.empty())
                 {
                     const std::size_t shown = std::min(line.revision.size(),
                         std::max<std::size_t>(8, RevisionPrefix(line.revision)));
@@ -400,6 +477,9 @@ void Application::RenderBlame()
                     draw->AddText(ImVec2(right - date_width, text_y),
                         ImGui::GetColorU32(ImGuiCol_TextDisabled), block.date.c_str());
             }
+            else if (row_index == first + 1 && line.uncommitted)
+                DrawTextWithin(draw, ImVec2(left, text_y), right, "Not committed yet",
+                    ImGui::GetColorU32(ImGuiCol_TextDisabled));
             else if (row_index == first + 1 && !line.summary.empty())
                 DrawTextWithin(draw, ImVec2(left, text_y), right, block.summary,
                     ImGui::GetColorU32(ImGuiCol_TextDisabled));
@@ -424,15 +504,20 @@ void Application::RenderBlame()
     clicked_row = kNoBlameBlock;
     clicked_revision = false;
     ImGui::PushFont(DiffFont(), 0.0f);
+    if (pending_scroll >= 0.0f)
+    {
+        editor.PreserveScrollY(pending_scroll);
+        pending_scroll = -1.0f;
+    }
     editor.Render("##blame view", ImGui::GetContentRegionAvail(), true);
     ImGuiWindow* view_window = ImGui::GetCurrentWindow()->DC.ChildWindows.back();
     IM_ASSERT(view_window->ChildId == ImGui::GetItemID());
+    _blame_scroll_y = view_window->Scroll.y;
     const bool view_hovered = ImGui::IsItemHovered();
     const float line_height = std::max(editor.GetLineHeight(), 1.0f);
     ImGui::PopFont();
     hovered_block = next_hovered_block;
 
-    std::optional<std::pair<std::string, std::string>> pending_blame;
     const auto queue_blame = [&pending_blame](const BlameLine& line, bool before) {
         const std::string& revision = before ? line.blame_before_revision : line.previous_revision;
         const std::string& path = before ? line.blame_before_path : line.previous_path;
@@ -458,36 +543,44 @@ void Application::RenderBlame()
         const BlameBlock& block = view.blocks[row.block];
         const BlameLine& line = _blame.lines[row.line_index];
         ImGui::BeginTooltip();
-        ImGui::Text("Line %zu · %s", line.line, SourceLineLabel(line).c_str());
+        if (line.uncommitted)
+            ImGui::Text("Line %zu · Uncommitted", line.line);
+        else
+            ImGui::Text("Line %zu · %s", line.line, SourceLineLabel(line).c_str());
         ImGui::TextDisabled("Change block · %s", BlameBlockRange(_blame.lines,
             view.rows[block.first_row].line_index, view.rows[block.last_row].line_index).c_str());
         ImGui::Separator();
-        ImGui::TextUnformatted("Last changed by");
-        ImGui::TextDisabled("%s", line.revision.empty() ? "(none)" : line.revision.c_str());
-        ImGui::TextUnformatted(AuthorLabel(line.author).c_str());
-        if (!line.author_email.empty())
-            ImGui::TextDisabled("%s", line.author_email.c_str());
-        if (line.timestamp != 0)
-            ImGui::TextDisabled("%s", FormatTimestamp(line.timestamp).c_str());
-        if (!line.summary.empty())
-            ImGui::TextWrapped("%s", line.summary.c_str());
-        if (HasPreviousCommit(line))
+        if (line.uncommitted)
+            ImGui::TextUnformatted("Not committed yet: the working tree differs from @ here.");
+        else
         {
-            ImGui::Separator();
-            ImGui::TextUnformatted("Originating source");
-            ImGui::TextDisabled("%s", line.previous_revision.c_str());
-            if (!line.previous_path.empty() && line.previous_path != _blame_path)
-                ImGui::TextDisabled("%s", line.previous_path.c_str());
-            ImGui::TextUnformatted(AuthorLabel(line.previous_author).c_str());
-            if (!line.previous_author_email.empty())
-                ImGui::TextDisabled("%s", line.previous_author_email.c_str());
-            if (line.previous_timestamp != 0)
-                ImGui::TextDisabled("%s", FormatTimestamp(line.previous_timestamp).c_str());
-            if (!line.previous_summary.empty() && line.previous_summary != line.summary)
-                ImGui::TextWrapped("%s", line.previous_summary.c_str());
+            ImGui::TextUnformatted("Last changed by");
+            ImGui::TextDisabled("%s", line.revision.empty() ? "(none)" : line.revision.c_str());
+            ImGui::TextUnformatted(AuthorLabel(line.author).c_str());
+            if (!line.author_email.empty())
+                ImGui::TextDisabled("%s", line.author_email.c_str());
+            if (line.timestamp != 0)
+                ImGui::TextDisabled("%s", FormatTimestamp(line.timestamp).c_str());
+            if (!line.summary.empty())
+                ImGui::TextWrapped("%s", line.summary.c_str());
+            if (HasPreviousCommit(line))
+            {
+                ImGui::Separator();
+                ImGui::TextUnformatted("Originating source");
+                ImGui::TextDisabled("%s", line.previous_revision.c_str());
+                if (!line.previous_path.empty() && line.previous_path != _blame_path)
+                    ImGui::TextDisabled("%s", line.previous_path.c_str());
+                ImGui::TextUnformatted(AuthorLabel(line.previous_author).c_str());
+                if (!line.previous_author_email.empty())
+                    ImGui::TextDisabled("%s", line.previous_author_email.c_str());
+                if (line.previous_timestamp != 0)
+                    ImGui::TextDisabled("%s", FormatTimestamp(line.previous_timestamp).c_str());
+                if (!line.previous_summary.empty() && line.previous_summary != line.summary)
+                    ImGui::TextWrapped("%s", line.previous_summary.c_str());
+            }
+            if (line.boundary)
+                ImGui::TextDisabled("Boundary commit");
         }
-        if (line.boundary)
-            ImGui::TextDisabled("Boundary commit");
         ImGui::Separator();
         ImGui::TextDisabled("%s", line.revision.empty() ? "Click to select this change block"
                 : "Click the commit to reveal it, elsewhere to select the block");
@@ -553,9 +646,6 @@ void Application::RenderBlame()
         }
         ImGui::EndPopup();
     }
-    ImGui::End();
-    if (pending_blame.has_value())
-        RequestBlame(pending_blame->first, pending_blame->second);
 }
 
 } // namespace Ggui

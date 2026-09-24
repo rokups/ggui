@@ -117,6 +117,16 @@ const std::string& Application::ActiveOperationForTest() const
     return _active_operation;
 }
 
+void Application::RequestBlameForTest(const std::string& revision, const std::string& path)
+{
+    RequestBlame(revision, path);
+}
+
+std::pair<std::string, std::string> Application::BlameLocationForTest() const
+{
+    return {_blame_revision, _blame_path};
+}
+
 bool Application::DiffSideBySideForTest() const
 {
     return _diff_side_by_side;
@@ -331,11 +341,7 @@ void Application::SetSnapshotForTest(RepoSnapshot snapshot)
     _file_comparison = false;
     _diff = {_snapshot->generation, _selected_revision, {}, {}, {}, false, _snapshot->status};
     _diff_loading = false;
-    _blame = {};
-    _blame_revision.clear();
-    _blame_path.clear();
-    _blame_filter.clear();
-    _blame_loading = false;
+    ClearBlame();
     _graph_generation = 0;
     _graph_filter.clear();
     _reflog_filter.clear();

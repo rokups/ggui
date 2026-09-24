@@ -144,15 +144,9 @@ void Application::ApplyEvent(Event event)
                         || old_compare_to != _compare_to)
                         RequestDiff(true);
                     if (repository_changed)
-                    {
-                        _blame = {};
-                        _blame_revision.clear();
-                        _blame_path.clear();
-                        _blame_filter.clear();
-                        _blame_loading = false;
-                    }
-                    else if (_show_blame && !_blame_revision.empty() && !_blame_path.empty())
-                        RequestBlame(_blame_revision, _blame_path);
+                        ClearBlame();
+                    else if (_show_blame)
+                        ReloadBlame();
                 }
                 else if constexpr (std::is_same_v<T, HistoryReady>)
                 {

@@ -192,11 +192,12 @@ void Application::RenderChanges()
             // Blame needs the file to exist in the selected commit. Added,
             // deleted, and untracked entries only exist on one side of the
             // comparison and would otherwise produce a noisy repository-read
-            // error from libgit2.
-            const bool blame_available = !_diff.revision.empty() && !IsWorkingTreeRevision(_diff.revision)
-                && !file.path.empty()
-                && file.status != GIT_DELTA_ADDED && file.status != GIT_DELTA_DELETED
-                && file.status != GIT_DELTA_UNTRACKED && file.status != GIT_DELTA_TYPECHANGE
+            // error from libgit2. Working-tree files are read from disk and
+            // blamed against @, so only deleted files are unavailable there.
+            const bool working_tree_file = IsWorkingTreeRevision(_diff.revision);
+            const bool blame_available = !_diff.revision.empty() && !file.path.empty()
+                && file.status != GIT_DELTA_DELETED && file.status != GIT_DELTA_TYPECHANGE
+                && (working_tree_file || (file.status != GIT_DELTA_ADDED && file.status != GIT_DELTA_UNTRACKED))
                 && !file.conflicted;
             ImGui::BeginDisabled(!blame_available);
             if (ActionMenuItem(ICON_MS_PERSON, "Blame file"))

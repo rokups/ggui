@@ -109,6 +109,8 @@ public:
     const std::vector<Revision>& HistoryRevisionsForTest() const;
     std::size_t RenderedHistoryRowsForTest() const;
     const std::string& ActiveOperationForTest() const;
+    void RequestBlameForTest(const std::string& revision, const std::string& path);
+    std::pair<std::string, std::string> BlameLocationForTest() const;
     const std::string& ErrorMessageForTest() const;
     void CreateChangeForTest(const std::string& parent);
     bool UsesSdrSwapchainForTest() const;
@@ -200,6 +202,9 @@ private:
     void RenderHistory();
     void RenderReflog();
     void RenderBlame();
+    // Draws the Blame window's contents. Navigation and new blame requests
+    // are returned so they apply after the frame's references are used.
+    void RenderBlameContents(int& navigation, std::optional<std::pair<std::string, std::string>>& request);
     void RenderChanges();
     void RenderChangeInformation();
     void RenderDiff();
@@ -228,7 +233,15 @@ private:
     void SelectRevision(const std::string& oid, bool additive = false);
     void SelectFile(const std::string& path);
     void RequestDiff(bool fallback_to_first);
+    // Opens a blame view and records it in the Back/Forward history.
     void RequestBlame(const std::string& revision, const std::string& path);
+    // Reloads the current blame view, keeping it on screen until the result.
+    void ReloadBlame();
+    // Moves through the blame history; negative is Back.
+    void NavigateBlame(int direction);
+    bool CanNavigateBlame(int direction) const;
+    void LoadBlameView(const std::string& revision, const std::string& path, bool keep_content);
+    void ClearBlame();
     void ToggleComparison(bool file_comparison);
     void ResetRepositoryState();
     std::pair<std::string, std::string> AdjacentRevisions(const std::string& revision) const;
@@ -445,6 +458,18 @@ private:
     std::string _blame_revision;
     std::string _blame_path;
     std::string _blame_filter;
+    struct BlameLocation
+    {
+        std::string revision;
+        std::string path;
+        float scroll_y = 0.0f;
+    };
+    std::vector<BlameLocation> _blame_history;
+    std::size_t _blame_history_index = 0;
+    // Scroll of the rendered blame view, and the scroll to apply when the
+    // next result loads (negative keeps the current view's position).
+    float _blame_scroll_y = 0.0f;
+    float _blame_restore_scroll = -1.0f;
 #ifdef IMGUI_BUILD_TESTING
     ImGuiTestEngine* _test_engine = nullptr;
     bool _test_mode = false;

@@ -26,6 +26,8 @@ std::string OidString(const git_oid& oid);
 std::string LastGitError(std::string_view fallback);
 void Check(int result, std::string_view action);
 std::string BlobText(git_repository* repository, git_tree* tree, const char* path, bool& binary);
+// Reads a repository-relative working-tree file; empty when it is missing.
+std::string ReadWorktreeFile(git_repository* repository, const std::string& path, bool& binary);
 DiffLine DiffLineFromRaw(const git_diff_line& line, int hunk);
 bool SameChangedLine(const DiffLine& first, const DiffLine& second);
 bool SameInverseLine(const DiffLine& forward, const DiffLine& reverse);

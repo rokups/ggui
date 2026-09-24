@@ -2558,6 +2558,55 @@ TEST(RepositoryEngine, LoadsBlameWithoutSyntheticTerminalLine)
     EXPECT_EQ(blame->lines.front().revision, root.oid);
 }
 
+TEST(RepositoryEngine, BlamesWorkingTreeFilesAgainstTheActiveCommit)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto snapshot = WaitForSnapshot(engine, [](const RepoSnapshot& value) {
+        return !value.revisions.empty();
+    });
+    ASSERT_NE(snapshot, nullptr);
+    const Revision& root = snapshot->revisions.back();
+
+    // Edited lines are reported as uncommitted instead of refusing the file.
+    std::ofstream(repository.path / "tracked.txt") << "first\nbase\nlast";
+    engine.Enqueue(LoadBlame{"working-tree:1", "tracked.txt"});
+    const auto modified = WaitForBlame(engine);
+    ASSERT_TRUE(modified.has_value());
+    EXPECT_TRUE(modified->working_tree);
+    EXPECT_EQ(modified->revision, "working-tree:1");
+    EXPECT_EQ(modified->viewed_revision.oid, root.oid);
+    ASSERT_EQ(modified->lines.size(), 3U);
+    EXPECT_TRUE(modified->lines[0].uncommitted);
+    EXPECT_EQ(modified->lines[0].contents, "first");
+    EXPECT_EQ(modified->lines[0].blame_before_revision, root.oid);
+    EXPECT_EQ(modified->lines[0].blame_before_path, "tracked.txt");
+    EXPECT_FALSE(modified->lines[1].uncommitted);
+    EXPECT_EQ(modified->lines[1].contents, "base");
+    EXPECT_EQ(modified->lines[1].revision, root.oid);
+    EXPECT_EQ(modified->lines[1].line, 2U);
+    EXPECT_TRUE(modified->lines[2].uncommitted);
+    EXPECT_EQ(modified->lines[2].contents, "last");
+
+    // A file that is not in @ yet is entirely uncommitted.
+    std::ofstream(repository.path / "new.txt") << "one\ntwo\n";
+    engine.Enqueue(LoadBlame{"working-tree:1", "new.txt"});
+    const auto added = WaitForBlame(engine);
+    ASSERT_TRUE(added.has_value());
+    ASSERT_EQ(added->lines.size(), 2U);
+    EXPECT_TRUE(std::ranges::all_of(added->lines, &BlameLine::uncommitted));
+    EXPECT_EQ(added->lines[1].contents, "two");
+    EXPECT_TRUE(added->lines[0].blame_before_revision.empty());
+
+    // An emptied file has no lines to blame.
+    std::ofstream(repository.path / "tracked.txt", std::ios::trunc).flush();
+    engine.Enqueue(LoadBlame{"working-tree:1", "tracked.txt"});
+    const auto emptied = WaitForBlame(engine);
+    ASSERT_TRUE(emptied.has_value());
+    EXPECT_TRUE(emptied->lines.empty());
+}
+
 TEST(RepositoryEngine, LoadsFileContentFromARevision)
 {
     TemporaryRepository repository;

@@ -4655,6 +4655,74 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         context->ItemClick("**/Blame before this change");
         context->Yield();
         IM_CHECK(context->ItemExists("//Blame"));
+
+        // Back/Forward walk the recorded views, from the buttons or the
+        // mouse's side buttons.
+        using Location = std::pair<std::string, std::string>;
+        IM_CHECK(application.BlameLocationForTest() == Location("base", "file.txt"));
+        FocusWindow(context, "Blame");
+        IM_CHECK((context->ItemInfo("###blame forward").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->ItemClick("###blame back");
+        context->Yield();
+        IM_CHECK(application.BlameLocationForTest() == Location("base", "old.txt"));
+        context->MouseMoveToPos(blame_view.RectFull.GetCenter());
+        context->MouseClick(3);
+        context->Yield();
+        IM_CHECK(application.BlameLocationForTest() == Location("middle", "file.txt"));
+        IM_CHECK((context->ItemInfo("###blame back").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->MouseClick(4);
+        context->Yield();
+        IM_CHECK(application.BlameLocationForTest() == Location("base", "old.txt"));
+        context->ItemClick("###blame forward");
+        context->Yield();
+        IM_CHECK(application.BlameLocationForTest() == Location("base", "file.txt"));
+        // Opening a new view drops the forward history.
+        context->ItemClick("###blame back");
+        context->Yield();
+        application.RequestBlameForTest("middle", "other.txt");
+        context->Yield();
+        IM_CHECK((context->ItemInfo("###blame forward").ItemFlags & ImGuiItemFlags_Disabled) != 0);
+
+        // Working-tree files blame against @ and mark their edits uncommitted.
+        application.RequestBlameForTest(working_tree, "file.txt");
+        BlameResult working;
+        working.generation = 1000;
+        working.revision = working_tree;
+        working.path = "file.txt";
+        working.working_tree = true;
+        working.viewed_revision = {"source", {"middle"}, {"change-source"}, "Source", {}, 3, true, false, true};
+        BlameLine edited;
+        edited.line = edited.original_line = 1;
+        edited.contents = "edited";
+        edited.uncommitted = true;
+        edited.blame_before_revision = "source";
+        edited.blame_before_path = "file.txt";
+        working.lines = {edited, blame_line(2, "middle", "new\n"), edited};
+        working.lines.back().line = 3;
+        application.ApplyEventForTest(BlameReady{working});
+        context->Yield(3);
+        FocusWindow(context, "Blame");
+        IM_CHECK(context->ItemExists("##blame view"));
+        context->MouseMoveToPos(gutter(0, commit_x));
+        context->Yield(2);
+        if (std::getenv("GGUI_CAPTURE_MANUAL") != nullptr)
+        {
+            context->CaptureReset();
+            IM_CHECK(context->CaptureScreenshot(ImGuiCaptureFlags_HideMouseCursor));
+        }
+        context->ItemInputValue("##blame filter", "uncommitted");
+        context->Yield(2);
+        IM_CHECK(context->ItemExists("##blame view"));
+        context->ItemInputValue("##blame filter", "");
+        context->Yield(2);
+        // A reload keeps the loaded view on screen.
+        context->ItemClick("###Refresh");
+        context->Yield();
+        IM_CHECK(context->ItemExists("##blame view"));
+        open_blame_context(0);
+        context->ItemClick("**/Blame before this change");
+        context->Yield();
+        IM_CHECK(application.BlameLocationForTest() == Location("source", "file.txt"));
     };
 
     test = IM_REGISTER_TEST(engine, "Interactions", "HistoryHotkeys");

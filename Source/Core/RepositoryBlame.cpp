@@ -9,7 +9,10 @@
 #include <git2/sys/errors.h>
 #endif
 
+#include <algorithm>
 #include <memory>
+#include <string_view>
+#include <vector>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -64,6 +67,46 @@ std::string SignatureEmail(const git_signature* signature)
 {
     return signature == nullptr || signature->email == nullptr ? "" : signature->email;
 }
+
+bool IsWorkingTreeRevision(std::string_view revision)
+{
+    return revision.starts_with("working-tree:");
+}
+
+// The commit working-tree edits are relative to: gg's @, or HEAD when gg has
+// no workspace. Zero while HEAD is unborn.
+git_oid ActiveCommit(git_repository* repository, gg_repository* gg_repository)
+{
+    git_oid oid{};
+    if (gg_repository_working_copy(&oid, gg_repository) == GIT_OK)
+        return oid;
+    git_error_clear();
+    git_reference* raw_head = nullptr;
+    if (git_repository_head(&raw_head, repository) != GIT_OK)
+    {
+        git_error_clear();
+        return {};
+    }
+    std::unique_ptr<git_reference, decltype(&git_reference_free)> head(raw_head, git_reference_free);
+    if (const git_oid* target = git_reference_target(head.get()); target != nullptr)
+        oid = *target;
+    return oid;
+}
+
+// Splits file contents into lines without their newline, like libgit2's
+// blame lines. A trailing newline does not start another line.
+std::vector<std::string_view> ContentLines(std::string_view contents)
+{
+    std::vector<std::string_view> result;
+    std::size_t begin = 0;
+    while (begin < contents.size())
+    {
+        const std::size_t end = std::min(contents.find('\n', begin), contents.size());
+        result.push_back(contents.substr(begin, end - begin));
+        begin = end + 1;
+    }
+    return result;
+}
 } // namespace
 
 void RepositoryEngine::Impl::LoadBlameFile(const Ggui::LoadBlame& command, git_repository* repository,
@@ -77,49 +120,114 @@ void RepositoryEngine::Impl::LoadBlameFile(const Ggui::LoadBlame& command, git_r
     if (!current())
         return;
 
+    // The working tree is blamed as @ plus its uncommitted edits: lines that
+    // differ from @ are reported as uncommitted rather than refusing the file.
+    const bool working_tree = IsWorkingTreeRevision(command.revision);
     git_oid newest{};
-    Check(gg_repository_resolve(&newest, gg_repository, command.revision.c_str()), "resolve blame revision");
+    if (working_tree)
+        newest = ActiveCommit(repository, gg_repository);
+    else
+        Check(gg_repository_resolve(&newest, gg_repository, command.revision.c_str()), "resolve blame revision");
     if (!current())
         return;
 
     // Keep commit metadata with the blame result. The history panel may only
     // materialize a bounded window, while the blame view must still identify
     // and walk the exact file snapshot requested by the user.
-    git_commit* raw_commit = nullptr;
-    Check(git_commit_lookup(&raw_commit, repository, &newest), "load blame revision");
-    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(raw_commit, git_commit_free);
+    std::unique_ptr<git_commit, decltype(&git_commit_free)> commit(nullptr, git_commit_free);
+    if (!git_oid_is_zero(&newest))
+    {
+        git_commit* raw_commit = nullptr;
+        Check(git_commit_lookup(&raw_commit, repository, &newest), "load blame revision");
+        commit.reset(raw_commit);
+    }
 
-    git_blame_options options = GIT_BLAME_OPTIONS_INIT;
-    options.newest_commit = newest;
-    git_blame* raw_blame = nullptr;
-    Check(git_blame_file(&raw_blame, repository, command.path.c_str(), &options), "load blame");
-    BlamePtr blame(raw_blame);
+    BlamePtr blame;
+    if (commit != nullptr)
+    {
+        git_blame_options options = GIT_BLAME_OPTIONS_INIT;
+        options.newest_commit = newest;
+        git_blame* raw_blame = nullptr;
+        const int status = git_blame_file(&raw_blame, repository, command.path.c_str(), &options);
+        // A file that is new in the working tree has no committed lines.
+        if (working_tree && status == GIT_ENOTFOUND)
+            git_error_clear();
+        else
+            Check(status, "load blame");
+        blame.reset(raw_blame);
+    }
+
+    std::string worktree_contents;
+    std::vector<std::string_view> worktree_lines;
+    BlamePtr worktree_blame;
+    if (working_tree)
+    {
+        bool binary = false;
+        worktree_contents = ReadWorktreeFile(repository, command.path, binary);
+        if (binary)
+            throw std::runtime_error("binary files cannot be blamed");
+        worktree_lines = ContentLines(worktree_contents);
+        if (blame != nullptr && !worktree_contents.empty())
+        {
+            git_blame* raw_blame = nullptr;
+            Check(git_blame_buffer(&raw_blame, blame.get(), worktree_contents.data(), worktree_contents.size()),
+                "blame working-tree file");
+            worktree_blame.reset(raw_blame);
+        }
+    }
 
     BlameResult result;
     result.generation = snapshot_generation;
     result.revision = command.revision;
     result.path = command.path;
-    result.viewed_revision.oid = OidString(newest);
-    const git_signature* signature = git_commit_author(commit.get());
-    result.viewed_revision.author = SignatureName(signature);
-    result.viewed_revision.author_email = SignatureEmail(signature);
-    result.viewed_revision.timestamp = signature == nullptr ? 0 : signature->when.time;
-    const char* message = git_commit_message(commit.get());
-    if (message != nullptr)
-        result.viewed_revision.description = message;
-    result.viewed_revision.parents.reserve(git_commit_parentcount(commit.get()));
-    for (unsigned int parent = 0; parent < git_commit_parentcount(commit.get()); ++parent)
-        result.viewed_revision.parents.push_back(OidString(*git_commit_parent_id(commit.get(), parent)));
-    const std::size_t line_count = git_blame_linecount(blame.get());
+    result.working_tree = working_tree;
+    if (commit != nullptr)
+    {
+        result.viewed_revision.oid = OidString(newest);
+        const git_signature* signature = git_commit_author(commit.get());
+        result.viewed_revision.author = SignatureName(signature);
+        result.viewed_revision.author_email = SignatureEmail(signature);
+        result.viewed_revision.timestamp = signature == nullptr ? 0 : signature->when.time;
+        const char* message = git_commit_message(commit.get());
+        if (message != nullptr)
+            result.viewed_revision.description = message;
+        result.viewed_revision.parents.reserve(git_commit_parentcount(commit.get()));
+        for (unsigned int parent = 0; parent < git_commit_parentcount(commit.get()); ++parent)
+            result.viewed_revision.parents.push_back(OidString(*git_commit_parent_id(commit.get(), parent)));
+    }
+    const std::size_t line_count = working_tree ? worktree_lines.size() : git_blame_linecount(blame.get());
     result.lines.reserve(line_count);
     std::unordered_map<std::string, std::string> previous_summaries;
     std::unordered_map<std::string, std::string> blame_before_revisions;
     for (std::size_t index = 0; index < line_count; ++index)
     {
         const std::size_t line_number = index + 1;
-        const git_blame_hunk* hunk = git_blame_hunk_byline(blame.get(), line_number);
-        const git_blame_line* line = git_blame_line_byindex(blame.get(), line_number);
-        if (hunk == nullptr || line == nullptr)
+        if (working_tree)
+        {
+            // Buffer blame keeps hunks but not line text; lines that are not
+            // in @ have no hunk or a hunk without a commit.
+            const git_blame_hunk* hunk = worktree_blame == nullptr ? nullptr
+                : git_blame_hunk_byline(worktree_blame.get(), line_number);
+            if (hunk == nullptr || git_oid_is_zero(&hunk->final_commit_id) != 0)
+            {
+                BlameLine value;
+                value.line = value.original_line = line_number;
+                value.contents = worktree_lines[index];
+                value.uncommitted = true;
+                // Before an uncommitted edit, the file is the one in @.
+                if (commit != nullptr && blame != nullptr)
+                {
+                    value.blame_before_revision = result.viewed_revision.oid;
+                    value.blame_before_path = command.path;
+                }
+                result.lines.push_back(std::move(value));
+                continue;
+            }
+        }
+        const git_blame_hunk* hunk = git_blame_hunk_byline(
+            working_tree ? worktree_blame.get() : blame.get(), line_number);
+        const git_blame_line* line = working_tree ? nullptr : git_blame_line_byindex(blame.get(), line_number);
+        if (hunk == nullptr || (!working_tree && line == nullptr))
         {
             // libgit2 can expose the terminal empty line after a trailing
             // newline in git_blame_linecount(), even though that line is not
@@ -140,7 +248,10 @@ void RepositoryEngine::Impl::LoadBlameFile(const Ggui::LoadBlame& command, git_r
         value.author_email = SignatureEmail(hunk->final_signature);
         value.timestamp = hunk->final_signature == nullptr ? 0 : hunk->final_signature->when.time;
         value.summary = hunk->summary == nullptr ? "" : hunk->summary;
-        value.contents.assign(line->ptr == nullptr ? "" : line->ptr, line->len);
+        if (working_tree)
+            value.contents = worktree_lines[index];
+        else
+            value.contents.assign(line->ptr == nullptr ? "" : line->ptr, line->len);
         value.boundary = hunk->boundary != 0;
         value.previous_line = hunk->orig_start_line_number
             + (line_number - hunk->final_start_line_number);

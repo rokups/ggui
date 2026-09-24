@@ -32,7 +32,10 @@ bool IsWorkingTreeRevision(std::string_view revision)
 {
     return revision.starts_with(WorkingTreeRevisionPrefix);
 }
+} // namespace
 
+namespace RepositoryInternal
+{
 std::filesystem::path WorktreePath(git_repository* repository, const std::string& path)
 {
     const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
@@ -63,7 +66,7 @@ std::string ReadWorktreeFile(git_repository* repository, const std::string& path
     binary = contents.find('\0') != std::string::npos;
     return contents;
 }
-} // namespace
+} // namespace RepositoryInternal
 
 void RepositoryEngine::Impl::LoadFile(const LoadFileContent& command)
 {
