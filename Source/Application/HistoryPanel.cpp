@@ -426,6 +426,43 @@ void Application::RenderHistory()
                         : "Working tree changes relative to @");
                     ImGui::EndTooltip();
                 }
+                ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, item_spacing);
+                if (ImGui::BeginPopupContextItem("working tree context"))
+                {
+                    const std::string& active_commit = CurrentCommit(*_snapshot);
+                    const bool has_changes = !_snapshot->status.empty();
+                    const bool conflicted = std::ranges::any_of(
+                        _snapshot->status, [](const StatusEntry& file) { return file.conflicted; });
+                    ImGui::BeginDisabled(actions_locked);
+                    if (ActionMenuItem(ICON_MS_COMMIT, "Commit...", nullptr, has_changes))
+                    {
+                        SelectRevision(item.id);
+                        OpenDialog(Dialog::Commit);
+                    }
+                    // Amending @ with the whole working tree squashes every
+                    // change into it; an empty description keeps its message.
+                    if (ActionMenuItem(ICON_MS_MERGE, "Squash into @...", nullptr,
+                            has_changes && !active_commit.empty()))
+                    {
+                        SelectRevision(item.id);
+                        OpenDialog(Dialog::Commit);
+                        if (_dialog == Dialog::Commit)
+                        {
+                            _input_mode = 1;
+                            _dialog_revision = active_commit;
+                        }
+                    }
+                    ImGui::Separator();
+                    if (ActionMenuItem(ICON_MS_DELETE, "Abandon changes...", nullptr,
+                            has_changes && !conflicted && !active_commit.empty()))
+                    {
+                        SelectRevision(item.id);
+                        RequestWorkingFiles(item.id, _snapshot->status, false);
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::EndPopup();
+                }
+                ImGui::PopStyleVar();
                 ImGui::PopID();
                 continue;
             }

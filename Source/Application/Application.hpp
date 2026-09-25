@@ -290,7 +290,7 @@ private:
     void RequestBranchDelete(const std::string& name, bool local, std::vector<std::string> remotes);
     // Asks before reverting or deleting working-tree files, which discards
     // edits that no operation records.
-    void RequestWorkingFiles(std::vector<StatusEntry> files, bool remove);
+    void RequestWorkingFiles(std::string revision, std::vector<StatusEntry> files, bool remove);
     void MoveBranch(const NamedRef& branch, const std::string& revision);
     // Alt+N (detach) never advances a branch; HEAD detaches at the new change.
     void CreateChange(const std::string& parent = {}, bool detach = false);

@@ -1018,6 +1018,52 @@ void RegisterUiTests(ImGuiTestEngine* engine)
                 application.SnapshotForTest()->repository_generation, snapshot.working_copy).id}));
         context->ItemClick("**/working tree", ImGuiMouseButton_Right);
         IM_CHECK(!context->ItemExists("**/change context"));
+        // The Working tree has its own menu; without changes it offers nothing.
+        context->SetRef("//$FOCUSED");
+        for (const char* action : {"**/Commit...", "**/Squash into @...", "**/Abandon changes..."})
+            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        context->KeyPress(ImGuiKey_Escape);
+        context->Yield();
+
+        // With changes, each item opens its confirmation over the whole tree.
+        snapshot.status = RichSnapshot().status;
+        std::erase_if(snapshot.status, [](const StatusEntry& file) { return file.conflicted; });
+        application.SetSnapshotForTest(snapshot);
+        view = std::make_shared<HistoryView>();
+        view->repository_generation = application.SnapshotForTest()->repository_generation;
+        view->request = 1000001;
+        HistoryItem current;
+        current.id = snapshot.working_copy;
+        current.revision = snapshot.revisions.front();
+        view->items.push_back(std::move(current));
+        application.ApplyEventForTest(HistoryReady{std::move(view)});
+        context->Yield(2);
+        const auto open_menu_item = [&](const char* action) {
+            context->SetRef("History");
+            context->ItemClick("**/working tree", ImGuiMouseButton_Right);
+            context->Yield();
+            context->SetRef("//$FOCUSED");
+            IM_CHECK((context->ItemInfo(action).ItemFlags & ImGuiItemFlags_Disabled) == 0);
+            context->ItemClick(action);
+            IM_CHECK_NE(WaitForWindow(context, "ggui action"), nullptr);
+            context->SetRef("ggui action");
+        };
+        open_menu_item("**/Commit...");
+        IM_CHECK(RenderedTextContains(context, "Commit the whole working tree as a new commit"));
+        IM_CHECK(context->ItemExists("Commit"));
+        context->ItemClick("Cancel");
+        context->Yield(2);
+        open_menu_item("**/Squash into @...");
+        IM_CHECK(RenderedTextContains(context, "Amend the active commit with the whole working tree"));
+        IM_CHECK(context->ItemExists("Amend"));
+        context->ItemClick("Cancel");
+        context->Yield(2);
+        open_menu_item("**/Abandon changes...");
+        IM_CHECK(context->ItemExists("Revert"));
+        IM_CHECK(RenderedTextContains(context, std::to_string(snapshot.status.size()) + " files"));
+        context->ItemClick("Cancel");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
         application.ClearSnapshotForTest();
     };
 

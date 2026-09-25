@@ -141,7 +141,7 @@ void Application::RenderChanges()
         if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
         {
             if (working_tree_diff)
-                RequestWorkingFiles(selected_entries(), false);
+                RequestWorkingFiles(_diff.revision, selected_entries(), false);
             else
             {
                 std::vector<Command> commands;
@@ -185,7 +185,7 @@ void Application::RenderChanges()
                     return !absolute.has_value() || !std::filesystem::is_regular_file(*absolute, error);
                 });
                 if (!files.empty())
-                    RequestWorkingFiles(std::move(files), true);
+                    RequestWorkingFiles(_diff.revision, std::move(files), true);
             }
             ImGui::EndDisabled();
         }
@@ -354,7 +354,7 @@ void Application::RenderChanges()
                 if (ActionMenuItem(ICON_MS_RESTORE, "Revert"))
                 {
                     if (working_tree_diff)
-                        RequestWorkingFiles({file}, false);
+                        RequestWorkingFiles(_diff.revision, {file}, false);
                     else
                         QueueCommands({RevertFile{_diff.revision, file.old_path, file.path, {}}}, {"@"},
                             "Reverting this file will rewrite the locked active commit.");

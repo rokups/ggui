@@ -278,7 +278,7 @@ void Application::ShowBranchRenameForTest(const std::string& name)
 
 void Application::ShowWorkingFilesConfirmationForTest(std::vector<StatusEntry> files)
 {
-    RequestWorkingFiles(std::move(files), false);
+    RequestWorkingFiles(_diff.revision, std::move(files), false);
 }
 
 void Application::SetSnapshotForTest(RepoSnapshot snapshot)

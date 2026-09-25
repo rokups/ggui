@@ -463,12 +463,12 @@ void Application::RequestBranchDelete(const std::string& name, bool local, std::
         _pending_branch_delete = {name, local, std::move(remotes)};
 }
 
-void Application::RequestWorkingFiles(std::vector<StatusEntry> files, bool remove)
+void Application::RequestWorkingFiles(std::string revision, std::vector<StatusEntry> files, bool remove)
 {
     OpenDialog(Dialog::ConfirmWorkingFiles);
     if (_dialog != Dialog::ConfirmWorkingFiles)
         return;
-    _pending_working_revision = _diff.revision;
+    _pending_working_revision = std::move(revision);
     _pending_working_files = std::move(files);
     _pending_working_delete = remove;
 }
