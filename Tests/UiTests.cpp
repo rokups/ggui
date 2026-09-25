@@ -1431,6 +1431,45 @@ void RegisterUiTests(ImGuiTestEngine* engine)
         IM_CHECK(dialog == nullptr || !dialog->Active);
     };
 
+    test = IM_REGISTER_TEST(engine, "Application", "LargeRevertConfirmationFitsViewport");
+    test->TestFunc = [](ImGuiTestContext* context) {
+        Application& application = Application::Instance();
+        application.SetSnapshotForTest(RichSnapshot());
+        context->Yield(2);
+        std::vector<StatusEntry> files;
+        for (int index = 0; index < 400; ++index)
+            files.push_back({{}, std::string(160, 'd') + "/file" + std::to_string(index) + ".txt",
+                GIT_DELTA_MODIFIED});
+        application.ShowWorkingFilesConfirmationForTest(std::move(files));
+        ImGuiWindow* dialog = WaitForWindow(context, "ggui action");
+        IM_CHECK_NE(dialog, nullptr);
+        context->Yield(4);
+        // The file list scrolls both ways inside the dialog, and the dialog and
+        // its buttons stay on screen.
+        const ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImRect screen(viewport->WorkPos,
+            {viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y});
+        IM_CHECK_LE(dialog->SizeFull.y, viewport->WorkSize.y + 0.5f);
+        IM_CHECK_LE(std::fabs(dialog->SizeFull.x - 560.0f), 0.01f);
+        const ImGuiWindow* list = nullptr;
+        for (ImGuiWindow* window : GImGui->Windows)
+            if (window->ParentWindow == dialog && window->Active)
+                list = window;
+        IM_CHECK_NE(list, nullptr);
+        IM_CHECK(list->ScrollbarX);
+        IM_CHECK(list->ScrollbarY);
+        context->SetRef("ggui action");
+        for (const char* button : {"Revert", "Cancel"})
+        {
+            const ImRect rect = context->ItemInfo(button).RectFull;
+            IM_CHECK(screen.Contains(rect));
+            IM_CHECK(dialog->InnerClipRect.Contains(rect));
+        }
+        context->ItemClick("Cancel");
+        context->Yield(2);
+        IM_CHECK(!ActionDialogOpen());
+    };
+
     test = IM_REGISTER_TEST(engine, "Application", "CreateBranchFromGraph");
     test->TestFunc = [](ImGuiTestContext* context) {
         Application& application = Application::Instance();

@@ -194,8 +194,10 @@ void Application::RenderDialogs()
         "Revert files###ggui action"};
     if (!ImGui::IsPopupOpen("ggui action"))
         ImGui::OpenPopup("ggui action");
+    // Cap the height to the viewport so oversized content scrolls instead of
+    // pushing the buttons out of reach.
     ImGui::SetNextWindowSizeConstraints(
-        ImVec2(560.0f, 0.0f), ImVec2(560.0f, std::numeric_limits<float>::max()));
+        ImVec2(560.0f, 0.0f), ImVec2(560.0f, ImGui::GetMainViewport()->WorkSize.y));
     const auto close_dialog = [this]() {
         if (_dialog == Dialog::Credentials) _engine.CancelCredential();
         if (_dialog == Dialog::ConfirmLocked)
@@ -484,23 +486,31 @@ void Application::RenderDialogs()
         break;
     case Dialog::ConfirmWorkingFiles:
     {
-        // Name every file up to a limit, so a large selection stays readable.
-        constexpr std::size_t kListedFiles = 12;
-        std::size_t new_files = 0;
-        for (std::size_t index = 0; index < _pending_working_files.size(); ++index)
-        {
-            const StatusEntry& file = _pending_working_files[index];
-            const bool added = file.status == GIT_DELTA_ADDED || file.status == GIT_DELTA_UNTRACKED;
-            new_files += added ? 1 : 0;
-            if (index >= kListedFiles)
-                continue;
-            if (!file.old_path.empty() && file.old_path != file.path)
-                ImGui::BulletText("%s (renamed from %s)", file.path.c_str(), file.old_path.c_str());
-            else
-                ImGui::BulletText("%s", file.path.c_str());
-        }
-        if (_pending_working_files.size() > kListedFiles)
-            ImGui::TextDisabled("and %zu more", _pending_working_files.size() - kListedFiles);
+        const std::size_t new_files = static_cast<std::size_t>(
+            std::ranges::count_if(_pending_working_files, [](const StatusEntry& file) {
+                return file.status == GIT_DELTA_ADDED || file.status == GIT_DELTA_UNTRACKED;
+            }));
+        // List every file in a bounded, scrollable region so long paths and
+        // large selections never push the dialog buttons off screen.
+        const float row_height = ImGui::GetTextLineHeightWithSpacing();
+        ImGui::SetNextWindowSizeConstraints(ImVec2(0.0f, 0.0f), ImVec2(std::numeric_limits<float>::max(),
+            std::max(row_height * 4.0f, ImGui::GetMainViewport()->WorkSize.y * 0.45f)));
+        ImGui::BeginChild("working files", ImVec2(0.0f, 0.0f),
+            ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_HorizontalScrollbar);
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(_pending_working_files.size()), row_height);
+        while (clipper.Step())
+            for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
+            {
+                const StatusEntry& file = _pending_working_files[static_cast<std::size_t>(index)];
+                if (!file.old_path.empty() && file.old_path != file.path)
+                    ImGui::BulletText("%s (renamed from %s)", file.path.c_str(), file.old_path.c_str());
+                else
+                    ImGui::BulletText("%s", file.path.c_str());
+            }
+        ImGui::EndChild();
+        if (_pending_working_files.size() > 1)
+            ImGui::TextDisabled("%zu files", _pending_working_files.size());
         if (_pending_working_delete)
             ImGui::TextWrapped(_pending_working_files.size() == 1 ? "The file is deleted from disk."
                                                                   : "These files are deleted from disk.");

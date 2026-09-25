@@ -72,6 +72,7 @@ public:
     bool PendingDropCopyForTest() const;
     void ShowWorkspaceRenameForTest();
     void ShowBranchRenameForTest(const std::string& name);
+    void ShowWorkingFilesConfirmationForTest(std::vector<StatusEntry> files);
     void SetSnapshotForTest(RepoSnapshot snapshot);
     void ClearSnapshotForTest();
     void AddRecentForTest(const std::string& path);
