@@ -2907,6 +2907,46 @@ TEST(RepositoryEngine, RevertsManyWorkingTreeFilesInOneUpdate)
     EXPECT_FALSE(WaitForTerminal(engine, "revert files").finished);
 }
 
+TEST(RepositoryEngine, GitLfsFilesAreNotReportedAsChanged)
+{
+    if (std::system("git lfs version >/dev/null 2>&1") != 0)
+        GTEST_SKIP() << "git-lfs is not installed";
+    TemporaryRepository repository;
+    std::string content;
+    for (int index = 0; index < 4096; ++index)
+        content.push_back(static_cast<char>(index * 13));
+    std::ofstream(repository.path / "asset.bin", std::ios::binary) << content;
+    const std::string git = "git -C " + Quote(repository.path) + " ";
+    ASSERT_EQ(std::system((git + "lfs install --local >/dev/null && " + git + "lfs track '*.bin' >/dev/null && "
+                              + git + "add .gitattributes asset.bin && " + git + "commit -q -m lfs")
+                              .c_str()),
+        0);
+    // Touching the file makes the scan hash it through git-lfs's clean filter.
+    std::filesystem::last_write_time(repository.path / "asset.bin",
+        std::filesystem::file_time_type::clock::now() - std::chrono::hours(48));
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    const auto opened = WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.revisions.empty(); });
+    ASSERT_NE(opened, nullptr);
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto scanned = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > opened->generation
+            && snapshot.worktree_state == RepoSnapshot::WorktreeState::Ready;
+    });
+    ASSERT_NE(scanned, nullptr);
+    EXPECT_TRUE(scanned->status.empty());
+
+    // A real edit is reported.
+    std::ofstream(repository.path / "asset.bin", std::ios::binary) << content << "edited";
+    engine.Enqueue(Refresh{true, {}, true});
+    const auto edited = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > scanned->generation && !snapshot.status.empty();
+    });
+    ASSERT_NE(edited, nullptr);
+    EXPECT_EQ(edited->status.front().path, "asset.bin");
+}
+
 TEST(RepositoryEngine, LoadsFileContentFromARevision)
 {
     TemporaryRepository repository;

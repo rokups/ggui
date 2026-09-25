@@ -19,9 +19,10 @@ RepositoryEngine::Impl::Impl()
     if (git_libgit2_init() < 0)
         throw std::runtime_error("initialize libgit2: " + LastGitError("unknown error")); // GCOV_EXCL_LINE: forced libgit2 bootstrap failure
     // Registered before the workers start: libgit2's filter registry is not
-    // thread-safe. Without it, Git LFS files compare as changed.
-    if (gg_lfs_filter_register() < 0)
-        throw std::runtime_error("register Git LFS filter: " + LastGitError("unknown error")); // GCOV_EXCL_LINE: allocation failure
+    // thread-safe. Without it, files using Git filter drivers such as git-lfs
+    // compare as changed.
+    if (gg_filter_drivers_register() < 0)
+        throw std::runtime_error("register Git filter drivers: " + LastGitError("unknown error")); // GCOV_EXCL_LINE: allocation failure
     try
     {
         worker = std::thread([this] { Run(); });
