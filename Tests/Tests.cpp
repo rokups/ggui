@@ -2877,6 +2877,36 @@ TEST(RepositoryEngine, RevertsWorkingTreeFilesToTheActiveCommit)
     EXPECT_NE(lines.message.find("individually"), std::string::npos);
 }
 
+TEST(RepositoryEngine, RevertsManyWorkingTreeFilesInOneUpdate)
+{
+    TemporaryRepository repository;
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& value) { return !value.revisions.empty(); }), nullptr);
+    const auto read = [&](const char* name) {
+        std::ifstream input(repository.path / name);
+        return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+
+    // An edit, new files and a rename are all restored by one command.
+    std::filesystem::rename(repository.path / "tracked.txt", repository.path / "moved.txt");
+    std::ofstream(repository.path / "moved.txt") << "edited\n";
+    std::filesystem::create_directories(repository.path / "nested");
+    std::ofstream(repository.path / "nested" / "new.txt") << "new\n";
+    std::ofstream(repository.path / "kept.txt") << "kept\n";
+    engine.Enqueue(RevertFiles{"working-tree:1",
+        {{"tracked.txt", "moved.txt", GIT_DELTA_RENAMED, false}, {{}, "nested/new.txt", GIT_DELTA_UNTRACKED, false}}});
+    EXPECT_TRUE(WaitForTerminal(engine, "revert files").finished);
+    EXPECT_EQ(read("tracked.txt"), "base\n");
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "moved.txt"));
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "nested" / "new.txt"));
+    // Files outside the selection are untouched.
+    EXPECT_EQ(read("kept.txt"), "kept\n");
+
+    engine.Enqueue(RevertFiles{"working-tree:1", {}});
+    EXPECT_FALSE(WaitForTerminal(engine, "revert files").finished);
+}
+
 TEST(RepositoryEngine, LoadsFileContentFromARevision)
 {
     TemporaryRepository repository;
@@ -3880,6 +3910,41 @@ TEST(RepositoryEngine, RevertsASelectedChangeFileOntoWorkingCopy)
     EXPECT_FALSE(std::filesystem::exists(repository.path / "new.txt"));
 }
 
+TEST(RepositoryEngine, RevertsManyFilesOfAChangeInOneUpdate)
+{
+    TemporaryRepository repository;
+    std::ofstream(repository.path / "a.txt") << "a\n";
+    std::ofstream(repository.path / "b.txt") << "b\n";
+    const std::string commit = "git -C " + Quote(repository.path) + " add a.txt b.txt && git -C "
+        + Quote(repository.path) + " commit -m files >/dev/null 2>&1";
+    ASSERT_EQ(std::system(commit.c_str()), 0);
+
+    RepositoryEngine engine;
+    engine.Enqueue(OpenRepository{repository.path.string()});
+    ASSERT_NE(WaitForSnapshot(engine, [](const RepoSnapshot& snapshot) { return !snapshot.revisions.empty(); }), nullptr);
+    engine.Enqueue(NewChange{"change", {}, {}, {}, false});
+    const auto created = WaitForSnapshot(engine,
+        [](const RepoSnapshot& snapshot) { return !snapshot.working_copy.empty(); });
+    ASSERT_NE(created, nullptr);
+    std::ofstream(repository.path / "a.txt") << "A\n";
+    std::ofstream(repository.path / "b.txt") << "B\n";
+    engine.Enqueue(Amend{"@", {}});
+    const auto changed = WaitForSnapshot(engine, [&](const RepoSnapshot& snapshot) {
+        return snapshot.generation > created->generation && snapshot.working_copy != created->working_copy;
+    });
+    ASSERT_NE(changed, nullptr);
+
+    engine.Enqueue(RevertFiles{changed->working_copy,
+        {{{}, "a.txt", GIT_DELTA_MODIFIED, false}, {{}, "b.txt", GIT_DELTA_MODIFIED, false}}});
+    EXPECT_TRUE(WaitForTerminal(engine, "revert files").finished);
+    const auto read = [&](const char* name) {
+        std::ifstream input(repository.path / name);
+        return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+    EXPECT_EQ(read("a.txt"), "a\n");
+    EXPECT_EQ(read("b.txt"), "b\n");
+}
+
 TEST(RepositoryEngine, AdoptsExternalGitCommitBeforeEditingTheWorkingTree)
 {
     TemporaryRepository repository;
@@ -4004,6 +4069,19 @@ TEST(RepositoryEngine, DeletesWorkingCopyFiles)
     });
     ASSERT_NE(deleted, nullptr);
     EXPECT_FALSE(std::filesystem::exists(repository.path / "tracked.txt"));
+
+    // A batch checks every path first: one bad path deletes nothing.
+    std::ofstream(repository.path / "first.txt") << "1\n";
+    std::ofstream(repository.path / "second.txt") << "2\n";
+    engine.Enqueue(DeleteFiles{{"first.txt", "missing.txt"}});
+    EXPECT_FALSE(WaitForTerminal(engine, "delete files").finished);
+    EXPECT_TRUE(std::filesystem::exists(repository.path / "first.txt"));
+    engine.Enqueue(DeleteFiles{{}});
+    EXPECT_FALSE(WaitForTerminal(engine, "delete files").finished);
+    engine.Enqueue(DeleteFiles{{"first.txt", "second.txt"}});
+    EXPECT_TRUE(WaitForTerminal(engine, "delete files").finished);
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "first.txt"));
+    EXPECT_FALSE(std::filesystem::exists(repository.path / "second.txt"));
 }
 
 TEST(RepositoryEngine, AppliesPatchTextAndFilesToWorkingCopy)
@@ -4206,6 +4284,8 @@ TEST(RepositoryEngine, DispatchesEveryMutationCommand)
             "revert diff lines"},
         {RevertFile{}, "revert file"},
         {DeleteFile{"../outside"}, "delete file"},
+        {RevertFiles{}, "revert files"},
+        {DeleteFiles{{"../outside"}}, "delete files"},
         {SimplifyParents{{"missing"}}, "simplify parents"},
         {Branch{GG_BRANCH_RENAME, {"missing"}, "missing", "renamed"}, "branch"},
         {Tag{GG_TAG_SET, {"coverage-tag"}, "missing", true}, "tag"},

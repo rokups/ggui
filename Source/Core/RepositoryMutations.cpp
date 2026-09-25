@@ -475,6 +475,8 @@ std::string CommandName(const Command& command)
             [](const ResolveConflict&) { return "resolve conflict"; },
             [](const RevertFile&) { return "revert file"; },
             [](const DeleteFile&) { return "delete file"; },
+            [](const RevertFiles&) { return "revert files"; },
+            [](const DeleteFiles&) { return "delete files"; },
             [](const NewChange&) { return "new"; },
             [](const Describe&) { return "describe"; }, [](const Metaedit&) { return "metaedit"; },
             [](const Edit&) { return "edit"; }, [](const MoveChange&) { return "move"; },

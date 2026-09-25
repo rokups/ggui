@@ -80,6 +80,13 @@ struct RevertFile
     std::vector<DiffLine> lines;
 };
 struct DeleteFile { std::string path; };
+// Batches revert or delete many files in one working-tree update.
+struct RevertFiles
+{
+    std::string source;
+    std::vector<StatusEntry> files;
+};
+struct DeleteFiles { std::vector<std::string> paths; };
 struct NewChange
 {
     std::string message;
@@ -186,7 +193,7 @@ struct ChmodPaths { std::vector<std::string> filesets; bool executable = false; 
 
 using Command = std::variant<OpenRepository, CloseRepository, InitRepository, CloneRepository, Refresh, RebuildHistory,
     ExpandHistoryRegion, Fetch, Push,
-    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, LoadBlame, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, NewChange,
+    AddRemote, DeleteRemote, LoadDiff, LoadFileContent, LoadBlame, ApplyPatch, ResolveConflict, RevertFile, DeleteFile, RevertFiles, DeleteFiles, NewChange,
     Describe, Metaedit, Edit, MoveChange, Commit, Amend, Rebase, Duplicate, Reorder, Split, Squash, Abandon, RemoteBranchDelete, Restore,
     MoveFiles, MoveDiffLines, RevertDiffLines, SimplifyParents, Branch, Tag, Undo, Redo, RestoreOperation,
     WorkspaceAdd, WorkspaceForget, WorkspaceRename, WorkspaceRemove, TrackPaths, UntrackPaths, ChmodPaths>;

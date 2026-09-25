@@ -386,19 +386,50 @@ void RepositoryEngine::Impl::ResolveConflictFile(const ResolveConflict& command)
 
 void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
 {
-    Sync();
-    if (command.source.empty() || command.path.empty())
-        throw std::runtime_error("revert file requires a source change and path");
-    if (IsWorkingTreeRevision(command.source))
+    RevertFileChanges(command.source, {{command.old_path, command.path, GIT_DELTA_UNMODIFIED, false}}, command.lines);
+}
+
+namespace
+{
+// Every path the files touch, including both sides of renames.
+std::vector<std::string> RevertPaths(const std::vector<StatusEntry>& files)
+{
+    std::vector<std::string> paths;
+    paths.reserve(files.size());
+    for (const StatusEntry& file : files)
     {
-        RevertWorkingTreeFile(command);
+        paths.push_back(file.path);
+        if (!file.old_path.empty() && file.old_path != file.path)
+            paths.push_back(file.old_path);
+    }
+    std::ranges::sort(paths);
+    const auto duplicates = std::ranges::unique(paths);
+    paths.erase(duplicates.begin(), duplicates.end());
+    return paths;
+}
+} // namespace
+
+void RepositoryEngine::Impl::RevertFileChanges(
+    const std::string& source_revision, const std::vector<StatusEntry>& files, const std::vector<DiffLine>& lines)
+{
+    Sync();
+    if (source_revision.empty() || files.empty()
+        || std::ranges::any_of(files, [](const StatusEntry& file) { return file.path.empty(); }))
+        throw std::runtime_error("revert file requires a source change and path");
+    if (!lines.empty() && files.size() != 1)
+        throw std::runtime_error("lines can only be reverted within one file"); // GCOV_EXCL_LINE: RevertFile holds one file
+    if (IsWorkingTreeRevision(source_revision))
+    {
+        if (!lines.empty())
+            throw std::runtime_error("working-tree lines cannot be reverted individually");
+        RevertWorkingTreeFiles(files);
         return;
     }
 
     git_oid source_oid{};
-    Check(gg_repository_resolve(&source_oid, gg, command.source.c_str()), "resolve file revert source");
-    if (!command.lines.empty())
-        RequireCurrentLineSource(git.get(), command.source, source_oid);
+    Check(gg_repository_resolve(&source_oid, gg, source_revision.c_str()), "resolve file revert source");
+    if (!lines.empty())
+        RequireCurrentLineSource(git.get(), source_revision, source_oid);
     git_commit* raw_source = nullptr;
     Check(git_commit_lookup(&raw_source, git.get(), &source_oid), "load file revert source");
     std::unique_ptr<git_commit, decltype(&git_commit_free)> source(raw_source, git_commit_free);
@@ -415,15 +446,13 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
     }
     std::unique_ptr<git_tree, decltype(&git_tree_free)> parent_tree(raw_parent_tree, git_tree_free);
 
-    std::vector<std::string> paths{command.path};
-    if (!command.old_path.empty() && command.old_path != command.path)
-        paths.push_back(command.old_path);
+    std::vector<std::string> paths = RevertPaths(files);
     std::vector<char*> pathspec;
     for (std::string& path : paths)
         pathspec.push_back(path.data());
     git_diff_options options = GIT_DIFF_OPTIONS_INIT;
     options.flags |= GIT_DIFF_DISABLE_PATHSPEC_MATCH;
-    if (!command.lines.empty())
+    if (!lines.empty())
         options.context_lines = 0;
     options.pathspec = {pathspec.data(), pathspec.size()};
     git_diff* raw_diff = nullptr;
@@ -434,7 +463,7 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
     if (git_diff_num_deltas(diff.get()) == 0)
         throw std::runtime_error("selected file has no changes in the source change");
     std::vector<bool> selected_hunks;
-    if (!command.lines.empty())
+    if (!lines.empty())
     {
         for (std::size_t delta = 0; delta < git_diff_num_deltas(diff.get()); ++delta)
         {
@@ -453,7 +482,7 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
                     Check(git_patch_get_line_in_hunk(&raw_line, patch.get(), hunk, line),
                         "load inverse file line");
                     const DiffLine reverse = DiffLineFromRaw(*raw_line, static_cast<int>(hunk));
-                    selected = std::ranges::any_of(command.lines,
+                    selected = std::ranges::any_of(lines,
                         [&](const DiffLine& forward) { return SameInverseLine(forward, reverse); });
                 }
                 selected_hunks.push_back(selected);
@@ -483,12 +512,11 @@ void RepositoryEngine::Impl::RevertFileChange(const RevertFile& command)
     PublishWorktreeChanges(paths, false);
 }
 
-void RepositoryEngine::Impl::RevertWorkingTreeFile(const RevertFile& command)
+void RepositoryEngine::Impl::RevertWorkingTreeFiles(const std::vector<StatusEntry>& files)
 {
-    if (!command.lines.empty())
-        throw std::runtime_error("working-tree lines cannot be reverted individually");
-    // Restore the file (and a rename's old path) as it is in @. Paths that
-    // are not in @ are new in the working tree and are removed.
+    // Restore the files (and renames' old paths) as they are in @ in one
+    // checkout. Paths that are not in @ are new in the working tree and are
+    // removed.
     const git_oid active_oid = ResolveActiveCommit(git.get());
     git_commit* raw_active = nullptr;
     Check(git_commit_lookup(&raw_active, git.get(), &active_oid), "load active commit");
@@ -497,9 +525,7 @@ void RepositoryEngine::Impl::RevertWorkingTreeFile(const RevertFile& command)
     Check(git_commit_tree(&raw_tree, active.get()), "load active commit tree");
     std::unique_ptr<git_tree, decltype(&git_tree_free)> tree(raw_tree, git_tree_free);
 
-    std::vector<std::string> paths{command.path};
-    if (!command.old_path.empty() && command.old_path != command.path)
-        paths.push_back(command.old_path);
+    std::vector<std::string> paths = RevertPaths(files);
     std::vector<char*> pathspec;
     for (std::string& path : paths)
         pathspec.push_back(path.data());
@@ -513,27 +539,40 @@ void RepositoryEngine::Impl::RevertWorkingTreeFile(const RevertFile& command)
     PublishWorktreeChanges(paths, false);
 }
 
-void RepositoryEngine::Impl::DeleteWorkingFile(const DeleteFile& command)
+void RepositoryEngine::Impl::DeleteWorkingFiles(const std::vector<std::string>& paths)
 {
     Sync();
-    const std::filesystem::path relative = std::filesystem::path(command.path).lexically_normal();
-    if (relative.empty() || relative.is_absolute()
-        || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
-        throw std::runtime_error("delete file requires a repository-relative path");
     const char* workdir = git_repository_workdir(git.get());
     if (workdir == nullptr)
         throw std::runtime_error("repository has no working directory"); // GCOV_EXCL_LINE: bare repos are rejected
-    const std::filesystem::path target = std::filesystem::path(workdir) / relative;
-    std::error_code error;
-    const std::filesystem::file_status status = std::filesystem::symlink_status(target, error);
-    if (error || status.type() == std::filesystem::file_type::not_found)
-        throw std::runtime_error("working-copy file does not exist");
-    if (std::filesystem::is_directory(status))
-        throw std::runtime_error("working-copy path is a directory");
-    if (!std::filesystem::remove(target, error) || error)
-        throw std::runtime_error("could not delete working-copy file"); // GCOV_EXCL_LINE: filesystem race/failure
+    // Check every path before deleting any, so a bad path deletes nothing.
+    std::vector<std::filesystem::path> targets;
+    targets.reserve(paths.size());
+    for (const std::string& path : paths)
+    {
+        const std::filesystem::path relative = std::filesystem::path(path).lexically_normal();
+        if (relative.empty() || relative.is_absolute()
+            || std::ranges::any_of(relative, [](const std::filesystem::path& part) { return part == ".."; }))
+            throw std::runtime_error("delete file requires a repository-relative path");
+        const std::filesystem::path target = std::filesystem::path(workdir) / relative;
+        std::error_code error;
+        const std::filesystem::file_status status = std::filesystem::symlink_status(target, error);
+        if (error || status.type() == std::filesystem::file_type::not_found)
+            throw std::runtime_error("working-copy file does not exist");
+        if (std::filesystem::is_directory(status))
+            throw std::runtime_error("working-copy path is a directory");
+        targets.push_back(target);
+    }
+    if (targets.empty())
+        throw std::runtime_error("delete files requires at least one path");
+    for (const std::filesystem::path& target : targets)
+    {
+        std::error_code error;
+        if (!std::filesystem::remove(target, error) || error)
+            throw std::runtime_error("could not delete working-copy file"); // GCOV_EXCL_LINE: filesystem race/failure
+    }
     Sync();
-    PublishWorktreeChanges({command.path}, false);
+    PublishWorktreeChanges(paths, false);
 }
 
 void RepositoryEngine::Impl::MoveWorkingTreeFile(const MoveFiles& command)

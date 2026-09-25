@@ -716,17 +716,17 @@ void Application::SubmitDialog()
     }
     case Dialog::ConfirmWorkingFiles:
     {
-        std::vector<Command> commands;
-        for (const StatusEntry& file : _pending_working_files)
+        // One command updates the working tree once for the whole selection.
+        if (_pending_working_delete)
         {
-            if (_pending_working_delete)
-                commands.emplace_back(DeleteFile{file.path});
-            else
-                commands.emplace_back(RevertFile{_pending_working_revision, file.old_path, file.path, {}});
+            std::vector<std::string> paths;
+            paths.reserve(_pending_working_files.size());
+            for (const StatusEntry& file : _pending_working_files)
+                paths.push_back(file.path);
+            EnqueueAction(DeleteFiles{std::move(paths)});
         }
-        if (EnqueueAction(std::move(commands.front())))
-            for (Command& command : commands | std::views::drop(1))
-                _engine.Enqueue(std::move(command));
+        else
+            EnqueueAction(RevertFiles{_pending_working_revision, std::move(_pending_working_files)});
         _pending_working_files.clear();
         break;
     }

@@ -143,13 +143,8 @@ void Application::RenderChanges()
             if (working_tree_diff)
                 RequestWorkingFiles(_diff.revision, selected_entries(), false);
             else
-            {
-                std::vector<Command> commands;
-                for (const StatusEntry& file : selected_entries())
-                    commands.emplace_back(RevertFile{_diff.revision, file.old_path, file.path, {}});
-                QueueCommands(std::move(commands), {"@"},
+                QueueCommands({RevertFiles{_diff.revision, selected_entries()}}, {"@"},
                     "Reverting these files will rewrite the locked active commit.");
-            }
         }
         ImGui::EndDisabled();
         ImGui::Separator();

@@ -425,7 +425,11 @@ void RepositoryEngine::Impl::Execute(
         else if (const auto* value = std::get_if<RevertFile>(&command))
             RevertFileChange(*value);
         else if (const auto* value = std::get_if<DeleteFile>(&command))
-            DeleteWorkingFile(*value);
+            DeleteWorkingFiles({value->path});
+        else if (const auto* value = std::get_if<RevertFiles>(&command))
+            RevertFileChanges(value->source, value->files, {});
+        else if (const auto* value = std::get_if<DeleteFiles>(&command))
+            DeleteWorkingFiles(value->paths);
         else
             DispatchMutation(command);
         if (!quiet)

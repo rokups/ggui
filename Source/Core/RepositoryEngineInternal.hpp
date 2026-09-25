@@ -318,8 +318,11 @@ struct RepositoryEngine::Impl
     void ApplyPatchText(const ApplyPatch& command);
     void ResolveConflictFile(const ResolveConflict& command);
     void RevertFileChange(const RevertFile& command);
-    void RevertWorkingTreeFile(const RevertFile& command);
-    void DeleteWorkingFile(const DeleteFile& command);
+    // Reverts all files in one working-tree update; lines apply to one file.
+    void RevertFileChanges(
+        const std::string& source, const std::vector<StatusEntry>& files, const std::vector<DiffLine>& lines);
+    void RevertWorkingTreeFiles(const std::vector<StatusEntry>& files);
+    void DeleteWorkingFiles(const std::vector<std::string>& paths);
     void MoveWorkingTreeFile(const MoveFiles& command);
     void MoveDiffSelection(const MoveDiffLines& command, bool revert = false);
     template <class Function> void Mutate(std::string_view action, Function function)
