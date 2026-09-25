@@ -36,6 +36,14 @@ StartElidedText ElideStart(std::string_view text, float maximum_width)
         result.width -= ImGui::CalcTextSize(start, next).x;
         start = next;
     }
+    // CalcTextSize rounds each measurement up, so the running subtraction
+    // underestimates; measure the kept tail and trim further if needed.
+    result.width = ImGui::CalcTextSize(start, end).x;
+    while (start < end && ellipsis_width + result.width > maximum_width)
+    {
+        start += ImTextCountUtf8BytesFromChar(start, end);
+        result.width = ImGui::CalcTextSize(start, end).x;
+    }
     result.start = static_cast<std::size_t>(start - text.data());
     result.width += ellipsis_width;
     return result;
