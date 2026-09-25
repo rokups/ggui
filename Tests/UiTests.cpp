@@ -56,7 +56,19 @@ public:
         Git("branch -M main");
     }
 
-    ~UiRepository() { std::filesystem::remove_all(_path); }
+    ~UiRepository()
+    {
+        // The application may still be writing to the repository in the
+        // background, creating or removing files while it is deleted.
+        for (int attempt = 0; attempt < 40; ++attempt)
+        {
+            std::error_code error;
+            std::filesystem::remove_all(_path, error);
+            if (!error)
+                return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
+    }
 
     const std::filesystem::path& Path() const { return _path; }
 
